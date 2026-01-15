@@ -1,0 +1,7 @@
+django==6.0.1
+djangorestframework
+djangorestframework-simplejwt
+django-tasks
+python-dotenv
+psycopg2-binary
+django-cors-headers
