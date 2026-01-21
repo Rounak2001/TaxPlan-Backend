@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     
     # Internal Apps
     'core_auth',
+    'consultations',
 ]
 
 AUTH_USER_MODEL = 'core_auth.User'
@@ -97,6 +98,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        'OPTIONS': {
+            'timeout': 20,
+        }
     }
 }
 
