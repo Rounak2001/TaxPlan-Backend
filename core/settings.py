@@ -166,6 +166,19 @@ CORS_ALLOW_CREDENTIALS = True
 #     "https://yourfrontenddomain.com",
 # ]
 
+# Email Configuration (Gmail SMTP)
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = f'TaxPlanAdv <{os.getenv("EMAIL_HOST_USER", "noreply@taxplanadv.com")}>'
+SERVER_EMAIL = os.getenv('EMAIL_HOST_USER')
+
+# For development, uncomment this to print emails to console instead of sending
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
 TASKS = {
     'default': {
         'BACKEND': 'django_tasks.backends.immediate.ImmediateBackend',

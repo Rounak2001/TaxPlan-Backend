@@ -1,0 +1,36 @@
+Your Consultation is Confirmed!
+
+Dear {{ client_name }},
+
+Great news! Your consultation has been successfully booked with {{ consultant_name }}.
+
+MEETING DETAILS:
+-----------------
+Topic: {{ booking.topic.name }}
+Date: {{ booking.booking_date|date:"F j, Y" }}
+Time: {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST
+Consultant: {{ consultant_name }}
+Duration: 30 minutes
+
+{% if booking.notes %}
+YOUR QUERY:
+{{ booking.notes }}
+{% endif %}
+
+WHAT'S NEXT:
+- You'll receive a reminder 24 hours before the meeting
+- Make sure you have a stable internet connection
+- Prepare any documents or questions you'd like to discuss
+
+A calendar invite (.ics file) is attached to this email.
+
+If you need to reschedule or cancel, please contact us as soon as possible.
+
+Looking forward to assisting you!
+
+Best regards,
+TaxPlanAdv Team
+
+---
+© 2026 TaxPlanAdv. All rights reserved.
+This is an automated email. Please do not reply.

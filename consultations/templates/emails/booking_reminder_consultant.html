@@ -1,0 +1,40 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<h2 style="color: #ff9800; margin-top: 0;">⏰ Meeting Reminder: Tomorrow!</h2>
+
+<p>Dear {{ consultant_name }},</p>
+
+<p>Reminder: You have a consultation scheduled <strong>tomorrow</strong> with <strong>{{ client_name }}</strong>.</p>
+
+<div class="meeting-card">
+    <ul class="meeting-details">
+        <li><strong>Client:</strong> {{ client_name }}</li>
+        <li><strong>Topic:</strong> {{ booking.topic.name }}</li>
+        <li><strong>Date:</strong> {{ booking.booking_date|date:"F j, Y" }} (Tomorrow)</li>
+        <li><strong>Time:</strong> {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST</li>
+    </ul>
+</div>
+
+{% if booking.notes %}
+<div class="notes-box">
+    <strong>Client's Query:</strong>
+    <p style="margin: 5px 0 0;">{{ booking.notes }}</p>
+</div>
+{% endif %}
+
+<div style="text-align: center; margin: 30px 0;">
+    <a href="#" class="button">View in Dashboard</a>
+</div>
+
+<p><strong>Preparation Reminder:</strong></p>
+<ul>
+    <li>Review client's query and prepare materials</li>
+    <li>Test your video and audio setup</li>
+    <li>Have necessary documents ready</li>
+</ul>
+
+<p>Best regards,<br>
+    <strong>TaxPlan Advisors</strong>
+</p>
+{% endblock %}

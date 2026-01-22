@@ -1,0 +1,29 @@
+Meeting Reminder: Tomorrow!
+
+Dear {{ consultant_name }},
+
+Reminder: You have a consultation scheduled TOMORROW with {{ client_name }}.
+
+MEETING DETAILS:
+-----------------
+Client: {{ client_name }}
+Topic: {{ booking.topic.name }}
+Date: {{ booking.booking_date|date:"F j, Y" }} (Tomorrow)
+Time: {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST
+
+{% if booking.notes %}
+CLIENT'S QUERY:
+{{ booking.notes }}
+{% endif %}
+
+PREPARATION REMINDER:
+- Review client's query and prepare materials
+- Test your video and audio setup
+- Have necessary documents ready
+
+Best regards,
+TaxPlanAdv Team
+
+---
+© 2026 TaxPlanAdv. All rights reserved.
+This is an automated email. Please do not reply.

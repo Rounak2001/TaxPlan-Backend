@@ -1,0 +1,39 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<h2 style="color: #dc3545; margin-top: 0;">❌ Booking Cancelled</h2>
+
+<p>Dear {% if recipient_type == 'client' %}{{ client_name }}{% else %}{{ consultant_name }}{% endif %},</p>
+
+<p>We regret to inform you that the following consultation has been <strong>cancelled</strong>.</p>
+
+<div class="meeting-card">
+    <ul class="meeting-details">
+        {% if recipient_type == 'consultant' %}
+        <li><strong>Client:</strong> {{ client_name }}</li>
+        {% else %}
+        <li><strong>Consultant:</strong> {{ consultant_name }}</li>
+        {% endif %}
+        <li><strong>Topic:</strong> {{ booking.topic.name }}</li>
+        <li><strong>Date:</strong> {{ booking.booking_date|date:"F j, Y" }}</li>
+        <li><strong>Time:</strong> {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST</li>
+        <li><strong>Status:</strong> <span style="color: #dc3545;">Cancelled</span></li>
+    </ul>
+</div>
+
+{% if recipient_type == 'client' %}
+<p>If you would like to reschedule this consultation, please feel free to book a new time slot that works for you.</p>
+
+<div style="text-align: center; margin: 30px 0;">
+    <a href="#" class="button">Book New Consultation</a>
+</div>
+
+<p>We apologize for any inconvenience and look forward to assisting you in the future.</p>
+{% else %}
+<p>The client has cancelled this booking. Your calendar has been updated accordingly.</p>
+{% endif %}
+
+<p>Best regards,<br>
+    <strong>TaxPlan Advisors</strong>
+</p>
+{% endblock %}

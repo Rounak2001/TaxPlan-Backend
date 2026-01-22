@@ -1,0 +1,36 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<h2 style="color: #ff9800; margin-top: 0;">⏰ Meeting Reminder: Tomorrow!</h2>
+
+<p>Dear {{ client_name }},</p>
+
+<p>This is a friendly reminder that your consultation is coming up <strong>tomorrow</strong>!</p>
+
+<div class="meeting-card">
+    <ul class="meeting-details">
+        <li><strong>Topic:</strong> {{ booking.topic.name }}</li>
+        <li><strong>Date:</strong> {{ booking.booking_date|date:"F j, Y" }} (Tomorrow)</li>
+        <li><strong>Time:</strong> {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST</li>
+        <li><strong>Consultant:</strong> {{ consultant_name }}</li>
+    </ul>
+</div>
+
+<div style="text-align: center; margin: 30px 0;">
+    <a href="#" class="button">Join Meeting (Coming Soon)</a>
+</div>
+
+<p><strong>Pre-Meeting Checklist:</strong></p>
+<ul>
+    <li>✓ Ensure stable internet connection</li>
+    <li>✓ Test your audio and video</li>
+    <li>✓ Prepare any questions or documents</li>
+    <li>✓ Keep the meeting link handy</li>
+</ul>
+
+<p>We look forward to seeing you tomorrow!</p>
+
+<p>Best regards,<br>
+    <strong>TaxPlan Advisors</strong>
+</p>
+{% endblock %}

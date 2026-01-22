@@ -1,0 +1,28 @@
+Booking Cancelled
+
+Dear {% if recipient_type == 'client' %}{{ client_name }}{% else %}{{ consultant_name }}{% endif %},
+
+We regret to inform you that the following consultation has been CANCELLED.
+
+MEETING DETAILS:
+-----------------
+{% if recipient_type == 'consultant' %}Client: {{ client_name }}{% else %}Consultant: {{ consultant_name }}{% endif %}
+Topic: {{ booking.topic.name }}
+Date: {{ booking.booking_date|date:"F j, Y" }}
+Time: {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST
+Status: CANCELLED
+
+{% if recipient_type == 'client' %}
+If you would like to reschedule this consultation, please feel free to book a new time slot that works for you.
+
+We apologize for any inconvenience and look forward to assisting you in the future.
+{% else %}
+The client has cancelled this booking. Your calendar has been updated accordingly.
+{% endif %}
+
+Best regards,
+TaxPlanAdv Team
+
+---
+© 2026 TaxPlanAdv. All rights reserved.
+This is an automated email. Please do not reply.

@@ -1,0 +1,27 @@
+Meeting Reminder: Tomorrow!
+
+Dear {{ client_name }},
+
+This is a friendly reminder that your consultation is coming up TOMORROW!
+
+MEETING DETAILS:
+-----------------
+Topic: {{ booking.topic.name }}
+Date: {{ booking.booking_date|date:"F j, Y" }} (Tomorrow)
+Time: {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST
+Consultant: {{ consultant_name }}
+
+PRE-MEETING CHECKLIST:
+✓ Ensure stable internet connection
+✓ Test your audio and video
+✓ Prepare any questions or documents
+✓ Keep the meeting link handy
+
+We look forward to seeing you tomorrow!
+
+Best regards,
+TaxPlanAdv Team
+
+---
+© 2026 TaxPlanAdv. All rights reserved.
+This is an automated email. Please do not reply.

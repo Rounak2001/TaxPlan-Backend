@@ -1,0 +1,32 @@
+New Booking Alert
+
+Dear {{ consultant_name }},
+
+A new consultation has been booked with you.
+
+MEETING DETAILS:
+-----------------
+Client: {{ client_name }}
+Topic: {{ booking.topic.name }}
+Date: {{ booking.booking_date|date:"F j, Y" }}
+Time: {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST
+Duration: 30 minutes
+
+{% if booking.notes %}
+CLIENT'S QUERY:
+{{ booking.notes }}
+{% endif %}
+
+PREPARATION TIPS:
+- Review the client's query before the meeting
+- Prepare any relevant documents or materials
+- Test your video setup in advance
+
+A calendar invite (.ics file) is attached to this email.
+
+Best regards,
+TaxPlanAdv Team
+
+---
+© 2026 TaxPlanAdv. All rights reserved.
+This is an automated email. Please do not reply.

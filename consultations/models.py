@@ -78,6 +78,11 @@ class ConsultationBooking(models.Model):
     end_time = models.TimeField()
     notes = models.TextField(blank=True, help_text="Client's query or meeting details")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='confirmed')
+    
+    # Email tracking fields
+    confirmation_sent = models.BooleanField(default=False, help_text="Whether confirmation email was sent")
+    reminder_sent = models.BooleanField(default=False, help_text="Whether 24-hour reminder was sent")
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

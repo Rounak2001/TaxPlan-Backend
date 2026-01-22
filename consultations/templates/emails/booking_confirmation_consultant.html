@@ -1,0 +1,44 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<h2 style="color: #0066cc; margin-top: 0;">📅 New Booking Alert</h2>
+
+<p>Dear {{ consultant_name }},</p>
+
+<p>A new consultation has been booked with you.</p>
+
+<div class="meeting-card">
+    <ul class="meeting-details">
+        <li><strong>Client:</strong> {{ client_name }}</li>
+        <li><strong>Topic:</strong> {{ booking.topic.name }}</li>
+        <li><strong>Date:</strong> {{ booking.booking_date|date:"F j, Y" }}</li>
+        <li><strong>Time:</strong> {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST</li>
+        <li><strong>Duration:</strong> 30 minutes</li>
+    </ul>
+</div>
+
+{% if booking.notes %}
+<div class="notes-box">
+    <strong>Client's Query:</strong>
+    <p style="margin: 5px 0 0;">{{ booking.notes }}</p>
+</div>
+{% endif %}
+
+<div style="text-align: center; margin: 30px 0;">
+    <a href="#" class="button">View in Dashboard</a>
+    <p style="font-size: 12px; color: #6c757d; margin-top: 10px;">
+        A calendar invite (.ics file) is attached to this email.
+    </p>
+</div>
+
+<p><strong>Preparation Tips:</strong></p>
+<ul>
+    <li>Review the client's query before the meeting</li>
+    <li>Prepare any relevant documents or materials</li>
+    <li>Test your video setup in advance</li>
+</ul>
+
+<p>Best regards,<br>
+    <strong>TaxPlan Advisors</strong>
+</p>
+{% endblock %}

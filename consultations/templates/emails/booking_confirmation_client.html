@@ -1,0 +1,48 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<h2 style="color: #28a745; margin-top: 0;">✓ Your Consultation is Confirmed!</h2>
+
+<p>Dear {{ client_name}},</p>
+
+<p>Great news! Your consultation has been successfully booked with <strong>{{ consultant_name }}</strong>.</p>
+
+<div class="meeting-card">
+    <ul class="meeting-details">
+        <li><strong>Topic:</strong> {{ booking.topic.name }}</li>
+        <li><strong>Date:</strong> {{ booking.booking_date|date:"F j, Y" }}</li>
+        <li><strong>Time:</strong> {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }} IST</li>
+        <li><strong>Consultant:</strong> {{ consultant_name }}</li>
+        <li><strong>Duration:</strong> 30 minutes</li>
+    </ul>
+</div>
+
+{% if booking.notes %}
+<div class="notes-box">
+    <strong>Your Query:</strong>
+    <p style="margin: 5px 0 0;">{{ booking.notes }}</p>
+</div>
+{% endif %}
+
+<div style="text-align: center; margin: 30px 0;">
+    <a href="#" class="button">Join Meeting (Coming Soon)</a>
+    <p style="font-size: 12px; color: #6c757d; margin-top: 10px;">
+        A calendar invite (.ics file) is attached to this email. Click it to add to your calendar.
+    </p>
+</div>
+
+<p><strong>What's Next?</strong></p>
+<ul>
+    <li>You'll receive a reminder 24 hours before the meeting</li>
+    <li>Make sure you have a stable internet connection</li>
+    <li>Prepare any documents or questions you'd like to discuss</li>
+</ul>
+
+<p>If you need to reschedule or cancel, please contact us as soon as possible.</p>
+
+<p>Looking forward to assisting you!</p>
+
+<p>Best regards,<br>
+    <strong>TaxPlan Advisors</strong>
+</p>
+{% endblock %}
