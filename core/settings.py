@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     # Internal Apps
     'core_auth',
     'document_vault',
+    'chat_api',
 ]
 
 AUTH_USER_MODEL = 'core_auth.User'

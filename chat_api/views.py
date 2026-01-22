@@ -1,5 +1,4 @@
 import os
-import uuid
 import datetime
 import json
 import re
@@ -7,11 +6,12 @@ from typing import Dict, Any
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from dotenv import load_dotenv
 import logging
 from google import genai
 from google.genai import types
-from .models import User, Conversation
+from .models import Conversation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ try:
         raise ValueError("GEMINI_API_KEY not found in environment variables")
         
     client = genai.Client(api_key=GEMINI_API_KEY)
-    logger.info("✅ Gemini Client initialized globally")
+    # logger.info("✅ Gemini Client initialized globally")
 
 except Exception as e:
     logger.critical(f"Failed to init Gemini Client: {e}")
@@ -39,15 +39,14 @@ except Exception as e:
 
 
 
-def get_user_context(user_id: str, user_name: str, limit: int = MAX_CONTEXT_CHATS) -> str:
+def get_user_context(user, limit: int = MAX_CONTEXT_CHATS) -> str:
     try:
-        user = User.objects.get(user_id=user_id)
         recent = Conversation.objects.filter(user=user).order_by('-created_at')[:limit]
 
         if not recent:
-            return f"User: {user_name} (New conversation)"
+            return f"User: {user.first_name or user.username} (New conversation)"
 
-        parts = [f"User Identity: {user_name}\n", "Recent Conversation History:\n"]
+        parts = [f"User Identity: {user.first_name or user.username}\n", "Recent Conversation History:\n"]
 
         for convo in reversed(recent):
             timestamp = convo.created_at.strftime('%H:%M')
@@ -61,13 +60,12 @@ def get_user_context(user_id: str, user_name: str, limit: int = MAX_CONTEXT_CHAT
 
     except Exception as e:
         logger.error(f"Context Error: {e}")
-        return f"User: {user_name}"
+        return f"User: {user.first_name or user.username}"
 
 
 
-def save_conversation(user_id: str, user_name: str, user_query: str, bot_response: str):
+def save_conversation(user, user_query: str, bot_response: str):
     try:
-        user = User.objects.get(user_id=user_id)
         Conversation.objects.create(
             user=user,
             user_query=user_query,
@@ -222,66 +220,25 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
 #         return 'file_search' if STORE_NAME else 'none'
 
 
-class OnboardingView(APIView):
-    def post(self, request):
-        name = request.data.get("name", "").strip()
-        phone = request.data.get("phone", "").strip()
-
-        if not name or not phone:
-            return Response({"error": "Name and phone required"}, status=400)
-
-        try:
-            user = User.objects.create(
-                user_id=str(uuid.uuid4()),
-                name=name,
-                phone=phone
-            )
-
-            greeting = f"Namaste {name}! 🙏 I'm your AI Tax Assistant."
-
-            return Response({
-                "user_id": user.user_id,
-                "name": user.name,
-                "greeting": greeting,
-                "follow_ups": [
-                    "What is tax on ₹10L income?",
-                    "Latest tax slab updates for 2025",
-                    "Explain Section 80C deductions",
-                    "How to file ITR-1 form?"
-                ]
-            })
-
-        except Exception as e:
-            logger.error(f"Onboarding Error: {e}")
-            return Response({"error": "Database error"}, status=500)
-
-
 class ChatbotView(APIView):
-    """Enhanced chatbot with 2-call architecture:
-       1. Ask Gemini which tool to use
-       2. Use that tool in the real answer
-    """
+    """Enhanced chatbot with JWT authentication"""
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         if client is None:
             return Response({"error": "AI service misconfigured"}, status=503)
 
-        user_id = request.data.get("user_id", "").strip()
         prompt = request.data.get("prompt", "").strip()
 
-        if not user_id or not prompt:
-            return Response({"error": "User ID and prompt required"}, status=400)
+        if not prompt:
+            return Response({"error": "Prompt required"}, status=400)
 
         try:
-            user = User.objects.get(user_id=user_id)
-            user_name = user.name
-
-            context = get_user_context(user_id, user_name)
+            user = request.user
+            context = get_user_context(user)
             today = datetime.datetime.now().strftime("%d %B %Y")
             
-            # CALL #1 — Ask Gemini: Which tool should be used?
-          
-
+            # Tool selection
             tool_decision_instruction = f"""
 You are a tool selector AI.
 
@@ -306,7 +263,6 @@ Rules:
 
             tool_raw = tool_choice_response.text.strip().lower()
 
-            # Clean tool output
             if "google" in tool_raw:
                 tool_used = "google_search"
             elif "file" in tool_raw:
@@ -314,12 +270,9 @@ Rules:
             else:
                 tool_used = "none"
 
-            logger.info(f"🔍 Tool selected by Gemini: {tool_used}")
+            logger.info(f"🔍 Tool selected: {tool_used}")
 
-            
-            # CALL #2 — Actual answer with selected tool
-
-            # SYSTEM INSTRUCTION FOR FINAL ANSWER
+            # Generate response with selected tool
             system_instruction = f"""
 You are an expert Indian Tax Assistant AI. Today is {today}.
 
@@ -333,12 +286,10 @@ Return ONLY valid JSON like:
 No text before or after JSON.
 """
 
-            # BUILD TOOL LIST BASED ON DECISION
             tools_list = []
 
             if tool_used == "google_search":
                 tools_list.append(types.Tool(google_search=types.GoogleSearch()))
-
             elif tool_used == "file_search":
                 tools_list.append(
                     types.Tool(
@@ -357,32 +308,27 @@ No text before or after JSON.
                 config_args["tools"] = tools_list
 
             config = types.GenerateContentConfig(**config_args)
-
             full_prompt = f"{context}\n\n**User Query:** {prompt}"
 
-            # GENERATE FINAL ANSWER
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=full_prompt,
                 config=config
             )
 
-            # Parse JSON result
             parsed = extract_json_from_text(response.text)
             answer = parsed.get("answer", "")
             follow_ups = parsed.get("follow_up_questions", [])
 
-            # Citations if google search used
+            # Add citations if google search used
             try:
                 candidate = response.candidates[0]
                 if candidate.grounding_metadata and tool_used == "google_search":
                     answer = format_citations(answer, candidate.grounding_metadata)
-                    logger.info("📎 Citations added.")
             except:
                 pass
 
-            # Save conversation
-            save_conversation(user_id, user_name, prompt, answer)
+            save_conversation(user, prompt, answer)
 
             return Response({
                 "response": answer,

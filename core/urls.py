@@ -7,6 +7,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('core_auth.urls')),
     path('api/vault/', include('document_vault.urls')),
+    path('api/chat/', include('chat_api.urls')),
 ]
 
 if settings.DEBUG:
