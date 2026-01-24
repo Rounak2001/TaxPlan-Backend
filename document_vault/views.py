@@ -1,8 +1,8 @@
 from rest_framework import viewsets, permissions, status, decorators
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Document
-from .serializers import DocumentSerializer, DocumentUploadSerializer
+from .models import Document, SharedReport
+from .serializers import DocumentSerializer, DocumentUploadSerializer, SharedReportSerializer
 from core_auth.serializers import IsConsultantUser, IsClientUser
 
 class DocumentViewSet(viewsets.ModelViewSet):
@@ -65,3 +65,48 @@ class DocumentViewSet(viewsets.ModelViewSet):
         document.status = new_status
         document.save()
         return Response(DocumentSerializer(document, context={'request': request}).data)
+
+
+class SharedReportViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for consultant-to-client report sharing.
+    - Consultants: can create, list (their shared reports), delete
+    - Clients: can list (reports shared with them)
+    """
+    serializer_class = SharedReportSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'CONSULTANT':
+            # Consultants see reports they've shared
+            return SharedReport.objects.filter(consultant=user)
+        # Clients see reports shared with them
+        return SharedReport.objects.filter(client=user)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if user.role != 'CONSULTANT':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only consultants can share reports.")
+        
+        client_id = self.request.data.get('client')
+        # Security: Ensure client is assigned to this consultant
+        from core_auth.models import ClientProfile
+        if not ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists():
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("This client is not assigned to you.")
+            
+        serializer.save(consultant=user)
+
+    def destroy(self, request, *args, **kwargs):
+        """Only consultants can delete shared reports."""
+        if request.user.role != 'CONSULTANT':
+            return Response({'error': 'Only consultants can delete reports'}, status=status.HTTP_403_FORBIDDEN)
+        
+        report = self.get_object()
+        if report.consultant != request.user:
+            return Response({'error': 'You can only delete your own shared reports'}, status=status.HTTP_403_FORBIDDEN)
+        
+        return super().destroy(request, *args, **kwargs)
+
