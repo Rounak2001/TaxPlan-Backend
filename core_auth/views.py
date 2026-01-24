@@ -257,6 +257,8 @@ class ClientProfileView(APIView):
                 'email': user.email,
                 'phone_number': user.phone_number,
                 'pan_number': profile.pan_number,
+                'gstin': profile.gstin,
+                'gst_username': profile.gst_username,
                 'is_onboarded': user.is_onboarded,
                 'assigned_consultant': profile.assigned_consultant.get_full_name() if profile.assigned_consultant else None,
             }
@@ -331,6 +333,8 @@ class ConsultantClientsView(APIView):
                 'email': client_user.email,
                 'phone_number': client_user.phone_number,
                 'pan_number': profile.pan_number,
+                'gstin': profile.gstin,
+                'gst_username': profile.gst_username,
                 'is_onboarded': client_user.is_onboarded,
             })
         

@@ -14,15 +14,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
-# Load environment variables from .env file
-load_dotenv()
-
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from .env file
+load_dotenv(BASE_DIR / '.env')
 
 # Google OAuth
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 
+# Sandbox GST API
+SANDBOX_API_KEY = os.getenv('SANDBOX_API_KEY')
+SANDBOX_API_SECRET = os.getenv('SANDBOX_API_SECRET')
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
@@ -56,6 +59,7 @@ INSTALLED_APPS = [
     'core_auth',
     'document_vault',
     'chat_api',
+    'gst_reports',
 ]
 
 AUTH_USER_MODEL = 'core_auth.User'

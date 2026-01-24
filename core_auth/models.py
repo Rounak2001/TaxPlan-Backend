@@ -40,6 +40,8 @@ class ClientProfile(models.Model):
         related_name='assigned_clients'
     )
     pan_number = models.CharField(max_length=10, null=True, blank=True)
+    gstin = models.CharField(max_length=15, null=True, blank=True)
+    gst_username = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self):
         return f"Client: {self.user.username}"
