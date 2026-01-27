@@ -200,11 +200,11 @@ def consultant_slots(request):
                 status__in=['pending', 'confirmed']
             ).exists()
             
-            if not is_booked:
-                time_slots.append({
-                    'start': slot_start.strftime('%H:%M'),
-                    'end': slot_end.strftime('%H:%M'),
-                })
+            time_slots.append({
+                'start': slot_start.strftime('%H:%M'),
+                'end': slot_end.strftime('%H:%M'),
+                'is_booked': is_booked
+            })
             
             current_time += timedelta(minutes=30)
 
