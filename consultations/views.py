@@ -1,13 +1,15 @@
 from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from datetime import datetime, time, timedelta
 from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking
+from .emails import send_booking_confirmation
 from .serializers import (
     TopicSerializer, WeeklyAvailabilitySerializer, DateOverrideSerializer,
     ConsultationBookingSerializer
 )
+from .google_meet import GoogleMeetService
 
 User = get_user_model()
 
@@ -39,6 +41,23 @@ class ConsultationBookingViewSet(viewsets.ModelViewSet):
         if user.role == 'CONSULTANT':
             return ConsultationBooking.objects.filter(consultant=user)
         return ConsultationBooking.objects.filter(client=user)
+
+    def perform_create(self, serializer):
+        booking = serializer.save()
+        
+        # Try to create Google Meet link
+        try:
+            service = GoogleMeetService()
+            meet_link = service.create_meeting(booking)
+            if meet_link:
+                booking.meeting_link = meet_link
+                booking.save()
+        except Exception as e:
+            print(f"Failed to generate Google Meet link: {str(e)}")
+
+        # Fallback: Send confirmation email if it hasn't been sent yet (e.g. if link failed)
+        if not booking.confirmation_sent:
+            send_booking_confirmation(booking)
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])

@@ -52,12 +52,16 @@ def send_booking_confirmation(booking):
     """
     Send booking confirmation email to both client and consultant.
     """
+    if booking.confirmation_sent:
+        return False
+        
     try:
         # Common context for both emails
         context = {
             'booking': booking,
             'client_name': booking.client.get_full_name() or booking.client.username,
             'consultant_name': booking.consultant.get_full_name() or booking.consultant.username,
+            'dashboard_url': f"{settings.FRONTEND_URL}/dashboard",
         }
         
         # Generate calendar file

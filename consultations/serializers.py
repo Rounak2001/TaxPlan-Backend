@@ -37,7 +37,7 @@ class ConsultationBookingSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'consultant', 'consultant_name', 'client', 'client_name',
             'topic', 'topic_name', 'booking_date', 'start_time', 'end_time',
-            'notes', 'status', 'created_at'
+            'notes', 'status', 'meeting_link', 'created_at'
         ]
         read_only_fields = ['client', 'created_at']
     

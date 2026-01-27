@@ -14,14 +14,21 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+
 # Load environment variables from .env file
 load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Google OAuth
+# Google Login (Web)
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
+
+# Google OAuth (Meeting Links - Desktop/Web)
+GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID')
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET')
+GOOGLE_OAUTH_REFRESH_TOKEN = os.getenv('GOOGLE_OAUTH_REFRESH_TOKEN')
 
 
 # Quick-start development settings - unsuitable for production
@@ -105,6 +112,13 @@ DATABASES = {
 }
 
 
+TASKS = {
+    'default': {
+        'BACKEND': 'django_tasks.backends.immediate.ImmediateBackend',
+    },
+}
+
+
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
@@ -179,10 +193,10 @@ SERVER_EMAIL = os.getenv('EMAIL_HOST_USER')
 # For development, uncomment this to print emails to console instead of sending
 # EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
-TASKS = {
-    'default': {
-        'BACKEND': 'django_tasks.backends.immediate.ImmediateBackend',
-    },
-}
+# AWS Configuration (for Cloud Recording and generic S3 usage)
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_REGION = os.getenv('AWS_REGION', 'ap-south-1')
+AWS_S3_BUCKET = os.getenv('AWS_S3_BUCKET')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

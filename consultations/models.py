@@ -83,6 +83,11 @@ class ConsultationBooking(models.Model):
     confirmation_sent = models.BooleanField(default=False, help_text="Whether confirmation email was sent")
     reminder_sent = models.BooleanField(default=False, help_text="Whether 24-hour reminder was sent")
     
+    # Recording fields
+    recording_id = models.CharField(max_length=100, blank=True, null=True, help_text="TaskID for recording")
+    recording_url = models.URLField(max_length=500, blank=True, null=True, help_text="Final S3 recording URL")
+    meeting_link = models.URLField(max_length=500, blank=True, null=True, help_text="Google Meet meeting link")
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

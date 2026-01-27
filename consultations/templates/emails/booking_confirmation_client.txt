@@ -12,6 +12,10 @@ Time: {{ booking.start_time|time:"g:i A" }} - {{ booking.end_time|time:"g:i A" }
 Consultant: {{ consultant_name }}
 Duration: 30 minutes
 
+JOINING LINK:
+{{ dashboard_url }}
+(The 'Join' button becomes active 10 minutes before the meeting)
+
 {% if booking.notes %}
 YOUR QUERY:
 {{ booking.notes }}
