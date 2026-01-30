@@ -22,11 +22,13 @@ class UserAdmin(BaseUserAdmin):
     )
 
 
-@admin.register(ConsultantProfile)
 class ConsultantProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'current_load', 'max_capacity', 'services')
+    list_display = ('user', 'consultation_fee', 'current_load', 'max_capacity', 'services')
     list_filter = ('max_capacity',)
     search_fields = ('user__username', 'user__email')
+
+if not admin.site.is_registered(ConsultantProfile):
+    admin.site.register(ConsultantProfile, ConsultantProfileAdmin)
 
 
 @admin.register(ClientProfile)

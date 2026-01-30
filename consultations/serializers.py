@@ -37,9 +37,10 @@ class ConsultationBookingSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'consultant', 'consultant_name', 'client', 'client_name',
             'topic', 'topic_name', 'booking_date', 'start_time', 'end_time',
-            'notes', 'status', 'meeting_link', 'created_at'
+            'notes', 'status', 'payment_status', 'razorpay_order_id', 
+            'razorpay_payment_id', 'amount', 'meeting_link', 'created_at'
         ]
-        read_only_fields = ['client', 'created_at']
+        read_only_fields = ['client', 'created_at', 'payment_status', 'razorpay_order_id', 'amount']
     
     def get_consultant_name(self, obj):
         return f"{obj.consultant.first_name} {obj.consultant.last_name}".strip() or obj.consultant.username

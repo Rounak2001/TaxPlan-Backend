@@ -77,7 +77,19 @@ class ConsultationBooking(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     notes = models.TextField(blank=True, help_text="Client's query or meeting details")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='confirmed')
+    
+    # Payment fields
+    PAYMENT_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+        ('failed', 'Failed'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='pending')
+    razorpay_order_id = models.CharField(max_length=100, blank=True, null=True)
+    razorpay_payment_id = models.CharField(max_length=100, blank=True, null=True)
+    razorpay_signature = models.CharField(max_length=255, blank=True, null=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     
     # Email tracking fields
     confirmation_sent = models.BooleanField(default=False, help_text="Whether confirmation email was sent")
@@ -87,6 +99,8 @@ class ConsultationBooking(models.Model):
     recording_id = models.CharField(max_length=100, blank=True, null=True, help_text="TaskID for recording")
     recording_url = models.URLField(max_length=500, blank=True, null=True, help_text="Final S3 recording URL")
     meeting_link = models.URLField(max_length=500, blank=True, null=True, help_text="Google Meet meeting link")
+    bot_triggered = models.BooleanField(default=False, help_text="Whether the recording bot was launched")
+    bot_recorded = models.BooleanField(default=False, help_text="Whether the recording was successfully started")
     
     created_at = models.DateTimeField(auto_now_add=True)
 

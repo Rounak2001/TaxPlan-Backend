@@ -9,9 +9,17 @@ from .serializers import (
     TopicSerializer, WeeklyAvailabilitySerializer, DateOverrideSerializer,
     ConsultationBookingSerializer
 )
+from .utils import trigger_recording_bot
 from .google_meet import GoogleMeetService
 
+import razorpay
+from django.conf import settings
+from django.db import transaction
+
 User = get_user_model()
+
+# Initialize Razorpay client
+razorpay_client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
 
 class WeeklyAvailabilityViewSet(viewsets.ModelViewSet):
     serializer_class = WeeklyAvailabilitySerializer
@@ -43,21 +51,89 @@ class ConsultationBookingViewSet(viewsets.ModelViewSet):
         return ConsultationBooking.objects.filter(client=user)
 
     def perform_create(self, serializer):
+        # Default status is 'pending' from model
         booking = serializer.save()
         
-        # Try to create Google Meet link
+        # Calculate amount from consultant's profile
         try:
-            service = GoogleMeetService()
-            meet_link = service.create_meeting(booking)
-            if meet_link:
-                booking.meeting_link = meet_link
-                booking.save()
+            booking.amount = booking.consultant.consultant_profile.consultation_fee
+        except Exception:
+            booking.amount = 200.00 # Fallback
+        booking.save(update_fields=['amount'])
+        
+        # Create Razorpay Order
+        try:
+            # Razorpay amount is in paise
+            razor_amount = int(booking.amount * 100)
+            order_data = {
+                'amount': razor_amount,
+                'currency': 'INR',
+                'receipt': f"receipt_booking_{booking.id}",
+                'payment_capture': 1 # Auto-capture
+            }
+            razorpay_order = razorpay_client.order.create(data=order_data)
+            booking.razorpay_order_id = razorpay_order['id']
+            booking.save(update_fields=['razorpay_order_id'])
         except Exception as e:
-            print(f"Failed to generate Google Meet link: {str(e)}")
+            print(f"Failed to create Razorpay order: {str(e)}")
+            # We still keep the booking as pending, but it won't have an order ID for checkout
 
-        # Fallback: Send confirmation email if it hasn't been sent yet (e.g. if link failed)
-        if not booking.confirmation_sent:
-            send_booking_confirmation(booking)
+    @action(detail=True, methods=['post'])
+    def verify_payment(self, request, pk=None):
+        booking = self.get_object()
+        razorpay_payment_id = request.data.get('razorpay_payment_id')
+        razorpay_order_id = request.data.get('razorpay_order_id')
+        razorpay_signature = request.data.get('razorpay_signature')
+
+        params_dict = {
+            'razorpay_order_id': razorpay_order_id,
+            'razorpay_payment_id': razorpay_payment_id,
+            'razorpay_signature': razorpay_signature
+        }
+
+        try:
+            # Verify the signature
+            razorpay_client.utility.verify_payment_signature(params_dict)
+            
+            with transaction.atomic():
+                # Update booking status
+                booking.payment_status = 'paid'
+                booking.status = 'confirmed'
+                booking.razorpay_payment_id = razorpay_payment_id
+                booking.razorpay_signature = razorpay_signature
+                booking.save()
+
+                # Generate Google Meet link and send email now that it's confirmed
+                try:
+                    service = GoogleMeetService()
+                    meet_link = service.create_meeting(booking)
+                    if meet_link:
+                        booking.meeting_link = meet_link
+                        booking.save(update_fields=['meeting_link'])
+                except Exception as meet_err:
+                    print(f"Failed to generate Google Meet link after payment: {meet_err}")
+
+                if not booking.confirmation_sent:
+                    send_booking_confirmation(booking)
+            
+            return Response({'status': 'Payment verified and booking confirmed'})
+        except Exception as e:
+            print(f"Payment verification failed: {str(e)}")
+            booking.payment_status = 'failed'
+            booking.save(update_fields=['payment_status'])
+            return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def trigger_recording(self, request, pk=None):
+        booking = self.get_object()
+        if not booking.meeting_link:
+            return Response({'error': 'No meeting link found for this booking'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        success = trigger_recording_bot(booking.meeting_link)
+        if success:
+            return Response({'status': 'Recording bot triggered successfully'})
+        else:
+            return Response({'error': 'Failed to trigger recording bot'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -123,9 +199,68 @@ def consultants_by_date(request):
                 'first_name': consultant.first_name,
                 'last_name': consultant.last_name,
                 'email': consultant.email,
+                'consultation_fee': getattr(getattr(consultant, 'consultant_profile', None), 'consultation_fee', 200.00),
             })
 
     return Response({'consultants': available_consultants})
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def razorpay_webhook(request):
+    """
+    Handle Razorpay Webhooks for direct server-to-server confirmation.
+    """
+    webhook_secret = settings.RAZORPAY_WEBHOOK_SECRET
+    if not webhook_secret:
+        return Response({'error': 'Webhook secret not configured'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    payload = request.body.decode('utf-8')
+    signature = request.headers.get('X-Razorpay-Signature')
+
+    try:
+        # Verify the webhook signature
+        razorpay_client.utility.verify_webhook_signature(payload, signature, webhook_secret)
+        
+        event_data = request.data
+        event = event_data.get('event')
+
+        if event == 'payment.captured':
+            payment_entity = event_data['payload']['payment']['entity']
+            razorpay_order_id = payment_entity.get('order_id')
+            razorpay_payment_id = payment_entity.get('id')
+            
+            try:
+                booking = ConsultationBooking.objects.get(razorpay_order_id=razorpay_order_id)
+                
+                # Check if it's already confirmed to avoid duplicate logic
+                if booking.payment_status != 'paid':
+                    with transaction.atomic():
+                        booking.payment_status = 'paid'
+                        booking.status = 'confirmed'
+                        booking.razorpay_payment_id = razorpay_payment_id
+                        booking.save()
+
+                        # Logic to generate link and send email
+                        if not booking.meeting_link:
+                            try:
+                                service = GoogleMeetService()
+                                meet_link = service.create_meeting(booking)
+                                if meet_link:
+                                    booking.meeting_link = meet_link
+                                    booking.save(update_fields=['meeting_link'])
+                            except Exception as meet_err:
+                                print(f"Webhook error generating link: {meet_err}")
+
+                        if not booking.confirmation_sent:
+                            send_booking_confirmation(booking)
+            except ConsultationBooking.DoesNotExist:
+                print(f"Webhook received for unknown order: {razorpay_order_id}")
+                
+        return Response({'status': 'Webhook processed'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        print(f"Webhook verification failed: {str(e)}")
+        # Return 200 even on error to stop Razorpay from retrying uselessly if sig is wrong
+        return Response({'status': 'Invalid signature ignored'}, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])

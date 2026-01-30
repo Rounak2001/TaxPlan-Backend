@@ -25,6 +25,7 @@ class ConsultantProfile(models.Model):
     max_capacity = models.IntegerField(default=10)
     current_load = models.IntegerField(default=0)
     services = models.JSONField(default=list)  # e.g., ["GST", "ITR"]
+    consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.00)
 
     def __str__(self):
         return f"Consultant: {self.user.username}"

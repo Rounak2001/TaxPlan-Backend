@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     TopicViewSet, WeeklyAvailabilityViewSet, DateOverrideViewSet,
     ConsultationBookingViewSet, available_consultants, 
-    consultants_by_date, consultant_slots
+    consultants_by_date, consultant_slots, razorpay_webhook
 )
 
 router = DefaultRouter()
@@ -17,4 +17,5 @@ urlpatterns = [
     path('consultants-by-date/', consultants_by_date, name='consultants-by-date'),
     path('consultant-slots/', consultant_slots, name='consultant-slots'),
     path('available-consultants/', available_consultants, name='available-consultants'),
+    path('razorpay-webhook/', razorpay_webhook, name='razorpay-webhook'),
 ]
