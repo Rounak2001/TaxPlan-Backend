@@ -80,28 +80,51 @@ class GoogleAuthView(APIView):
     
     def post(self, request):
         id_token = request.data.get('id_token')
+        access_token = request.data.get('access_token')
         
-        if not id_token:
-            return Response({'error': 'ID token is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not id_token and not access_token:
+            return Response({'error': 'ID token or Access token is required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Verify token with Google
+        email = None
+        first_name = ''
+        last_name = ''
+
         try:
-            google_response = requests.get(
-                f'https://oauth2.googleapis.com/tokeninfo?id_token={id_token}'
-            )
-            
-            if google_response.status_code != 200:
-                return Response({'error': 'Invalid Google token'}, status=status.HTTP_401_UNAUTHORIZED)
-            
-            google_data = google_response.json()
-            
-            # Verify the token is for our app
-            if google_data.get('aud') != settings.GOOGLE_CLIENT_ID:
-                return Response({'error': 'Token not issued for this app'}, status=status.HTTP_401_UNAUTHORIZED)
-            
-            email = google_data.get('email')
-            first_name = google_data.get('given_name', '')
-            last_name = google_data.get('family_name', '')
+            if id_token:
+                # Verify ID token with Google
+                google_response = requests.get(
+                    f'https://oauth2.googleapis.com/tokeninfo?id_token={id_token}'
+                )
+                
+                if google_response.status_code != 200:
+                    return Response({'error': 'Invalid Google ID token'}, status=status.HTTP_401_UNAUTHORIZED)
+                
+                google_data = google_response.json()
+                
+                # Verify the token is for our app
+                if google_data.get('aud') != settings.GOOGLE_CLIENT_ID:
+                    return Response({'error': 'Token not issued for this app'}, status=status.HTTP_401_UNAUTHORIZED)
+                
+                email = google_data.get('email')
+                first_name = google_data.get('given_name', '')
+                last_name = google_data.get('family_name', '')
+
+            elif access_token:
+                # Verify Access token by fetching user info
+                google_response = requests.get(
+                    'https://www.googleapis.com/oauth2/v3/userinfo',
+                    headers={'Authorization': f'Bearer {access_token}'}
+                )
+
+                if google_response.status_code != 200:
+                    return Response({'error': 'Invalid Google Access token'}, status=status.HTTP_401_UNAUTHORIZED)
+                
+                google_data = google_response.json()
+                
+                email = google_data.get('email')
+                first_name = google_data.get('given_name', '')
+                last_name = google_data.get('family_name', '')
+
             
             if not email:
                 return Response({'error': 'Email not provided by Google'}, status=status.HTTP_400_BAD_REQUEST)
