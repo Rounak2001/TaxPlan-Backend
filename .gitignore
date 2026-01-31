@@ -25,3 +25,13 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+
+# Automation & Browser Sessions
+google_session/
+consultations/logs/*.log
+consultations/logs/*.png
+consultations/logs/bot_*.log
+consultations/logs/failure_*.png
+.pytest_cache/
+.playwright/
+test-results/
