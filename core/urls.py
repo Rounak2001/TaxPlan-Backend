@@ -9,6 +9,8 @@ urlpatterns = [
     path('api/vault/', include('document_vault.urls')),
     path('api/chat/', include('chat_api.urls')),
     path('api/gst/', include('gst_reports.urls')),
+    path('api/tds/', include('tds_api.urls')),
+    path('api/calculator/', include('calculator.urls')),
 ]
 
 if settings.DEBUG:
