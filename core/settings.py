@@ -30,6 +30,18 @@ GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID')
 GOOGLE_OAUTH_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET')
 GOOGLE_OAUTH_REFRESH_TOKEN = os.getenv('GOOGLE_OAUTH_REFRESH_TOKEN')
 
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from .env file
+load_dotenv(BASE_DIR / '.env')
+
+# Google OAuth
+# GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
+
+# Sandbox GST API
+SANDBOX_API_KEY = os.getenv('SANDBOX_API_KEY')
+SANDBOX_API_SECRET = os.getenv('SANDBOX_API_SECRET')
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
@@ -62,6 +74,9 @@ INSTALLED_APPS = [
     # Internal Apps
     'core_auth',
     'consultations',
+    'document_vault',
+    'chat_api',
+    'gst_reports',
 ]
 
 AUTH_USER_MODEL = 'core_auth.User'
@@ -77,6 +92,8 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'core_auth.middleware.PreOnboardingMiddleware',
 ]
+
+X_FRAME_OPTIONS = 'SAMEORIGIN'
 
 ROOT_URLCONF = 'core.urls'
 
@@ -150,8 +167,9 @@ USE_I18N = True
 USE_TZ = True
 STATIC_URL = '/static/'
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/6.0/howto/static-files/
+# Media files (Uploaded documents)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 
 # REST Framework
