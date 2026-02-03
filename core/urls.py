@@ -12,6 +12,7 @@ urlpatterns = [
     path('api/gst/', include('gst_reports.urls')),
     path('api/tds/', include('tds_api.urls')),
     path('api/calculator/', include('calculator.urls')),
+    path('api/payments/', include('service_orders.urls')),
 ]
 
 if settings.DEBUG:

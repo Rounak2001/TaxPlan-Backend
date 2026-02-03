@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     'document_vault',
     'chat_api',
     'gst_reports',
+    'service_orders',
 ]
 
 AUTH_USER_MODEL = 'core_auth.User'
