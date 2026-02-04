@@ -38,7 +38,7 @@ def reconcile_1_vs_3b(request):
         if not session_id:
             return Response({"error": "Session ID required"}, status=400)
 
-        session, error = get_valid_session(session_id)
+        session, error = get_valid_session(session_id, user=request.user)
         if error:
             return Response({"error": error}, status=401)
 
@@ -112,7 +112,7 @@ def reconcile_1_vs_books(request):
     if not session_id:
         return Response({'error': 'Session ID required'}, status=400)
 
-    session, error = get_valid_session(session_id)
+    session, error = get_valid_session(session_id, user=request.user)
     if error:
         return Response({'error': error}, status=401)
 
@@ -188,7 +188,7 @@ def reconcile_3b_vs_books(request):
     if not session_id:
         return Response({'error': 'Session ID required'}, status=400)
 
-    session, error = get_valid_session(session_id)
+    session, error = get_valid_session(session_id, user=request.user)
     if error:
         return Response({'error': error}, status=401)
 
@@ -256,7 +256,7 @@ def reconcile_2b_vs_books(request):
     if not session_id:
         return Response({'error': 'Session ID required'}, status=400)
 
-    session, error = get_valid_session(session_id)
+    session, error = get_valid_session(session_id, user=request.user)
     if error:
         return Response({'error': error}, status=401)
 
@@ -327,7 +327,7 @@ def reconcile_comprehensive_view(request):
         if not session_id:
             return Response({"error": "Session ID required"}, status=400)
 
-        session, error = get_valid_session(session_id)
+        session, error = get_valid_session(session_id, user=request.user)
         if error:
             return Response({"error": error}, status=401)
 

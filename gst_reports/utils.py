@@ -66,12 +66,20 @@ def get_gst_headers(access_token):
     }
 
 
-def get_valid_session(session_id):
-    """Get a valid, verified session by session_id."""
+def get_valid_session(session_id, user=None):
+    """
+    Get a valid, verified session by session_id.
+    If 'user' is provided, ensures the session belongs to that user.
+    """
     try:
         session = UnifiedGSTSession.objects.get(session_id=session_id)
     except UnifiedGSTSession.DoesNotExist:
         return None, "Session not found"
+    
+    # Security: Validate session ownership if user is provided
+    if user and session.user != user:
+        return None, "Unauthorized access to this session"
+
     
     if session.is_expired():
         return None, "Session expired"

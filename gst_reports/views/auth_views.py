@@ -24,6 +24,23 @@ def generate_otp(request):
     
     if not username:
         return Response({"error": "GST Portal username is required"}, status=400)
+
+    # Security: If user is a consultant, ensure this GSTIN belongs to an assigned client
+    if request.user.role == 'CONSULTANT':
+        from core_auth.models import ClientProfile
+        # Check if any assigned client has this GSTIN
+        # Note: A consultant might have multiple clients, we need to check if *any* assigned client matches the requested GSTIN.
+        # However, ClientProfile has a 1-to-1 with User. 
+        # The query should be: Is there a ClientProfile assigned to this consultant THAT HAS this GSTIN?
+        is_assigned = ClientProfile.objects.filter(
+            assigned_consultant=request.user,
+            gstin=gstin
+        ).exists()
+        
+        if not is_assigned:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You are not authorized to access this GSTIN. Please ensure the client is assigned to you.")
+
     
     access_token, error = get_sandbox_access_token()
     if error:

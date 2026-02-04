@@ -352,16 +352,17 @@ class ConsultantClientsView(APIView):
             client_user = profile.user
             clients_data.append({
                 'id': client_user.id,
-                'full_name': f"{client_user.first_name} {client_user.last_name}".strip() or client_user.username,
+                'name': f"{client_user.first_name} {client_user.last_name}".strip() or client_user.username,
                 'email': client_user.email,
-                'phone_number': client_user.phone_number,
-                'pan_number': profile.pan_number,
+                'phone': client_user.phone_number,
+                'pan': profile.pan_number,
                 'gstin': profile.gstin,
                 'gst_username': profile.gst_username,
-                'is_onboarded': client_user.is_onboarded,
+                'status': 'active' if client_user.is_onboarded else 'pending',
+                'avatarUrl': '',
+                'createdAt': client_user.date_joined.isoformat() if client_user.date_joined else None,
+                'consultantId': user.id,
+                'lastActivity': None, # Placeholder
             })
         
-        return Response({
-            'total_clients': len(clients_data),
-            'clients': clients_data,
-        })
+        return Response(clients_data)

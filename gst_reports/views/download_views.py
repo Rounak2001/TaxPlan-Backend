@@ -34,7 +34,7 @@ def download_gstr1(request):
     if not session_id:
         return Response({'error': 'Session ID required'}, status=400)
 
-    session, error = get_valid_session(session_id)
+    session, error = get_valid_session(session_id, user=request.user)
     if error:
         return Response({'error': error}, status=401)
 
@@ -87,7 +87,7 @@ def download_gstr2b(request):
     if not session_id:
         return Response({'error': 'Session ID required'}, status=400)
 
-    session, error = get_valid_session(session_id)
+    session, error = get_valid_session(session_id, user=request.user)
     if error:
         return Response({'error': error}, status=401)
 
@@ -141,7 +141,7 @@ def download_gstr3b(request):
     if not session_id:
         return Response({'error': 'Session ID required'}, status=400)
 
-    session, error = get_valid_session(session_id)
+    session, error = get_valid_session(session_id, user=request.user)
     if error:
         return Response({'error': error}, status=401)
 
@@ -287,7 +287,7 @@ def download_gstr2a(request):
     if not year or not month:
         return Response({'error': 'Year and Month are required'}, status=400)
 
-    session, error = get_valid_session(session_id)
+    session, error = get_valid_session(session_id, user=request.user)
     if error:
         return Response({'error': error}, status=401)
 
