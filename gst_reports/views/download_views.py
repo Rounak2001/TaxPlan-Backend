@@ -279,13 +279,28 @@ def download_gstr2a(request):
     Bypasses cache.
     """
     session_id = request.data.get('session_id')
+    download_type = (request.data.get('download_type') or request.data.get('type') or 'monthly').lower()
+    if download_type == 'month': download_type = 'monthly'
+    elif download_type == 'quarter': download_type = 'quarterly'
+    elif download_type in ['year', 'fy']: download_type = 'fy'
+
+    fy = request.data.get('fy') or request.data.get('fy_year')
+    quarter = request.data.get('quarter')
     year = request.data.get('year')
     month = request.data.get('month')
 
     if not session_id:
         return Response({'error': 'Session ID required'}, status=400)
-    if not year or not month:
-        return Response({'error': 'Year and Month are required'}, status=400)
+    
+    # Validation for Monthly
+    if download_type == 'monthly' and (not year or not month):
+        return Response({'error': 'Year and Month are required for monthly download'}, status=400)
+    # Validation for Quarterly
+    if download_type == 'quarterly' and (not fy or not quarter):
+        return Response({'error': 'Financial Year and Quarter are required for quarterly download'}, status=400)
+    # Validation for FY
+    if download_type == 'fy' and not fy:
+        return Response({'error': 'Financial Year is required for annual download'}, status=400)
 
     session, error = get_valid_session(session_id, user=request.user)
     if error:
@@ -297,9 +312,12 @@ def download_gstr2a(request):
             user=session.user,
             gstin=session.gstin,
             taxpayer_token=session.taxpayer_token,
-            year=int(year),
-            month=int(month),
-            username=session.gst_username
+            username=session.gst_username,
+            download_type=download_type,
+            fy=fy,
+            quarter=quarter,
+            year=year,
+            month=month
         )
         
         response = HttpResponse(
