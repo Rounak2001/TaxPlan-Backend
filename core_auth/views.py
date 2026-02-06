@@ -354,7 +354,8 @@ class ConsultantClientsView(APIView):
                 'id': client_user.id,
                 'name': f"{client_user.first_name} {client_user.last_name}".strip() or client_user.username,
                 'email': client_user.email,
-                'phone': client_user.phone_number,
+                # 'phone': intentionally excluded - phone numbers are hidden from frontend
+                # Calls are initiated via the /api/calls/initiate/ endpoint using client_id
                 'pan': profile.pan_number,
                 'gstin': profile.gstin,
                 'gst_username': profile.gst_username,

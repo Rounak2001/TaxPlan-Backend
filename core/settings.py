@@ -79,7 +79,18 @@ INSTALLED_APPS = [
     'chat_api',
     'gst_reports',
     'service_orders',
+    'exotel_calls',
 ]
+
+# Exotel Configuration
+EXOTEL_API_KEY = os.getenv('EXOTEL_API_KEY')
+EXOTEL_API_TOKEN = os.getenv('EXOTEL_API_TOKEN')
+EXOTEL_SID = os.getenv('EXOTEL_SID')
+EXOTEL_CALLER_ID = os.getenv('EXOTEL_CALLER_ID')
+EXOTEL_SUBDOMAIN = os.getenv('EXOTEL_SUBDOMAIN', 'api.exotel.com')
+
+# Backend URL for callbacks
+BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')
 
 AUTH_USER_MODEL = 'core_auth.User'
 
