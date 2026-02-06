@@ -13,6 +13,7 @@ urlpatterns = [
     path('api/tds/', include('tds_api.urls')),
     path('api/calculator/', include('calculator.urls')),
     path('api/payments/', include('service_orders.urls')),
+    path('api/consultants/', include('consultants.urls')),
 ]
 
 if settings.DEBUG:

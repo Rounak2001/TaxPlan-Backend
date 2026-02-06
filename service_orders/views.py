@@ -6,6 +6,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from .models import ServiceOrder, OrderItem
 from .serializers import ServiceOrderSerializer
+from .utils import create_service_requests_from_order
 
 # Initialize Razorpay client
 razorpay_client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
@@ -39,6 +40,7 @@ def create_order(request):
             for item in items_data:
                 OrderItem.objects.create(
                     order=order,
+                    service_id=item.get('service_id'),  # Link to consultant service
                     category=item.get('category'),
                     service_title=item.get('title'),
                     variant_name=item.get('variantName'),
@@ -95,7 +97,14 @@ def verify_payment(request):
         order.razorpay_signature = razorpay_signature
         order.save()
         
-        return Response({'status': 'Payment verified successfully'})
+        # Create service requests and assign consultants
+        service_requests = create_service_requests_from_order(order)
+        
+        return Response({
+            'status': 'Payment verified successfully',
+            'order_id': order.id,
+            'service_requests': service_requests
+        })
     except Exception as e:
         # If verification fails or order doesn't exist
         if 'order' in locals():
