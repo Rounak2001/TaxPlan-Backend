@@ -22,13 +22,47 @@ class GSTR2AExcelService:
             "tcs", "tds"
         ]
 
-    def generate(self, user, gstin, taxpayer_token, year, month, username):
+    def get_periods(self, download_type, fy=None, quarter=None, year=None, month=None):
+        if download_type == "fy":
+            y = int(fy.split("-")[0])
+            now = datetime.now()
+            months = []
+            for m in range(4, 13):
+                if y < now.year or (y == now.year and m <= now.month): months.append((y, m))
+            for m in range(1, 4):
+                if y + 1 < now.year or (y + 1 == now.year and m <= now.month): months.append((y + 1, m))
+            return months, fy
+        elif download_type == "quarterly":
+            y = int(fy.split("-")[0])
+            q = int(quarter)
+            months = [(y, 4), (y, 5), (y, 6)] if q == 1 else \
+                     [(y, 7), (y, 8), (y, 9)] if q == 2 else \
+                     [(y, 10), (y, 11), (y, 12)] if q == 3 else \
+                     [(y + 1, 1), (y + 1, 2), (y + 1, 3)]
+            return months, f"{fy}_Q{quarter}"
+        else:
+            m = int(month)
+            y = int(year)
+            if fy:
+                start_year = int(fy.split("-")[0])
+                y = start_year if m >= 4 else start_year + 1
+            return [(y, m)], f"{m:02d}{y}"
+
+    def generate(self, user, gstin, taxpayer_token, username, download_type="monthly", fy=None, quarter=None, year=None, month=None):
         """
         Main entry point for generating GSTR-2A Excel.
         """
-        # 1. Fetch data for all sections
-        all_data = self._fetch_all_sections(gstin, year, month, taxpayer_token)
+        periods, period_label = self.get_periods(download_type, fy, quarter, year, month)
         
+        # 1. Fetch data for all sections across all periods
+        all_data = {section: [] for section in self.sections}
+        
+        for y, m in periods:
+            period_data = self._fetch_all_sections(gstin, y, m, taxpayer_token)
+            # Merge into all_data
+            for section in self.sections:
+                all_data[section].extend(period_data.get(section, []))
+
         # 2. Extract unique GSTINs and fetch supplier names
         all_ctins = []
         for section, records in all_data.items():
@@ -46,20 +80,17 @@ class GSTR2AExcelService:
 
         # 3. Process into Excel
         output = self._create_excel(all_data)
-        filename = f"GSTR2A_{gstin}_{month:02d}{year}.xlsx"
+        filename = f"GSTR2A_{gstin}_{period_label}.xlsx"
         
         return output, filename
 
     def _fetch_all_sections(self, gstin, year, month, taxpayer_token):
         headers = get_gst_headers(taxpayer_token)
-        all_data = {section: [] for section in self.sections}
+        period_data = {section: [] for section in self.sections}
         period = f"{month:02d}{year}"
 
         for section in self.sections:
-            # Sandbox path params for GSTR-2A
             api_url = f"{self.BASE_URL}/gst/compliance/tax-payer/gstrs/gstr-2a/{section}/{year}/{month:02d}"
-            
-            # Note: Sandbox sometimes expects gstin in params
             status_code, response_data = safe_api_call("GET", api_url, headers=headers, params={"gstin": gstin})
             
             if status_code == 200:
@@ -67,7 +98,6 @@ class GSTR2AExcelService:
                 data = unwrap_sandbox_data(response_data)
                 
                 records = []
-                # Handle possible structures
                 if isinstance(data, dict):
                     if section in data:
                         records = data[section]
@@ -75,11 +105,11 @@ class GSTR2AExcelService:
                         records = data["data"][section]
 
                 if records:
-                    self._flatten_and_append(all_data, section, records, period)
+                    self._flatten_and_append(period_data, section, records, period)
             
-            time.sleep(0.3) # Rate limit courtesy
+            time.sleep(0.3)
             
-        return all_data
+        return period_data
 
     def _flatten_and_append(self, all_data, section, records, period):
         """

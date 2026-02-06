@@ -19,7 +19,7 @@ def clear_gst_cache(request):
     if not session_id or not gstin:
         return Response({"error": "Session ID and GSTIN are required"}, status=400)
 
-    session, error = get_valid_session(session_id)
+    session, error = get_valid_session(session_id, user=request.user)
     if error:
         return Response({"error": error}, status=401)
 

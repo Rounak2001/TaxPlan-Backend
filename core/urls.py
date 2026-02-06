@@ -14,6 +14,7 @@ urlpatterns = [
     path('api/calculator/', include('calculator.urls')),
     path('api/payments/', include('service_orders.urls')),
     path('api/consultants/', include('consultants.urls')),
+    path('api/calls/', include('exotel_calls.urls')),
 ]
 
 if settings.DEBUG:

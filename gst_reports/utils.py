@@ -66,12 +66,40 @@ def get_gst_headers(access_token):
     }
 
 
-def get_valid_session(session_id):
-    """Get a valid, verified session by session_id."""
+def get_valid_session(session_id, user=None):
+    """
+    Get a valid, verified session by session_id.
+    If 'user' is provided, ensures the session belongs to that user.
+    """
     try:
         session = UnifiedGSTSession.objects.get(session_id=session_id)
     except UnifiedGSTSession.DoesNotExist:
         return None, "Session not found"
+    
+    # Security: Validate session ownership or relationship if user is provided
+    if user and session.user != user:
+        from core_auth.models import ClientProfile
+        is_authorized = False
+        
+        # Consultant accessing their client's session
+        if user.role == 'CONSULTANT':
+            is_authorized = ClientProfile.objects.filter(
+                assigned_consultant=user, 
+                gstin=session.gstin,
+                user=session.user
+            ).exists()
+            
+        # Client accessing their consultant's session
+        elif user.role == 'CLIENT':
+            try:
+                profile = ClientProfile.objects.get(user=user)
+                is_authorized = (profile.assigned_consultant == session.user)
+            except ClientProfile.DoesNotExist:
+                pass
+                
+        if not is_authorized:
+            return None, "Unauthorized access to this session"
+
     
     if session.is_expired():
         return None, "Session expired"
@@ -83,6 +111,54 @@ def get_valid_session(session_id):
         return None, "Invalid session - missing taxpayer token"
     
     return session, None
+
+
+def find_active_gst_session(user, gstin):
+    """
+    Find an active, verified GST session for a given GSTIN.
+    The session must be shareable:
+    - Owned by the user
+    - OR Owned by the client (if user is their assigned consultant)
+    - OR Owned by the consultant (if user is their assigned client)
+    """
+    from django.db.models import Q
+    from core_auth.models import ClientProfile
+    
+    now = timezone.now()
+    base_query = UnifiedGSTSession.objects.filter(
+        gstin=gstin,
+        is_verified=True,
+        expires_at__gt=now
+    )
+
+    # 1. Check if user has their own session
+    session = base_query.filter(user=user).first()
+    if session:
+        return session
+
+    # 2. Check if user is a consultant and their client has a session
+    if user.role == 'CONSULTANT':
+        client_ids = ClientProfile.objects.filter(
+            assigned_consultant=user, 
+            gstin=gstin
+        ).values_list('user_id', flat=True)
+        
+        session = base_query.filter(user_id__in=client_ids).first()
+        if session:
+            return session
+
+    # 3. Check if user is a client and their consultant has a session
+    if user.role == 'CLIENT':
+        try:
+            profile = ClientProfile.objects.get(user=user)
+            if profile.assigned_consultant:
+                session = base_query.filter(user=profile.assigned_consultant).first()
+                if session:
+                    return session
+        except ClientProfile.DoesNotExist:
+            pass
+
+    return None
 
 
 def cleanup_expired_sessions():

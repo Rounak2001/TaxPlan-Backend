@@ -5,7 +5,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from gst_reports.models import UnifiedGSTSession
-from gst_reports.utils import safe_api_call, get_sandbox_access_token, get_gst_headers, cleanup_expired_sessions
+from gst_reports.utils import (
+    safe_api_call, get_sandbox_access_token, get_gst_headers, 
+    cleanup_expired_sessions, find_active_gst_session
+)
 
 
 @api_view(['POST'])
@@ -24,6 +27,25 @@ def generate_otp(request):
     
     if not username:
         return Response({"error": "GST Portal username is required"}, status=400)
+
+    # Security: If user is a consultant, ensure this GSTIN belongs to an assigned client
+    if request.user.role == 'CONSULTANT':
+        from core_auth.models import ClientProfile
+        # Check if any assigned client has this GSTIN
+        # Note: A consultant might have multiple clients, we need to check if *any* assigned client matches the requested GSTIN.
+        # However, ClientProfile has a 1-to-1 with User. 
+        # The query should be: Is there a ClientProfile assigned to this consultant THAT HAS this GSTIN?
+        is_assigned = ClientProfile.objects.filter(
+            assigned_consultant=request.user,
+            gstin__iexact=gstin.strip()
+        ).exists()
+        
+        if not is_assigned:
+            # Debugging check: list available GSTINs for this consultant
+            available_gstins = list(ClientProfile.objects.filter(assigned_consultant=request.user).values_list('gstin', flat=True))
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied(f"You are not authorized for GSTIN {gstin}. Your assigned GSTINs: {available_gstins}")
+
     
     access_token, error = get_sandbox_access_token()
     if error:
@@ -148,4 +170,34 @@ def session_status(request):
         "username": session.gst_username,
         "expires_in_seconds": int(remaining_seconds),
         "expires_in_minutes": int(remaining_seconds / 60)
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def check_active_session(request):
+    """
+    Check if there is any active, verified session for a given GSTIN
+    that the current user is authorized to use.
+    """
+    gstin = request.query_params.get("gstin", "").strip().upper()
+    if not gstin:
+        return Response({"error": "GSTIN is required"}, status=400)
+    
+    session = find_active_gst_session(request.user, gstin)
+    
+    if session:
+        remaining_seconds = (session.expires_at - timezone.now()).total_seconds()
+        return Response({
+            "has_active_session": True,
+            "session_id": str(session.session_id),
+            "gstin": session.gstin,
+            "username": session.gst_username,
+            "expires_in_seconds": int(remaining_seconds),
+            "expires_in_minutes": int(remaining_seconds / 60)
+        })
+    
+    return Response({
+        "has_active_session": False,
+        "message": "No active session found for this GSTIN"
     })

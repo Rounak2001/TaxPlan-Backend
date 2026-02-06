@@ -50,6 +50,13 @@ class ConsultationBookingViewSet(viewsets.ModelViewSet):
             return ConsultationBooking.objects.filter(consultant=user)
         return ConsultationBooking.objects.filter(client=user)
 
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        if response.status_code == status.HTTP_201_CREATED:
+            # Add Razorpay Key ID for the frontend to initialize checkout
+            response.data['razorpay_key_id'] = settings.RAZORPAY_KEY_ID
+        return response
+
     def perform_create(self, serializer):
         # Default status is 'pending' from model
         booking = serializer.save()

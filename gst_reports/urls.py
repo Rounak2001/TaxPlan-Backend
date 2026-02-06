@@ -8,6 +8,7 @@ urlpatterns = [
     path('auth/generate-otp/', auth_views.generate_otp, name='gst_generate_otp'),
     path('auth/verify-otp/', auth_views.verify_otp, name='gst_verify_otp'),
     path('auth/session-status/', auth_views.session_status, name='gst_session_status'),
+    path('auth/check-session/', auth_views.check_active_session, name='gst_check_active_session'),
 
     # Reconciliation
     path('reconcile/1vs3b/', reconciliation_views.reconcile_1_vs_3b, name='reconcile_1_vs_3b'),

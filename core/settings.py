@@ -80,7 +80,18 @@ INSTALLED_APPS = [
     'gst_reports',
     'service_orders',
     'consultants',
+    'exotel_calls',
 ]
+
+# Exotel Configuration
+EXOTEL_API_KEY = os.getenv('EXOTEL_API_KEY')
+EXOTEL_API_TOKEN = os.getenv('EXOTEL_API_TOKEN')
+EXOTEL_SID = os.getenv('EXOTEL_SID')
+EXOTEL_CALLER_ID = os.getenv('EXOTEL_CALLER_ID')
+EXOTEL_SUBDOMAIN = os.getenv('EXOTEL_SUBDOMAIN', 'api.exotel.com')
+
+# Backend URL for callbacks
+BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')
 
 AUTH_USER_MODEL = 'core_auth.User'
 
@@ -186,21 +197,19 @@ REST_FRAMEWORK = {
 }
 
 
-# AWS S3 Settings
+# AWS S3 Configuration
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
-AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME')
-# AWS_S3_CUSTOM_DOMAIN is removed to allow signed URLs (AUTH) by default for private buckets
+AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'ap-south-1')
 
-# Media Files
-# DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+# Media Files Storage
 STORAGES = {
     "default": {
-        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage"  # Keep this for media files
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage"
     },
     "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"  # Use Django's default static file storage
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
     },
 }
 
@@ -236,12 +245,6 @@ SERVER_EMAIL = os.getenv('EMAIL_HOST_USER')
 
 # For development, uncomment this to print emails to console instead of sending
 # EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-
-# AWS Configuration (for Cloud Recording and generic S3 usage)
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-AWS_REGION = os.getenv('AWS_REGION', 'ap-south-1')
-AWS_S3_BUCKET = os.getenv('AWS_S3_BUCKET')
 
 # Razorpay Configuration
 RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID')
