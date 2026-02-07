@@ -3,12 +3,13 @@ from core_auth.views import (
     OTPVerifyView, 
     CustomTokenObtainPairView, UserDashboardView, GoogleAuthView,
     ClientProfileView, LogoutView, ConsultantClientsView,
-    CustomTokenRefreshView
+    CustomTokenRefreshView, WebSocketTokenView
 )
 
 urlpatterns = [
     path('auth/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
+    path('auth/token/websocket/', WebSocketTokenView.as_view(), name='websocket_token'),
     path('auth/verify-otp/', OTPVerifyView.as_view(), name='verify-otp'),
     path('auth/dashboard/', UserDashboardView.as_view(), name='user-dashboard'),
     path('auth/google/', GoogleAuthView.as_view(), name='google-auth'),

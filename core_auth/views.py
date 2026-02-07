@@ -231,7 +231,9 @@ class UserDashboardView(APIView):
     def get(self, request):
         user = request.user
         data = {
+            "id": user.id,  # Required for chat message alignment
             "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
+            "username": user.username,
             "role": user.role,
             "is_onboarded": user.is_onboarded,
             "is_phone_verified": user.is_phone_verified,
@@ -258,6 +260,37 @@ class UserDashboardView(APIView):
                 data["advisor"] = None
         
         return Response(data)
+
+
+class WebSocketTokenView(APIView):
+    """
+    Returns the access token for WebSocket authentication.
+    This is needed because WebSockets can't access HttpOnly cookies directly.
+    The frontend calls this endpoint to get the token before connecting to WebSocket.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        # Get the access token from the HttpOnly cookie
+        access_token = request.COOKIES.get('access_token')
+        
+        if access_token:
+            return Response({'token': access_token})
+        
+        # If no access token in cookie, generate a new one from refresh token
+        refresh_token = request.COOKIES.get('refresh_token')
+        if refresh_token:
+            try:
+                refresh = RefreshToken(refresh_token)
+                access_token = str(refresh.access_token)
+                return Response({'token': access_token})
+            except Exception:
+                pass
+        
+        return Response(
+            {'error': 'No valid token found'}, 
+            status=status.HTTP_401_UNAUTHORIZED
+        )
 
 
 class ClientProfileView(APIView):

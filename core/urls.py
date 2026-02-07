@@ -8,12 +8,13 @@ urlpatterns = [
     path('api/', include('core_auth.urls')),
     path('api/consultations/', include('consultations.urls')),
     path('api/vault/', include('document_vault.urls')),
-    path('api/chat/', include('chat_api.urls')),
+    path('api/chat/', include('chat_api.urls')),  # AI Chat API
     path('api/gst/', include('gst_reports.urls')),
     path('api/tds/', include('tds_api.urls')),
     path('api/calculator/', include('calculator.urls')),
     path('api/payments/', include('service_orders.urls')),
     path('api/calls/', include('exotel_calls.urls')),
+    path('api/conversations/', include('chat.urls')),  # Real-time Chat
 ]
 
 if settings.DEBUG:
