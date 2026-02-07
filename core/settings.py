@@ -81,6 +81,7 @@ INSTALLED_APPS = [
     'chat_api',
     'gst_reports',
     'service_orders',
+    'consultants',
     'exotel_calls',
     'chat',
 ]

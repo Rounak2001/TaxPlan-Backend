@@ -13,6 +13,7 @@ urlpatterns = [
     path('api/tds/', include('tds_api.urls')),
     path('api/calculator/', include('calculator.urls')),
     path('api/payments/', include('service_orders.urls')),
+    path('api/consultants/', include('consultants.urls')),
     path('api/calls/', include('exotel_calls.urls')),
     path('api/conversations/', include('chat.urls')),  # Real-time Chat
 ]

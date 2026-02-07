@@ -172,16 +172,38 @@ class DocumentViewSet(viewsets.ModelViewSet):
     def review_document(self, request, pk=None):
         """
         Allows a consultant to VERIFY or REJECT a document.
+        Optionally accepts a 'rejection_reason' for rejected documents.
         """
         document = self.get_object()
         new_status = request.data.get('status')
+        rejection_reason = request.data.get('rejection_reason', '')
         
         if new_status not in ['VERIFIED', 'REJECTED']:
             return Response({'error': 'Invalid status'}, status=status.HTTP_400_BAD_REQUEST)
-            
+        
         document.status = new_status
+        
+        # Store rejection reason in description field if rejecting
+        if new_status == 'REJECTED' and rejection_reason:
+            document.description = rejection_reason
+        
         document.save()
         return Response(DocumentSerializer(document, context={'request': request}).data)
+
+    @decorators.action(detail=False, methods=['get'], url_path='pending-count', permission_classes=[IsClientUser])
+    def pending_count(self, request):
+        """
+        Returns the count of pending and rejected document requests for the authenticated client.
+        """
+        user = request.user
+        pending = Document.objects.filter(client=user, status='PENDING').count()
+        rejected = Document.objects.filter(client=user, status='REJECTED').count()
+        
+        return Response({
+            'count': pending + rejected,
+            'pending': pending,
+            'rejected': rejected
+        })
 
 
 class SharedReportViewSet(viewsets.ModelViewSet):

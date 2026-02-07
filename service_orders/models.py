@@ -34,6 +34,17 @@ class OrderItem(models.Model):
         on_delete=models.CASCADE,
         related_name='items'
     )
+    
+    # Link to consultant service
+    service = models.ForeignKey(
+        'consultants.Service',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='order_items'
+    )
+    
+    # Keep existing fields for backward compatibility
     category = models.CharField(max_length=100)
     service_title = models.CharField(max_length=255)
     variant_name = models.CharField(max_length=255, blank=True, null=True)
