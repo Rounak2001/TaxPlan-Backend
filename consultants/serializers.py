@@ -15,6 +15,7 @@ class ServiceCategorySerializer(serializers.ModelSerializer):
 
 
 class ServiceSerializer(serializers.ModelSerializer):
+    category = ServiceCategorySerializer(read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
     
     class Meta:

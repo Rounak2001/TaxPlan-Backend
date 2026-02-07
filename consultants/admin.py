@@ -8,12 +8,20 @@ from .models import (
 )
 
 
+class ConsultantServiceExpertiseInline(admin.TabularInline):
+    model = ConsultantServiceExpertise
+    extra = 1
+    fields = ['service']
+    autocomplete_fields = ['service']
+
+
 @admin.register(ConsultantServiceProfile)
 class ConsultantServiceProfileAdmin(admin.ModelAdmin):
     list_display = ['full_name', 'email', 'qualification', 'experience_years', 'is_active', 'current_client_count', 'max_concurrent_clients']
     list_filter = ['is_active', 'qualification']
     search_fields = ['full_name', 'email', 'phone']
     readonly_fields = ['created_at', 'updated_at']
+    inlines = [ConsultantServiceExpertiseInline]
 
 
 @admin.register(ServiceCategory)
