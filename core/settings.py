@@ -291,3 +291,10 @@ LOGGING = {
         },
     },
 }
+
+# =============================================================================
+# PRODUCTION SETTINGS OVERRIDE
+# Set DJANGO_ENV=production in your .env file to enable production settings
+# =============================================================================
+if os.getenv('DJANGO_ENV') == 'production':
+    from .settings_prod import *
