@@ -23,7 +23,7 @@ SECRET_KEY = os.environ['DJANGO_SECRET_KEY']  # Required - will error if not set
 
 # Add your domain(s) here
 ALLOWED_HOSTS = [
-    os.getenv('ALLOWED_HOST', 'api.taxplanadvisor.co'),
+    os.getenv('ALLOWED_HOST', 'main.taxplanadvisor.co'),
     'localhost',
     '127.0.0.1',
 ]

@@ -25,16 +25,16 @@ def set_auth_cookies(response, user):
         key='access_token',
         value=access_token,
         httponly=True,
-        secure=False,  # Set to True in production
-        samesite='Lax',
+        secure=True,  # Required for SameSite=None
+        samesite='None',  # Required for cross-origin cookies
         max_age=3600
     )
     response.set_cookie(
         key='refresh_token',
         value=refresh_token,
         httponly=True,
-        secure=False,
-        samesite='Lax',
+        secure=True,
+        samesite='None',
         max_age=86400
     )
     return response
@@ -56,16 +56,16 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure=False,
-                samesite='Lax',
+                secure=True,
+                samesite='None',
                 max_age=3600
             )
             response.set_cookie(
                 key='refresh_token',
                 value=refresh_token,
                 httponly=True,
-                secure=False,
-                samesite='Lax',
+                secure=True,
+                samesite='None',
                 max_age=86400
             )
         return response
@@ -211,8 +211,8 @@ class CustomTokenRefreshView(APIView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure=False,  # Set to True in production with HTTPS
-                samesite='Lax',
+                secure=True,
+                samesite='None',
                 max_age=3600  # 1 hour
             )
             
