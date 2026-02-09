@@ -52,8 +52,8 @@ class CallLog(models.Model):
     recording_url = models.URLField(blank=True, null=True, max_length=500)
     
     # Exotel detailed data (from callback)
-    from_number = models.CharField(max_length=20, blank=True, null=True, help_text="Masked for privacy")
-    to_number = models.CharField(max_length=20, blank=True, null=True, help_text="Masked for privacy")
+    from_number = models.CharField(max_length=20, blank=True, null=True, help_text="Caller phone number")
+    to_number = models.CharField(max_length=20, blank=True, null=True, help_text="Callee phone number")
     price = models.DecimalField(max_digits=10, decimal_places=4, blank=True, null=True, help_text="Call cost")
     start_time = models.DateTimeField(blank=True, null=True)
     end_time = models.DateTimeField(blank=True, null=True)
