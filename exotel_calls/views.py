@@ -663,11 +663,14 @@ class IncomingCallRouteView(APIView):
         logger.info(f"From: {caller_phone_raw}")
         logger.info(f"To (ExoPhone): {exophone}")
         
-        # Normalize phone number - remove +91, country code, etc.
+        # Normalize phone number - extract just the 10 digit number
         caller_phone = re.sub(r'[^\d]', '', caller_phone_raw)  # Remove non-digits
         if caller_phone.startswith('91') and len(caller_phone) > 10:
             caller_phone = caller_phone[2:]  # Remove 91 prefix
+        if caller_phone.startswith('0') and len(caller_phone) > 10:
+            caller_phone = caller_phone[1:]  # Remove leading 0
         
+        # Now caller_phone should be 10 digits like "9975111931"
         logger.info(f"Normalized caller phone: {caller_phone}")
         
         # Sales team fallback number
@@ -675,24 +678,30 @@ class IncomingCallRouteView(APIView):
         
         # Try to find the client by phone number
         try:
-            # Look for user with this phone number
-            # Try matching with/without country code
-            client = User.objects.filter(
-                phone_number__icontains=caller_phone,
-                role=User.CLIENT
-            ).first()
+            # Build all possible phone formats to match
+            phone_variants = [
+                caller_phone,              # 9975111931
+                f"+91{caller_phone}",      # +919975111931
+                f"91{caller_phone}",       # 919975111931
+                f"0{caller_phone}",        # 09975111931
+            ]
+            logger.info(f"Trying phone variants: {phone_variants}")
             
+            client = None
+            for variant in phone_variants:
+                client = User.objects.filter(phone_number=variant, role=User.CLIENT).first()
+                if client:
+                    logger.info(f"Matched with variant: {variant}")
+                    break
+            
+            # Also try icontains as fallback (matches partial)
             if not client:
-                # Try exact match with various formats
-                phone_variants = [
-                    caller_phone,
-                    f"+91{caller_phone}",
-                    f"91{caller_phone}",
-                ]
-                for variant in phone_variants:
-                    client = User.objects.filter(phone_number=variant, role=User.CLIENT).first()
-                    if client:
-                        break
+                client = User.objects.filter(
+                    phone_number__icontains=caller_phone,
+                    role=User.CLIENT
+                ).first()
+                if client:
+                    logger.info(f"Matched with icontains")
             
             if client:
                 logger.info(f"Found client: {client.id} - {client.get_full_name()}")
