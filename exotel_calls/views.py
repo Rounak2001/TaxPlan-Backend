@@ -746,3 +746,143 @@ class IncomingCallRouteView(APIView):
         # Fallback: Route to sales team
         logger.info(f"Routing to sales team: {sales_team_phone}")
         return HttpResponse(sales_team_phone, content_type='text/plain')
+
+
+class IncomingCallPassthruView(APIView):
+    """
+    Endpoint for Exotel Passthru applet to send call end data for incoming calls.
+    
+    This should be placed AFTER the Connect applet in the Exotel flow.
+    Exotel will call this endpoint with call details after the Connect applet completes.
+    
+    URL: https://main.taxplanadvisor.co/api/calls/incoming-passthru/
+    
+    Parameters received (GET):
+    - CallSid: Unique call identifier
+    - DialCallStatus: completed, busy, no-answer, failed, canceled
+    - DialCallDuration: Duration in seconds
+    - RecordingUrl: Recording URL if enabled
+    - From: Caller phone
+    - Legs[]: Array of leg details
+    """
+    permission_classes = []
+    authentication_classes = []
+    
+    def get(self, request):
+        import logging
+        import os
+        import re
+        from django.http import HttpResponse
+        
+        # Set up logging
+        log_dir = '/var/log/taxplanadvisor' if os.path.exists('/var/log/taxplanadvisor') else '/tmp'
+        log_file = os.path.join(log_dir, 'exotel_incoming.log')
+        
+        logger = logging.getLogger('exotel_incoming_passthru')
+        if not logger.handlers:
+            handler = logging.FileHandler(log_file)
+            handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+            logger.addHandler(handler)
+            logger.setLevel(logging.DEBUG)
+        
+        # Get call details from Exotel
+        call_sid = request.GET.get('CallSid', '')
+        dial_status = request.GET.get('DialCallStatus', '')
+        dial_duration = request.GET.get('DialCallDuration', '0')
+        recording_url = request.GET.get('RecordingUrl', '')
+        caller_phone = request.GET.get('From', '')
+        dialed_number = request.GET.get('DialWhomNumber', '')
+        
+        logger.info(f"=== INCOMING CALL PASSTHRU (CALL END) ===")
+        logger.info(f"CallSid: {call_sid}")
+        logger.info(f"DialCallStatus: {dial_status}")
+        logger.info(f"DialCallDuration: {dial_duration}")
+        logger.info(f"RecordingUrl: {recording_url}")
+        logger.info(f"From: {caller_phone}")
+        logger.info(f"DialWhomNumber: {dialed_number}")
+        
+        # Log all query params for debugging
+        logger.info(f"All params: {dict(request.GET)}")
+        
+        try:
+            # Try to find the CallLog by exotel_sid
+            call_log = CallLog.objects.filter(exotel_sid=call_sid).first()
+            
+            if call_log:
+                # Update the call log with end data
+                
+                # Status mapping
+                status_map = {
+                    'completed': 'completed',
+                    'busy': 'busy',
+                    'no-answer': 'no-answer',
+                    'failed': 'failed',
+                    'canceled': 'canceled',
+                }
+                if dial_status:
+                    call_log.status = status_map.get(dial_status.lower(), dial_status.lower())
+                
+                # Duration
+                try:
+                    call_log.duration = int(dial_duration) if dial_duration else 0
+                except (ValueError, TypeError):
+                    pass
+                
+                # Recording URL
+                if recording_url:
+                    call_log.recording_url = recording_url
+                
+                # End time
+                call_log.end_time = timezone.now()
+                
+                call_log.save()
+                logger.info(f"Updated CallLog {call_log.id}: status={call_log.status}, duration={call_log.duration}")
+                
+                # Try to fetch price from Call Details API
+                try:
+                    result = self._fetch_call_price(call_sid)
+                    if result.get('success'):
+                        price = result.get('price')
+                        if price:
+                            call_log.price = price
+                            call_log.save()
+                            logger.info(f"Fetched price: {price}")
+                except Exception as e:
+                    logger.warning(f"Could not fetch price: {e}")
+                    
+            else:
+                logger.warning(f"No CallLog found for CallSid: {call_sid}")
+                
+        except Exception as e:
+            logger.error(f"Error updating call log: {e}")
+        
+        # Return 200 OK for Passthru to continue to next applet
+        return HttpResponse("OK", content_type='text/plain')
+    
+    def _fetch_call_price(self, call_sid):
+        """Fetch price from Exotel Call Details API."""
+        api_key = settings.EXOTEL_API_KEY
+        api_token = settings.EXOTEL_API_TOKEN
+        sid = settings.EXOTEL_SID
+        subdomain = settings.EXOTEL_SUBDOMAIN
+        
+        url = f"https://{subdomain}/v1/Accounts/{sid}/Calls/{call_sid}.json"
+        
+        auth_string = f"{api_key}:{api_token}"
+        auth_bytes = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
+        
+        headers = {'Authorization': f'Basic {auth_bytes}'}
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                call_data = response_data.get('Call', {})
+                return {
+                    'success': True,
+                    'price': call_data.get('Price')
+                }
+            return {'success': False}
+        except:
+            return {'success': False}
