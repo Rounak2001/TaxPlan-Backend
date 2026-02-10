@@ -139,6 +139,7 @@ class InitiateCallView(APIView):
             'From': from_number,
             'To': to_number,
             'CallerId': caller_id,
+            # 'CallType': 'trans',
             'Record': 'true',
             'StatusCallback': f"{settings.BACKEND_URL}/api/calls/status-callback/",
             'StatusCallbackContentType': 'application/json',
