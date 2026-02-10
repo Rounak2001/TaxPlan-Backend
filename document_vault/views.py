@@ -104,11 +104,47 @@ class DocumentViewSet(viewsets.ModelViewSet):
         folder_id = self.request.query_params.get('folder_id')
         
         if user.role == 'CONSULTANT':
-            # Consultants see docs for their assigned clients
-            qs = Document.objects.filter(client__client_profile__assigned_consultant=user)
+            # Get clients assigned via active service requests
+            service_client_ids = ClientServiceRequest.objects.filter(
+                assigned_consultant__user=user,
+                status__in=['assigned', 'in_progress']  # Only active services
+            ).values_list('client_id', flat=True)
+            
+            # Consultants see docs for clients who are:
+            # 1. Primary assigned clients OR
+            # 2. Clients with active service assignments
+            qs = Document.objects.filter(
+                models.Q(client__client_profile__assigned_consultant=user) |
+                models.Q(client_id__in=service_client_ids)
+            ).distinct()
         else:
-            # Clients see only their own docs
-            qs = Document.objects.filter(client=user)
+            # Clients see their own docs, but filter out PENDING requests from unassigned consultants
+            # Get currently assigned consultants (primary + service-based)
+            from core_auth.models import ClientProfile
+            
+            try:
+                client_profile = user.client_profile
+                primary_consultant = client_profile.assigned_consultant
+            except ClientProfile.DoesNotExist:
+                primary_consultant = None
+            
+            # Get consultants assigned via active services
+            service_consultant_ids = ClientServiceRequest.objects.filter(
+                client=user,
+                status__in=['assigned', 'in_progress']
+            ).values_list('assigned_consultant__user_id', flat=True)
+            
+            # Build list of valid consultant IDs
+            valid_consultant_ids = list(service_consultant_ids)
+            if primary_consultant:
+                valid_consultant_ids.append(primary_consultant.id)
+            
+            # Filter: Show all docs EXCEPT pending requests from unassigned consultants
+            qs = Document.objects.filter(client=user).filter(
+                models.Q(status__in=['UPLOADED', 'VERIFIED', 'REJECTED']) |  # Non-pending docs
+                models.Q(status='PENDING', consultant_id__in=valid_consultant_ids) |  # Pending from assigned consultants
+                models.Q(status='PENDING', consultant__isnull=True)  # Pending without consultant (client-initiated)
+            )
             
         if folder_id:
             qs = qs.filter(folder_id=folder_id)
@@ -249,8 +285,19 @@ class SharedReportViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'CONSULTANT':
-            # Consultants see reports they've shared
-            return SharedReport.objects.filter(consultant=user)
+            # Get clients assigned via active service requests
+            service_client_ids = ClientServiceRequest.objects.filter(
+                assigned_consultant__user=user,
+                status__in=['assigned', 'in_progress']
+            ).values_list('client_id', flat=True)
+            
+            # Consultants see reports for clients who are:
+            # 1. Primary assigned clients OR
+            # 2. Clients with active service assignments
+            return SharedReport.objects.filter(
+                models.Q(client__client_profile__assigned_consultant=user) |
+                models.Q(client_id__in=service_client_ids)
+            ).filter(consultant=user).distinct()
         # Clients see reports shared with them
         return SharedReport.objects.filter(client=user)
 
@@ -292,8 +339,19 @@ class LegalNoticeViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'CONSULTANT':
-            # Consultants see notices for their assigned clients and notices shared by them
-            return LegalNotice.objects.filter(consultant=user)
+            # Get clients assigned via active service requests
+            service_client_ids = ClientServiceRequest.objects.filter(
+                assigned_consultant__user=user,
+                status__in=['assigned', 'in_progress']
+            ).values_list('client_id', flat=True)
+            
+            # Consultants see notices for clients who are:
+            # 1. Primary assigned clients OR
+            # 2. Clients with active service assignments
+            return LegalNotice.objects.filter(
+                models.Q(client__client_profile__assigned_consultant=user) |
+                models.Q(client_id__in=service_client_ids)
+            ).filter(consultant=user).distinct()
         # Clients see notices for them or uploaded by them
         return LegalNotice.objects.filter(client=user)
 

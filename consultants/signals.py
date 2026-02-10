@@ -1,4 +1,4 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from .models import ClientServiceRequest
 from core_auth.models import ClientProfile
@@ -76,3 +76,32 @@ def create_pending_document_requests(sender, instance, created, **kwargs):
         
         if created_count > 0:
             print(f"Created {created_count} pending document requests for {client.email}")
+
+
+@receiver(post_save, sender=ClientServiceRequest)
+def cleanup_orphaned_pending_documents(sender, instance, created, **kwargs):
+    """
+    Automatically delete orphaned PENDING document requests when:
+    1. Service status changes to 'completed' or 'cancelled'
+    2. Consultant is unassigned from a service
+    
+    This ensures the database stays clean and clients don't see outdated document requests.
+    """
+    from document_vault.models import Document
+    
+    # Skip if this is a new record
+    if created:
+        return
+    
+    # Check if service is no longer active
+    if instance.status in ['completed', 'cancelled']:
+        # Delete PENDING documents that were created for this service
+        # Match by description containing the service title
+        deleted_count = Document.objects.filter(
+            client=instance.client,
+            status='PENDING',
+            description__icontains=instance.service.title
+        ).delete()[0]
+        
+        if deleted_count > 0:
+            print(f"🗑️ Deleted {deleted_count} orphaned PENDING documents for completed/cancelled service: {instance.service.title}")
