@@ -1,0 +1,42 @@
+# =============================================================================
+# Systemd Service for Daphne (WebSocket / ASGI)
+# Location: /etc/systemd/system/daphne.service
+# =============================================================================
+# 
+# Commands:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable daphne
+#   sudo systemctl start daphne
+#   sudo systemctl status daphne
+#   sudo journalctl -u daphne -f
+# =============================================================================
+
+[Unit]
+Description=TaxPlanAdvisor Daphne WebSocket Server
+After=network.target redis.service
+Requires=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/taxplanadvisor/backend
+EnvironmentFile=/home/ubuntu/taxplanadvisor/backend/.env
+
+# Daphne command for WebSocket handling
+ExecStart=/home/ubuntu/taxplanadvisor/backend/venv/bin/daphne \
+    --bind 127.0.0.1 \
+    --port 8001 \
+    --access-log /var/log/taxplanadvisor/daphne_access.log \
+    --verbosity 1 \
+    core.asgi:application
+
+# Restart policy
+Restart=always
+RestartSec=3
+
+# Security
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,50 @@
+# =============================================================================
+# Systemd Service for Gunicorn (HTTP API)
+# Location: /etc/systemd/system/gunicorn.service
+# =============================================================================
+# 
+# Commands:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable gunicorn
+#   sudo systemctl start gunicorn
+#   sudo systemctl status gunicorn
+#   sudo journalctl -u gunicorn -f
+# =============================================================================
+
+[Unit]
+Description=TaxPlanAdvisor Gunicorn HTTP Server
+After=network.target
+Requires=network.target
+
+[Service]
+Type=notify
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/taxplanadvisor/backend
+RuntimeDirectory=gunicorn
+EnvironmentFile=/home/ubuntu/taxplanadvisor/backend/.env
+
+# Gunicorn command
+ExecStart=/home/ubuntu/taxplanadvisor/backend/venv/bin/gunicorn \
+    --workers 3 \
+    --bind 127.0.0.1:8000 \
+    --timeout 120 \
+    --keep-alive 5 \
+    --max-requests 1000 \
+    --max-requests-jitter 50 \
+    --access-logfile /var/log/taxplanadvisor/gunicorn_access.log \
+    --error-logfile /var/log/taxplanadvisor/gunicorn_error.log \
+    --capture-output \
+    core.wsgi:application
+
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+
+# Restart policy
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

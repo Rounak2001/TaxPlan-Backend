@@ -25,16 +25,16 @@ def set_auth_cookies(response, user):
         key='access_token',
         value=access_token,
         httponly=True,
-        secure=False,  # Set to True in production
-        samesite='Lax',
+        secure=True,  # Required for SameSite=None
+        samesite='None',  # Required for cross-origin cookies
         max_age=3600
     )
     response.set_cookie(
         key='refresh_token',
         value=refresh_token,
         httponly=True,
-        secure=False,
-        samesite='Lax',
+        secure=True,
+        samesite='None',
         max_age=86400
     )
     return response
@@ -56,16 +56,16 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure=False,
-                samesite='Lax',
+                secure=True,
+                samesite='None',
                 max_age=3600
             )
             response.set_cookie(
                 key='refresh_token',
                 value=refresh_token,
                 httponly=True,
-                secure=False,
-                samesite='Lax',
+                secure=True,
+                samesite='None',
                 max_age=86400
             )
         return response
@@ -211,8 +211,8 @@ class CustomTokenRefreshView(APIView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure=False,  # Set to True in production with HTTPS
-                samesite='Lax',
+                secure=True,
+                samesite='None',
                 max_age=3600  # 1 hour
             )
             
@@ -231,7 +231,9 @@ class UserDashboardView(APIView):
     def get(self, request):
         user = request.user
         data = {
+            "id": user.id,  # Required for chat message alignment
             "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
+            "username": user.username,
             "role": user.role,
             "is_onboarded": user.is_onboarded,
             "is_phone_verified": user.is_phone_verified,
@@ -282,6 +284,37 @@ class UserDashboardView(APIView):
                 data["compliance"] = None
         
         return Response(data)
+
+
+class WebSocketTokenView(APIView):
+    """
+    Returns the access token for WebSocket authentication.
+    This is needed because WebSockets can't access HttpOnly cookies directly.
+    The frontend calls this endpoint to get the token before connecting to WebSocket.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        # Get the access token from the HttpOnly cookie
+        access_token = request.COOKIES.get('access_token')
+        
+        if access_token:
+            return Response({'token': access_token})
+        
+        # If no access token in cookie, generate a new one from refresh token
+        refresh_token = request.COOKIES.get('refresh_token')
+        if refresh_token:
+            try:
+                refresh = RefreshToken(refresh_token)
+                access_token = str(refresh.access_token)
+                return Response({'token': access_token})
+            except Exception:
+                pass
+        
+        return Response(
+            {'error': 'No valid token found'}, 
+            status=status.HTTP_401_UNAUTHORIZED
+        )
 
 
 class ClientProfileView(APIView):

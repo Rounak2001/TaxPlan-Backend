@@ -58,6 +58,7 @@ ALLOWED_HOSTS = ['*']
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',  # Must be first for ASGI
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -71,6 +72,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'django_tasks',
     'storages',
+    'channels',
     
     # Internal Apps
     'core_auth',
@@ -82,6 +84,7 @@ INSTALLED_APPS = [
     'consultants',
     'exotel_calls',
     'activity_timeline',
+    'chat',
 ]
 
 # Exotel Configuration
@@ -128,6 +131,17 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'core.wsgi.application'
+ASGI_APPLICATION = 'core.asgi.application'
+
+# Django Channels Layer (Redis Cloud)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [os.getenv('REDIS_URL')],
+        },
+    },
+}
 
 
 # Database
@@ -253,3 +267,35 @@ RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET')
 RAZORPAY_WEBHOOK_SECRET = os.getenv('RAZORPAY_WEBHOOK_SECRET')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Logging Configuration for debugging
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'chat': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    },
+}
+
+# =============================================================================
+# PRODUCTION SETTINGS OVERRIDE
+# Set DJANGO_ENV=production in your .env file to enable production settings
+# =============================================================================
+if os.getenv('DJANGO_ENV') == 'production':
+    from .settings_prod import *
