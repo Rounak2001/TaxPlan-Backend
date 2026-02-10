@@ -104,6 +104,84 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
         
         return Response(dashboard_data)
     
+    @action(detail=False, methods=['get'], url_path='dashboard-stats')
+    def dashboard_stats(self, request):
+        """
+        Get comprehensive dashboard statistics for consultant
+        Returns: service requests by status, documents needing review, client metrics
+        """
+        try:
+            profile = ConsultantServiceProfile.objects.get(user=request.user)
+        except ConsultantServiceProfile.DoesNotExist:
+            return Response(
+                {'error': 'Consultant profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Import Document model here to avoid circular imports
+        from document_vault.models import Document
+        
+        # Service requests breakdown by status
+        service_requests = ClientServiceRequest.objects.filter(assigned_consultant=profile)
+        requests_by_status = {
+            'pending': service_requests.filter(status='pending').count(),
+            'assigned': service_requests.filter(status='assigned').count(),
+            'in_progress': service_requests.filter(status='in_progress').count(),
+            'completed': service_requests.filter(status='completed').count(),
+            'total': service_requests.count()
+        }
+        
+        # Documents needing review (uploaded by clients assigned to this consultant)
+        # Get all clients assigned to this consultant through service requests
+        assigned_client_ids = service_requests.values_list('client_id', flat=True).distinct()
+        
+        documents_uploaded = Document.objects.filter(
+            client_id__in=assigned_client_ids,
+            status='UPLOADED'
+        ).count()
+        
+        documents_rejected = Document.objects.filter(
+            client_id__in=assigned_client_ids,
+            status='REJECTED'
+        ).count()
+        
+        # Client metrics
+        client_metrics = {
+            'current_clients': profile.current_client_count,
+            'max_capacity': profile.max_concurrent_clients,
+            'available_slots': profile.max_concurrent_clients - profile.current_client_count,
+            'utilization_percentage': round(
+                (profile.current_client_count / profile.max_concurrent_clients * 100) 
+                if profile.max_concurrent_clients > 0 else 0, 
+                1
+            )
+        }
+        
+        # Monthly completion rate (last 30 days)
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        monthly_completed = service_requests.filter(
+            status='completed',
+            updated_at__gte=thirty_days_ago
+        ).count()
+        
+        # Services offered
+        expertise_count = ConsultantServiceExpertise.objects.filter(consultant=profile).count()
+        
+        return Response({
+            'service_requests': requests_by_status,
+            'documents': {
+                'needs_review': documents_uploaded,
+                'rejected': documents_rejected,
+                'total_pending': documents_uploaded + documents_rejected
+            },
+            'clients': client_metrics,
+            'services_offered': expertise_count,
+            'monthly_completed': monthly_completed
+        })
+    
     @action(detail=False, methods=['get'])
     def client_view(self, request):
         """

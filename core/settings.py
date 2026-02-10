@@ -81,6 +81,7 @@ INSTALLED_APPS = [
     'service_orders',
     'consultants',
     'exotel_calls',
+    'activity_timeline',
 ]
 
 # Exotel Configuration

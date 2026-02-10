@@ -15,6 +15,7 @@ urlpatterns = [
     path('api/payments/', include('service_orders.urls')),
     path('api/consultants/', include('consultants.urls')),
     path('api/calls/', include('exotel_calls.urls')),
+    path('api/activity/', include('activity_timeline.urls')),
 ]
 
 if settings.DEBUG:

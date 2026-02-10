@@ -250,12 +250,36 @@ class UserDashboardView(APIView):
         elif user.role == "CLIENT":
             try:
                 profile = user.client_profile
-                data["advisor"] = {
-                    "name": profile.assigned_consultant.get_full_name() if profile.assigned_consultant else "Assigning Soon...",
+                advisor = profile.assigned_consultant
+                advisor_data = None
+                
+                if advisor:
+                    from consultants.models import ConsultantServiceProfile
+                    try:
+                        service_profile = advisor.consultant_service_profile
+                        advisor_data = {
+                            "name": service_profile.full_name,
+                            "email": service_profile.email,
+                            "phone": service_profile.phone,
+                            "qualification": service_profile.qualification,
+                            "avatar": "" # Placeholder
+                        }
+                    except Exception:
+                        advisor_data = {
+                            "name": advisor.get_full_name() or advisor.username,
+                            "email": advisor.email,
+                            "phone": advisor.phone_number,
+                            "avatar": ""
+                        }
+                
+                data["advisor"] = advisor_data
+                data["compliance"] = {
                     "pan_linked": profile.pan_number is not None,
+                    "gstin_linked": profile.gstin is not None
                 }
             except Exception:
                 data["advisor"] = None
+                data["compliance"] = None
         
         return Response(data)
 
@@ -343,9 +367,20 @@ class ConsultantClientsView(APIView):
         if user.role != User.CONSULTANT:
             return Response({'error': 'Only consultants can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
         
-        # Get clients assigned to THIS consultant only (data isolation)
-        # The filter is: ClientProfile.assigned_consultant == request.user
-        assigned_clients = ClientProfile.objects.filter(assigned_consultant=user).select_related('user')
+        # Get clients assigned via ClientProfile (Primary Consultant)
+        primary_clients = ClientProfile.objects.filter(assigned_consultant=user).values_list('user_id', flat=True)
+        
+        # Get clients assigned via ClientServiceRequest (Service Consultant)
+        from consultants.models import ClientServiceRequest
+        service_clients = ClientServiceRequest.objects.filter(
+            assigned_consultant__user=user
+        ).values_list('client_id', flat=True)
+        
+        # Combine and get unique client IDs
+        client_ids = set(list(primary_clients) + list(service_clients))
+        
+        # Fetch profiles with user data
+        assigned_clients = ClientProfile.objects.filter(user_id__in=client_ids).select_related('user')
         
         clients_data = []
         for profile in assigned_clients:
@@ -354,8 +389,6 @@ class ConsultantClientsView(APIView):
                 'id': client_user.id,
                 'name': f"{client_user.first_name} {client_user.last_name}".strip() or client_user.username,
                 'email': client_user.email,
-                # 'phone': intentionally excluded - phone numbers are hidden from frontend
-                # Calls are initiated via the /api/calls/initiate/ endpoint using client_id
                 'pan': profile.pan_number,
                 'gstin': profile.gstin,
                 'gst_username': profile.gst_username,

@@ -46,18 +46,21 @@ class InitiateCallView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Security: Verify this client is assigned to the requesting consultant
-        try:
-            client_profile = ClientProfile.objects.select_related('user').get(
-                user_id=client_id,
-                assigned_consultant=user
-            )
-            client_user = client_profile.user
-        except ClientProfile.DoesNotExist:
+        # Move imports to appropriate scope or ensure they are at top
+        from consultants.models import ClientServiceRequest
+        from django.db.models import Q
+
+        # Security: Verify this client is assigned to the requesting consultant (Primary or Service)
+        is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
+        is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
+        
+        if not (is_primary or is_service):
             return Response(
                 {'error': 'Client not found or not assigned to you'}, 
                 status=status.HTTP_404_NOT_FOUND
             )
+
+        client_user = User.objects.get(id=client_id)
         
         # Get phone numbers (securely, never exposing to frontend)
         consultant_phone = user.phone_number

@@ -1,9 +1,11 @@
 from rest_framework import viewsets, permissions, status, decorators
 from rest_framework.response import Response
 from django.utils import timezone
+from django.db import models
 from .models import Document, SharedReport, LegalNotice, Folder
 from .serializers import DocumentSerializer, DocumentUploadSerializer, SharedReportSerializer, LegalNoticeSerializer, FolderSerializer
 from core_auth.serializers import IsConsultantUser, IsClientUser
+from consultants.models import ClientServiceRequest
 
 def create_system_folders(client_user):
     """Creates default system folders for a client."""
@@ -24,11 +26,26 @@ class FolderViewSet(viewsets.ModelViewSet):
         client_id = self.request.query_params.get('client_id')
         
         if user.role == 'CONSULTANT':
+            # Get clients assigned via service requests
+            service_client_ids = ClientServiceRequest.objects.filter(
+                assigned_consultant__user=user
+            ).values_list('client_id', flat=True)
+            
             if client_id:
                 # Consultant viewing folders for a specific client
-                return Folder.objects.filter(client_id=client_id, client__client_profile__assigned_consultant=user)
-            # Default to all folders for assigned clients
-            return Folder.objects.filter(client__client_profile__assigned_consultant=user)
+                # Allow if primary OR assigned via service
+                return Folder.objects.filter(
+                    client_id=client_id
+                ).filter(
+                    models.Q(client__client_profile__assigned_consultant=user) |
+                    models.Q(client_id__in=service_client_ids)
+                ).distinct()
+            
+            # Default to all folders for any assigned/service clients
+            return Folder.objects.filter(
+                models.Q(client__client_profile__assigned_consultant=user) |
+                models.Q(client_id__in=service_client_ids)
+            ).distinct()
         
         # Clients see their own folders
         return Folder.objects.filter(client=user)
@@ -40,9 +57,13 @@ class FolderViewSet(viewsets.ModelViewSet):
         
         target_client = user
         if user.role == 'CONSULTANT':
-            # Security: Ensure client is assigned
+            # Security: Ensure client is assigned (Primary or Service)
             from core_auth.models import ClientProfile
-            if not ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists():
+            
+            is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
+            is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
+            
+            if not (is_primary or is_service):
                 from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied("This client is not assigned to you.")
             
@@ -113,17 +134,27 @@ class DocumentViewSet(viewsets.ModelViewSet):
         client_id = self.request.data.get('client')
 
         if user.role == 'CONSULTANT':
-            # Consultant creating a request.
-            # Security: Ensure client is assigned to this consultant
+            # Security: Ensure client is assigned (Primary or Service)
             from core_auth.models import ClientProfile
-            try:
-                profile = ClientProfile.objects.get(user_id=client_id, assigned_consultant=user)
-                target_client = profile.user
-                # Ensure system folders exist for this client
-                create_system_folders(target_client)
-            except ClientProfile.DoesNotExist:
+            from consultants.models import ClientServiceRequest
+            
+            is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
+            is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
+            
+            if not (is_primary or is_service):
                 from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied("This client is not assigned to you.")
+            
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            try:
+                target_client = User.objects.get(id=client_id)
+            except (User.DoesNotExist, ValueError):
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({"client": "Invalid client ID"})
+
+            # Ensure system folders exist for this client
+            create_system_folders(target_client)
             
             # Validate folder belongs to target client
             self._validate_folder_client(folder_id, target_client)
