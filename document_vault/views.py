@@ -107,7 +107,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             # Get clients assigned via active service requests
             service_client_ids = ClientServiceRequest.objects.filter(
                 assigned_consultant__user=user,
-                status__in=['assigned', 'in_progress']  # Only active services
+                status__in=ClientServiceRequest.ACTIVE_STATUSES
             ).values_list('client_id', flat=True)
             
             # Consultants see docs for clients who are:
@@ -131,7 +131,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             # Get consultants assigned via active services
             service_consultant_ids = ClientServiceRequest.objects.filter(
                 client=user,
-                status__in=['assigned', 'in_progress']
+                status__in=ClientServiceRequest.ACTIVE_STATUSES
             ).values_list('assigned_consultant__user_id', flat=True)
             
             # Build list of valid consultant IDs
@@ -250,9 +250,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
         
         document.status = new_status
         
-        # Store rejection reason in description field if rejecting
+        # Store rejection reason without destroying original description (metadata)
         if new_status == 'REJECTED' and rejection_reason:
-            document.description = rejection_reason
+            if document.description:
+                document.description = f"{document.description} | REJECTION REASON: {rejection_reason}"
+            else:
+                document.description = f"REJECTION REASON: {rejection_reason}"
         
         document.save()
         return Response(DocumentSerializer(document, context={'request': request}).data)
@@ -288,7 +291,7 @@ class SharedReportViewSet(viewsets.ModelViewSet):
             # Get clients assigned via active service requests
             service_client_ids = ClientServiceRequest.objects.filter(
                 assigned_consultant__user=user,
-                status__in=['assigned', 'in_progress']
+                status__in=ClientServiceRequest.ACTIVE_STATUSES
             ).values_list('client_id', flat=True)
             
             # Consultants see reports for clients who are:
@@ -342,7 +345,7 @@ class LegalNoticeViewSet(viewsets.ModelViewSet):
             # Get clients assigned via active service requests
             service_client_ids = ClientServiceRequest.objects.filter(
                 assigned_consultant__user=user,
-                status__in=['assigned', 'in_progress']
+                status__in=ClientServiceRequest.ACTIVE_STATUSES
             ).values_list('client_id', flat=True)
             
             # Consultants see notices for clients who are:

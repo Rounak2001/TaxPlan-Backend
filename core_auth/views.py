@@ -404,10 +404,11 @@ class ConsultantClientsView(APIView):
         primary_clients = ClientProfile.objects.filter(assigned_consultant=user).values_list('user_id', flat=True)
         
         # Get clients assigned via ClientServiceRequest (Service Consultant)
+        # Only include clients with active (non-terminal) service requests
         from consultants.models import ClientServiceRequest
         service_clients = ClientServiceRequest.objects.filter(
             assigned_consultant__user=user
-        ).values_list('client_id', flat=True)
+        ).exclude(status__in=['completed', 'cancelled']).values_list('client_id', flat=True)
         
         # Combine and get unique client IDs
         client_ids = set(list(primary_clients) + list(service_clients))
@@ -415,6 +416,24 @@ class ConsultantClientsView(APIView):
         # Fetch profiles with user data
         assigned_clients = ClientProfile.objects.filter(user_id__in=client_ids).select_related('user')
         
+        # Get all active service requests for these clients assigned to this consultant
+        active_requests = ClientServiceRequest.objects.filter(
+            client_id__in=client_ids,
+            assigned_consultant__user=user
+        ).exclude(status__in=['completed', 'cancelled']).select_related('service')
+
+        # Map requests to clients
+        client_requests_map = {}
+        for req in active_requests:
+            if req.client_id not in client_requests_map:
+                client_requests_map[req.client_id] = []
+            client_requests_map[req.client_id].append({
+                'id': req.id,
+                'service_title': req.service.title,
+                'status': req.status,
+                'status_display': req.get_status_display()
+            })
+
         clients_data = []
         for profile in assigned_clients:
             client_user = profile.user
@@ -426,6 +445,7 @@ class ConsultantClientsView(APIView):
                 'gstin': profile.gstin,
                 'gst_username': profile.gst_username,
                 'status': 'active' if client_user.is_onboarded else 'pending',
+                'active_requests': client_requests_map.get(client_user.id, []),
                 'avatarUrl': '',
                 'createdAt': client_user.date_joined.isoformat() if client_user.date_joined else None,
                 'consultantId': user.id,
