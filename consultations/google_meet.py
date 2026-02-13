@@ -65,6 +65,9 @@ class GoogleMeetService:
                 {'email': booking.consultant.email},
                 {'email': booking.client.email},
             ],
+            'guestsCanModify': True,
+            'guestsCanInviteOthers': True,
+            'guestsCanSeeOtherGuests': True,
             'reminders': {
                 'useDefault': False,
                 'overrides': [
