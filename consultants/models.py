@@ -82,13 +82,32 @@ class ClientServiceRequest(models.Model):
     
     STATUS_CHOICES = [
         ('pending', 'Pending Assignment'),
-        ('assigned', 'Assigned to Consultant'),
-        ('in_progress', 'In Progress'),
+        ('assigned', 'Consultant Assigned'),
+        ('doc_pending', 'Documents Pending'),
+        ('under_review', 'Under Review'),
+        ('wip', 'Work In Progress'),
+        ('under_query', 'Clarification Needed'),
+        ('final_review', 'Final Review'),
+        ('filed', 'Work Filed/Submitted'),
+        ('revision_pending', 'Revision Requested'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     ]
-    
-    client = models.ForeignKey(User, on_delete=models.CASCADE, related_name='service_requests')
+    # Centralized list of statuses considered "active" or "in-progress"
+    # Services in these states should have active document synchronization and vault management.
+    ACTIVE_STATUSES = [
+        'assigned', 
+        'doc_pending', 
+        'under_review', 
+        'wip', 
+        'under_query', 
+        'final_review', 
+        'filed', 
+        'revision_pending'
+    ]
+
+    client = models.ForeignKey(
+User, on_delete=models.CASCADE, related_name='service_requests')
     service = models.ForeignKey(Service, on_delete=models.CASCADE)
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
@@ -105,6 +124,7 @@ class ClientServiceRequest(models.Model):
     
     # Additional info
     notes = models.TextField(blank=True)
+    revision_notes = models.TextField(blank=True, null=True)
     priority = models.IntegerField(default=0)  # Higher = more urgent
     
     # Timestamps

@@ -90,18 +90,18 @@ def unassign_consultant_from_request(request_id):
 def complete_service_request(request_id):
     """
     Mark a service request as completed and decrement consultant's client count.
+    Also unassigns the consultant from the request.
     
     Args:
         request_id: ID of the ClientServiceRequest
     """
     
     request = ClientServiceRequest.objects.get(id=request_id)
-    
     if request.assigned_consultant:
         consultant = request.assigned_consultant
         consultant.current_client_count = max(0, consultant.current_client_count - 1)
         consultant.save()
-    
+
     request.status = 'completed'
     request.completed_at = timezone.now()
     request.save()

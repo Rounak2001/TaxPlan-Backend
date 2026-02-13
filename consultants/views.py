@@ -299,8 +299,14 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        # Clients see their own requests
-        return ClientServiceRequest.objects.filter(client=self.request.user).order_by('-created_at')
+        user = self.request.user
+        if user.role == "CLIENT":
+            return ClientServiceRequest.objects.filter(client=user).order_by('-created_at')
+        elif user.role == "CONSULTANT":
+            return ClientServiceRequest.objects.filter(
+                assigned_consultant__user=user
+            ).order_by('-created_at')
+        return ClientServiceRequest.objects.none()
     
     def perform_create(self, serializer):
         # Create request and automatically assign consultant
@@ -330,5 +336,125 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
         
         return Response({
             'message': 'Service request completed successfully',
+            'request': ClientServiceRequestSerializer(service_request).data
+        })
+
+    @action(detail=True, methods=['patch'], url_path='update-status')
+    def update_status(self, request, pk=None):
+        """
+        Update the status of a service request.
+        Only the assigned consultant can perform this action.
+        """
+        service_request = self.get_object()
+        user = request.user
+
+        # Permission check: Only the assigned consultant can update the status
+        if service_request.assigned_consultant.user != user:
+            return Response(
+                {'error': 'You are not authorized to update this request'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        new_status = request.data.get('status')
+        if not new_status:
+            return Response(
+                {'error': 'Status is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate status choice
+        valid_statuses = [choice[0] for choice in ClientServiceRequest.STATUS_CHOICES]
+        if new_status not in valid_statuses:
+            return Response(
+                {'error': f'Invalid status. Choose from: {", ".join(valid_statuses)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # [Logic Change]: Enforce strictly which statuses a consultant can manually set
+        CONSULTANT_SETTABLE_STATUSES = [
+            'doc_pending', 
+            'under_review', 
+            'wip', 
+            'under_query', 
+            'final_review', 
+            'filed', 
+            'revision_pending'
+        ]
+
+        if new_status not in CONSULTANT_SETTABLE_STATUSES:
+            error_mapping = {
+                'completed': 'Consultants cannot mark as "Completed" directly. Please use "Filed" and wait for client confirmation.',
+                'assigned': 'The request is already assigned. You cannot move it back to the base "Assigned" status manually.',
+                'pending': 'The request is already assigned. You cannot move it back to "Pending" manually.',
+                'cancelled': 'Only an administrator or client can cancel a service request.'
+            }
+            error_msg = error_mapping.get(new_status, f'Manual update to status "{new_status}" is not allowed for consultants.')
+            return Response(
+                {'error': error_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update status
+        service_request.status = new_status
+        service_request.save()
+
+        return Response({
+            'message': f'Status updated to {service_request.get_status_display()}',
+            'status': service_request.status,
+            'request': ClientServiceRequestSerializer(service_request).data
+        })
+
+    @action(detail=True, methods=['post'], url_path='acknowledge-completion')
+    def acknowledge_completion(self, request, pk=None):
+        """
+        Client confirms work is satisfactory.
+        Marks service as completed and decrements TC count.
+        """
+        service_request = self.get_object()
+        user = request.user
+
+        # Permission check: Only the client who requested the service can acknowledge
+        if service_request.client != user:
+            return Response(
+                {'error': 'Only the client can acknowledge completion.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if service_request.status == 'completed':
+            return Response({'message': 'Service is already completed.'})
+
+        # Finalize service
+        from .services import complete_service_request
+        complete_service_request(service_request.id)
+
+        return Response({
+            'success': True,
+            'message': 'Service successfully completed and closed.',
+            'request': ClientServiceRequestSerializer(service_request).data
+        })
+
+    @action(detail=True, methods=['post'], url_path='request-revision')
+    def request_revision(self, request, pk=None):
+        """
+        Client is not satisfied and requests revision.
+        Sets status to revision_pending.
+        """
+        service_request = self.get_object()
+        user = request.user
+
+        if service_request.client != user:
+            return Response(
+                {'error': 'Only the client can request revisions.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        notes = request.data.get('notes', '')
+        service_request.status = 'revision_pending'
+        service_request.revision_notes = notes
+        service_request.save()
+
+        return Response({
+            'success': True,
+            'message': 'Revision requested. Consultant will be notified.',
             'request': ClientServiceRequestSerializer(service_request).data
         })

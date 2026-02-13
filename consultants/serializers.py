@@ -62,7 +62,7 @@ class ClientServiceRequestSerializer(serializers.ModelSerializer):
             'service',  # Full service object
             'status', 
             'assigned_consultant',  # Full consultant object
-            'assigned_at', 'notes', 'priority',
+            'assigned_at', 'notes', 'revision_notes', 'priority',
             'created_at', 'updated_at', 'completed_at'
         ]
         read_only_fields = ['assigned_consultant', 'assigned_at', 'created_at', 'updated_at', 'completed_at']
