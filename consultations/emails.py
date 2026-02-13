@@ -16,6 +16,7 @@ def generate_ics_calendar(booking):
     cal = Calendar()
     cal.add('prodid', '-//TaxPlanAdv//Consultation//EN')
     cal.add('version', '2.0')
+    cal.add('method', 'REQUEST')
     
     event = Event()
     event.add('uid', f'booking-{booking.id}@taxplanadv.com')
@@ -56,12 +57,32 @@ def send_booking_confirmation(booking):
         return False
         
     try:
+        # Generate Google Calendar URL for "Add to Calendar" button
+        import urllib.parse
+        ist = pytz.timezone('Asia/Kolkata')
+        start_dt = ist.localize(datetime.combine(booking.booking_date, booking.start_time))
+        end_dt = ist.localize(datetime.combine(booking.booking_date, booking.end_time))
+        
+        # Convert to UTC for the Google Calendar URL (Z format)
+        start_utc = start_dt.astimezone(pytz.UTC).strftime('%Y%m%dT%H%M%SZ')
+        end_utc = end_dt.astimezone(pytz.UTC).strftime('%Y%m%dT%H%M%SZ')
+        
+        cal_base_url = "https://www.google.com/calendar/render?action=TEMPLATE"
+        cal_text = urllib.parse.quote(f"Tax Consultation: {booking.topic.name}")
+        cal_details = urllib.parse.quote(
+            f"Consultation with {booking.consultant.get_full_name() or booking.consultant.username}.\n"
+            f"Meeting Link: {booking.meeting_link or 'Will be shared shortly'}"
+        )
+        google_calendar_url = f"{cal_base_url}&text={cal_text}&dates={start_utc}/{end_utc}&details={cal_details}"
+
         # Common context for both emails
         context = {
             'booking': booking,
             'client_name': booking.client.get_full_name() or booking.client.username,
             'consultant_name': booking.consultant.get_full_name() or booking.consultant.username,
             'dashboard_url': f"{settings.FRONTEND_URL}/dashboard",
+            'meeting_link': booking.meeting_link,
+            'google_calendar_url': google_calendar_url,
         }
         
         # Generate calendar file

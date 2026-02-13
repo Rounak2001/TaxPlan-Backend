@@ -4,14 +4,22 @@ from .models import Document, SharedReport, LegalNotice, Folder
 class FolderSerializer(serializers.ModelSerializer):
     created_by_name = serializers.ReadOnlyField(source='created_by.get_full_name')
     document_count = serializers.SerializerMethodField()
+    verified_count = serializers.SerializerMethodField()
+    unverified_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Folder
-        fields = ['id', 'client', 'name', 'created_by', 'created_by_name', 'is_system', 'created_at', 'document_count']
+        fields = ['id', 'client', 'name', 'created_by', 'created_by_name', 'is_system', 'created_at', 'document_count', 'verified_count', 'unverified_count']
         read_only_fields = ['client', 'created_by', 'is_system', 'created_at']
 
     def get_document_count(self, obj):
         return obj.documents.count()
+
+    def get_verified_count(self, obj):
+        return obj.documents.filter(status='VERIFIED').count()
+
+    def get_unverified_count(self, obj):
+        return obj.documents.exclude(status='VERIFIED').count()
 
 class DocumentSerializer(serializers.ModelSerializer):
     client_name = serializers.ReadOnlyField(source='client.get_full_name')

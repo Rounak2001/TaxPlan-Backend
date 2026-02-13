@@ -35,3 +35,6 @@ consultations/logs/failure_*.png
 .pytest_cache/
 .playwright/
 test-results/
+
+# Secrets
+client_secret.json

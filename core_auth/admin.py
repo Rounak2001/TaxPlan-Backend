@@ -23,7 +23,7 @@ class UserAdmin(BaseUserAdmin):
 
 
 class ConsultantProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'consultation_fee', 'current_load', 'max_capacity', 'services')
+    list_display = ('user', 'consultation_fee', 'current_load', 'max_capacity')
     list_filter = ('max_capacity',)
     search_fields = ('user__username', 'user__email')
 

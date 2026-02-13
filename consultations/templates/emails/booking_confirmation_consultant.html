@@ -25,9 +25,18 @@
 {% endif %}
 
 <div style="text-align: center; margin: 30px 0;">
-    <a href="{{ dashboard_url }}" class="button">Go to Dashboard</a>
+    {% if meeting_link %}
+    <a href="{{ meeting_link }}" class="button">Join Meeting</a>
+    {% else %}
+    <p style="color: #6c757d; margin-bottom: 20px;">
+        <strong>Meeting Link:</strong> The video call link will be shared with you shortly.
+    </p>
+    {% endif %}
+
+    <a href="{{ google_calendar_url }}" class="button button-secondary">Add to Google Calendar</a>
+
     <p style="font-size: 12px; color: #6c757d; margin-top: 10px;">
-        View meeting details and join the call from your dashboard.
+        Use the buttons above to join the call or add it to your calendar.
     </p>
 </div>
 

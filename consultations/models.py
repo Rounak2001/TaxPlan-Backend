@@ -4,6 +4,12 @@ from django.conf import settings
 class Topic(models.Model):
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
+    consultants = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name='topics',
+        limit_choices_to={'role': 'CONSULTANT'},
+        blank=True
+    )
 
     def __str__(self):
         return self.name

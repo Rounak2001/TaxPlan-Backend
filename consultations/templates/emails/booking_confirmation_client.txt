@@ -13,8 +13,11 @@ Consultant: {{ consultant_name }}
 Duration: 30 minutes
 
 JOINING LINK:
-{{ dashboard_url }}
-(The 'Join' button becomes active 10 minutes before the meeting)
+{{ meeting_link|default:"Will be shared shortly" }}
+(The 'Join' button in your dashboard also becomes active 10 minutes before the meeting)
+
+ADD TO CALENDAR:
+{{ google_calendar_url }}
 
 {% if booking.notes %}
 YOUR QUERY:

@@ -78,7 +78,8 @@ class GoogleMeetService:
             event = self.service.events().insert(
                 calendarId='primary',
                 body=event,
-                conferenceDataVersion=1
+                conferenceDataVersion=1,
+                sendUpdates='all'
             ).execute()
             
             # Extract the Meet link

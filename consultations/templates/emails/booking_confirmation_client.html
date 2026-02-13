@@ -25,10 +25,18 @@
 {% endif %}
 
 <div style="text-align: center; margin: 30px 0;">
-    <a href="{{ dashboard_url }}" class="button">Join Meeting</a>
+    {% if meeting_link %}
+    <a href="{{ meeting_link }}" class="button">Join Meeting</a>
+    {% else %}
+    <p style="color: #6c757d; margin-bottom: 20px;">
+        <strong>Meeting Link:</strong> The video call link will be shared with you shortly.
+    </p>
+    {% endif %}
+
+    <a href="{{ google_calendar_url }}" class="button button-secondary">Add to Google Calendar</a>
+
     <p style="font-size: 12px; color: #6c757d; margin-top: 10px;">
-        Clicking the button will take you to your dashboard. You can join the Google Meet call 10 minutes before the
-        scheduled time.
+        Use the buttons above to join the Google Meet call or add it to your calendar.
     </p>
 </div>
 
@@ -43,7 +51,7 @@
 
 <p>Looking forward to assisting you!</p>
 
-<p>Best regards,<br>s
+<p>Best regards,<br>
     <strong>TaxPlan Advisors</strong>
 </p>
 {% endblock %}

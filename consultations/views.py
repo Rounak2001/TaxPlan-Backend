@@ -40,6 +40,31 @@ class TopicViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = TopicSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+import threading
+
+def process_booking_confirmation(booking):
+    """
+    Background task to generate Google Meet link and send confirmation email.
+    """
+    try:
+        # Generate Google Meet link
+        if not booking.meeting_link:
+            try:
+                service = GoogleMeetService()
+                meet_link = service.create_meeting(booking)
+                if meet_link:
+                    booking.meeting_link = meet_link
+                    booking.save(update_fields=['meeting_link'])
+            except Exception as meet_err:
+                print(f"Failed to generate Google Meet link: {meet_err}")
+
+        # Send confirmation email
+        if not booking.confirmation_sent:
+            send_booking_confirmation(booking)
+            
+    except Exception as e:
+        print(f"Error in background booking processing: {e}")
+
 class ConsultationBookingViewSet(viewsets.ModelViewSet):
     serializer_class = ConsultationBookingSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -110,18 +135,10 @@ class ConsultationBookingViewSet(viewsets.ModelViewSet):
                 booking.razorpay_signature = razorpay_signature
                 booking.save()
 
-                # Generate Google Meet link and send email now that it's confirmed
-                try:
-                    service = GoogleMeetService()
-                    meet_link = service.create_meeting(booking)
-                    if meet_link:
-                        booking.meeting_link = meet_link
-                        booking.save(update_fields=['meeting_link'])
-                except Exception as meet_err:
-                    print(f"Failed to generate Google Meet link after payment: {meet_err}")
-
-                if not booking.confirmation_sent:
-                    send_booking_confirmation(booking)
+            # Start background task for Meet link and Emails
+            # We start this AFTER the atomic transaction is committed to ensure
+            # the background thread sees the updated booking status.
+            threading.Thread(target=process_booking_confirmation, args=(booking,)).start()
             
             return Response({'status': 'Payment verified and booking confirmed'})
         except Exception as e:
@@ -173,7 +190,10 @@ def consultants_by_date(request):
         day_of_week += 1
 
     # Get all consultants
-    consultants = User.objects.filter(role='CONSULTANT')
+    if topic_id:
+        consultants = User.objects.filter(role='CONSULTANT', topics__id=topic_id)
+    else:
+        consultants = User.objects.filter(role='CONSULTANT')
     available_consultants = []
 
     for consultant in consultants:
@@ -387,7 +407,10 @@ def available_consultants(request):
         day_of_week += 1
 
     # Get all consultants
-    consultants = User.objects.filter(role='CONSULTANT')
+    if topic_id:
+        consultants = User.objects.filter(role='CONSULTANT', topics__id=topic_id)
+    else:
+        consultants = User.objects.filter(role='CONSULTANT')
     available_consultants = []
 
     for consultant in consultants:

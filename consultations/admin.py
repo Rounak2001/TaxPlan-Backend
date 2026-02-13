@@ -5,6 +5,7 @@ from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking
 class TopicAdmin(admin.ModelAdmin):
     list_display = ('name', 'description')
     search_fields = ('name',)
+    filter_horizontal = ('consultants',)
 
 @admin.register(WeeklyAvailability)
 class WeeklyAvailabilityAdmin(admin.ModelAdmin):

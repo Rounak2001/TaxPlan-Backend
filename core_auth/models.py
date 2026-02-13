@@ -24,7 +24,7 @@ class ConsultantProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='consultant_profile')
     max_capacity = models.IntegerField(default=10)
     current_load = models.IntegerField(default=0)
-    services = models.JSONField(default=list)  # e.g., ["GST", "ITR"]
+    current_load = models.IntegerField(default=0)
     consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.00)
 
     def __str__(self):
