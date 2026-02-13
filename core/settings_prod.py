@@ -24,7 +24,7 @@ SECRET_KEY = os.environ['DJANGO_SECRET_KEY']  # Required - will error if not set
 # Add your domain(s) here - includes frontend for WebSocket origin validation
 ALLOWED_HOSTS = [
     os.getenv('ALLOWED_HOST', 'main.taxplanadvisor.co'),
-    'taxplanadvisor.vercel.app',  # Frontend for WebSocket origin validation
+    'taxplanadvisor.in',  # Frontend for WebSocket origin validation
     'localhost',
     '127.0.0.1',
 ]
