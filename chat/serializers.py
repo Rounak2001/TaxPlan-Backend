@@ -11,10 +11,11 @@ User = get_user_model()
 
 class UserMinimalSerializer(serializers.ModelSerializer):
     """Minimal user info for chat context."""
+    full_name = serializers.ReadOnlyField(source='get_full_name')
     
     class Meta:
         model = User
-        fields = ['id', 'username', 'first_name', 'last_name', 'role']
+        fields = ['id', 'username', 'first_name', 'last_name', 'full_name', 'role']
 
 
 class MessageSerializer(serializers.ModelSerializer):

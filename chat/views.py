@@ -65,24 +65,28 @@ class ConversationListCreateView(generics.ListCreateAPIView):
             )
         
         elif user.role == 'CLIENT':
-            # Get assigned consultant from client profile
-            try:
-                assigned_consultant = user.client_profile.assigned_consultant
-                if not assigned_consultant:
-                    return Response(
-                        {'error': 'No consultant assigned to this client'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                conversation, created = Conversation.objects.get_or_create(
-                    consultant=assigned_consultant,
-                    client=user
-                )
-            except AttributeError:
+            # Get consultant_id from request or fallback to primary consultant
+            consultant_id = request.data.get('consultant_id')
+            
+            if not consultant_id:
+                # Get assigned consultant from client profile
+                try:
+                    assigned_consultant = user.client_profile.assigned_consultant
+                    if assigned_consultant:
+                        consultant_id = assigned_consultant.id
+                except AttributeError:
+                    pass
+            
+            if not consultant_id:
                 return Response(
-                    {'error': 'Client profile not found'},
+                    {'error': 'No consultant assigned to this client and no consultant_id provided'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            
+            conversation, created = Conversation.objects.get_or_create(
+                consultant_id=consultant_id,
+                client=user
+            )
         else:
             return Response(
                 {'error': 'Invalid user role for chat'},

@@ -64,7 +64,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.accept()
         logger.info(f"WebSocket accepted: user={self.user.username}, conversation={self.conversation_id}")
         
-        # Broadcast presence: user joined
+        # Broadcast presence: user joined with a request for others to reply
         await self.channel_layer.group_send(
             self.room_group_name,
             {
@@ -72,6 +72,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'user_id': self.user.id,
                 'username': self.user.username,
                 'status': 'online',
+                'request_reply': True,  # Ask others to let us know they are here
             }
         )
     
@@ -223,6 +224,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'username': event['username'],
             'status': event['status'],
         }))
+        
+        # If someone else joined (status='online' and request_reply=True), 
+        # let them know we are also online
+        if (event.get('request_reply') is True and 
+            event['status'] == 'online' and 
+            event['user_id'] != self.user.id):
+            
+            logger.debug(f"Replying to presence request from {event['username']} for {self.user.username}")
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'user_presence',
+                    'user_id': self.user.id,
+                    'username': self.user.username,
+                    'status': 'online',
+                    'request_reply': False, # Don't request again to avoid loops
+                }
+            )
     
     async def messages_read(self, event):
         """Broadcast: Read receipt."""
