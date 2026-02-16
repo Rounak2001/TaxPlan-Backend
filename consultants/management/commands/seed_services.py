@@ -181,6 +181,23 @@ class Command(BaseCommand):
                 title=title,
                 defaults={'price': price, 'tat': tat, 'documents_required': docs}
             )
+
+        # Consultations Category
+        consultations, _ = ServiceCategory.objects.get_or_create(
+            name="Consultations",
+            defaults={'description': 'Expert consultation services'}
+        )
+        
+        consultation_services = [
+            ("Video Consultancy", 1, "30 mins", "Relevant documents for discussion"),
+        ]
+        
+        for title, price, tat, docs in consultation_services:
+            Service.objects.update_or_create(
+                category=consultations,
+                title=title,
+                defaults={'price': price, 'tat': tat, 'documents_required': docs}
+            )
         
         total_categories = ServiceCategory.objects.count()
         total_services = Service.objects.count()
