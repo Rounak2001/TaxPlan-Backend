@@ -5,6 +5,7 @@ Run with: python manage.py seed_services
 
 from django.core.management.base import BaseCommand
 from consultants.models import ServiceCategory, Service
+from consultations.models import Topic
 
 
 class Command(BaseCommand):
@@ -18,6 +19,7 @@ class Command(BaseCommand):
             name="Income Tax",
             defaults={'description': 'Income tax filing and related services'}
         )
+        Topic.objects.get_or_create(name="Income Tax", defaults={'category': income_tax, 'description': 'Income tax related consultations'})
         
         income_tax_services = [
             ("Capital Gains Tax Planning", 1, "5-10 days", "PAN Card\nAadhaar\nTransaction documents"),
@@ -44,6 +46,7 @@ class Command(BaseCommand):
             name="GST",
             defaults={'description': 'GST registration, filing, and compliance services'}
         )
+        Topic.objects.get_or_create(name="GST", defaults={'category': gst, 'description': 'GST related consultations'})
         
         gst_services = [
             ("GST Registration", 1, "7-10 days", "PAN, Aadhaar, Address Proof, Bank Proof"),
@@ -69,6 +72,7 @@ class Command(BaseCommand):
             name="Registration",
             defaults={'description': 'Business and professional registrations'}
         )
+        Topic.objects.get_or_create(name="Registration", defaults={'category': registration, 'description': 'Registration related consultations'})
         
         registration_services = [
             ("PAN Registration (Individual/Company)", 1, "1-2 days", "ID Proof, Address Proof, Photo"),
@@ -92,6 +96,7 @@ class Command(BaseCommand):
             name="Startup & Advisory",
             defaults={'description': 'Startup and business advisory services'}
         )
+        Topic.objects.get_or_create(name="Startup & Advisory", defaults={'category': startup, 'description': 'Startup and advisory consultations'})
         
         startup_services = [
             ("Business Structure Selection", 1, "1-2 days", "Founders PAN, Business Model"),
@@ -120,6 +125,7 @@ class Command(BaseCommand):
             name="Compliance",
             defaults={'description': 'Ongoing compliance and filing services'}
         )
+        Topic.objects.get_or_create(name="Compliance", defaults={'category': compliance, 'description': 'Compliance related consultations'})
         
         compliance_services = [
             ("PF Return Filing", 1, "Monthly", "Employee ECR, Contribution data"),
@@ -149,6 +155,7 @@ class Command(BaseCommand):
             name="Capital Gains & Tax Planning",
             defaults={'description': 'Tax planning and capital gains services'}
         )
+        Topic.objects.get_or_create(name="Capital Gains & Tax Planning", defaults={'category': tax_planning, 'description': 'Capital gains and tax planning consultations'})
         
         tax_planning_services = [
             ("Filing 26QB", 1, "1-2 days", "PAN of Buyer/Seller, Sale Agreement"),
@@ -167,6 +174,7 @@ class Command(BaseCommand):
             name="Certification Services",
             defaults={'description': 'Professional certification services'}
         )
+        Topic.objects.get_or_create(name="Certification Services", defaults={'category': certification, 'description': 'Certification service consultations'})
         
         certification_services = [
             ("Net Worth Certificate", 1, "1-3 days", "PAN, ITR, Bank Statements, Property Docs"),
@@ -201,9 +209,10 @@ class Command(BaseCommand):
         
         total_categories = ServiceCategory.objects.count()
         total_services = Service.objects.count()
+        total_topics = Topic.objects.count()
         
         self.stdout.write(
             self.style.SUCCESS(
-                f'Successfully seeded {total_categories} categories and {total_services} services!'
+                f'Successfully seeded {total_categories} categories, {total_services} services, and {total_topics} topics!'
             )
         )

@@ -4,6 +4,14 @@ from django.conf import settings
 class Topic(models.Model):
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
+    category = models.ForeignKey(
+        'consultants.ServiceCategory',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='topics',
+        help_text='Link to ServiceCategory for auto-sync of consultants'
+    )
     consultants = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         related_name='topics',

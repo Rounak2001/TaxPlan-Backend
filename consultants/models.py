@@ -7,23 +7,39 @@ User = get_user_model()
 class ConsultantServiceProfile(models.Model):
     """Extended profile for consultants with service-specific professional details"""
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='consultant_service_profile')
-    full_name = models.CharField(max_length=255)
-    email = models.EmailField(unique=True)
-    phone = models.CharField(max_length=15)
     
     # Professional details
-    qualification = models.CharField(max_length=255)
-    experience_years = models.IntegerField()
+    qualification = models.CharField(max_length=255, blank=True)
+    experience_years = models.IntegerField(default=0)
     certifications = models.TextField(blank=True)  # JSON or comma-separated
+    
+    # Consultation fee (moved from core_auth.ConsultantProfile)
+    consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.00)
     
     # Availability
     is_active = models.BooleanField(default=True)
     max_concurrent_clients = models.IntegerField(default=5)
     current_client_count = models.IntegerField(default=0)
+    last_assigned_at = models.DateTimeField(null=True, blank=True)
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    @property
+    def full_name(self):
+        """Delegate to User model — no more duplicate data."""
+        return self.user.get_full_name() or self.user.username
+    
+    @property
+    def email(self):
+        """Delegate to User model."""
+        return self.user.email
+    
+    @property
+    def phone(self):
+        """Delegate to User model."""
+        return self.user.phone_number or ''
     
     def __str__(self):
         return f"{self.full_name} - {self.email}"

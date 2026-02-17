@@ -1,7 +1,46 @@
 from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
-from .models import ClientServiceRequest
+from .models import ClientServiceRequest, ConsultantServiceExpertise
 from core_auth.models import ClientProfile
+
+
+@receiver(post_save, sender=ConsultantServiceExpertise)
+def auto_add_consultant_to_topic(sender, instance, created, **kwargs):
+    """
+    When a consultant selects a service (e.g. 'Income Tax Filing'),
+    auto-add them to all Topics linked to that service's category (e.g. 'Income Tax').
+    This eliminates manual admin work for consultation topic assignment.
+    """
+    if created:
+        from consultations.models import Topic
+        category = instance.service.category
+        topics = Topic.objects.filter(category=category)
+        for topic in topics:
+            topic.consultants.add(instance.consultant.user)
+            print(f"✅ [Auto-Sync] Added {instance.consultant.full_name} to topic '{topic.name}'")
+
+
+@receiver(post_delete, sender=ConsultantServiceExpertise)
+def auto_remove_consultant_from_topic(sender, instance, **kwargs):
+    """
+    When a consultant loses their last service in a category,
+    remove them from the matching Topic.
+    """
+    from consultations.models import Topic
+    category = instance.service.category
+    
+    # Check if consultant still has any other services in this category
+    still_has_services = ConsultantServiceExpertise.objects.filter(
+        consultant=instance.consultant,
+        service__category=category
+    ).exists()
+    
+    if not still_has_services:
+        topics = Topic.objects.filter(category=category)
+        for topic in topics:
+            topic.consultants.remove(instance.consultant.user)
+            print(f"🔄 [Auto-Sync] Removed {instance.consultant.full_name} from topic '{topic.name}' (no more services in category)")
+
 
 
 @receiver(post_save, sender=ClientServiceRequest)

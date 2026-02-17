@@ -23,9 +23,16 @@ class UserAdmin(BaseUserAdmin):
 
 
 class ConsultantProfileAdmin(admin.ModelAdmin):
+    """DEPRECATED: Use ConsultantServiceProfile in the 'consultants' app instead."""
     list_display = ('user', 'consultation_fee', 'current_load', 'max_capacity')
     list_filter = ('max_capacity',)
     search_fields = ('user__username', 'user__email')
+    
+    def has_add_permission(self, request):
+        return False  # No new profiles — use ConsultantServiceProfile
+    
+    def has_change_permission(self, request, obj=None):
+        return False  # Read-only — data lives in ConsultantServiceProfile now
 
 if not admin.site.is_registered(ConsultantProfile):
     admin.site.register(ConsultantProfile, ConsultantProfileAdmin)
