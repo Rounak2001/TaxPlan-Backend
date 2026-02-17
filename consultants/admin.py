@@ -17,9 +17,9 @@ class ConsultantServiceExpertiseInline(admin.TabularInline):
 
 @admin.register(ConsultantServiceProfile)
 class ConsultantServiceProfileAdmin(admin.ModelAdmin):
-    list_display = ['full_name', 'email', 'qualification', 'experience_years', 'is_active', 'current_client_count', 'max_concurrent_clients']
+    list_display = ['full_name', 'email', 'qualification', 'experience_years', 'consultation_fee', 'is_active', 'current_client_count', 'max_concurrent_clients']
     list_filter = ['is_active', 'qualification']
-    search_fields = ['full_name', 'email', 'phone']
+    search_fields = ['user__first_name', 'user__last_name', 'user__email', 'user__phone_number']
     readonly_fields = ['created_at', 'updated_at']
     inlines = [ConsultantServiceExpertiseInline]
 
@@ -43,7 +43,7 @@ class ServiceAdmin(admin.ModelAdmin):
 class ConsultantServiceExpertiseAdmin(admin.ModelAdmin):
     list_display = ['consultant', 'service', 'added_at']
     list_filter = ['service__category']
-    search_fields = ['consultant__full_name', 'service__title']
+    search_fields = ['consultant__user__first_name', 'consultant__user__last_name', 'service__title']
     readonly_fields = ['added_at']
 
 
@@ -51,7 +51,7 @@ class ConsultantServiceExpertiseAdmin(admin.ModelAdmin):
 class ClientServiceRequestAdmin(admin.ModelAdmin):
     list_display = ['client', 'service', 'status', 'assigned_consultant', 'created_at', 'assigned_at']
     list_filter = ['status', 'service__category']
-    search_fields = ['client__email', 'service__title', 'assigned_consultant__full_name']
+    search_fields = ['client__email', 'service__title', 'assigned_consultant__user__first_name', 'assigned_consultant__user__last_name']
     readonly_fields = ['created_at', 'updated_at']
     
     fieldsets = (

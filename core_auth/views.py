@@ -241,11 +241,17 @@ class UserDashboardView(APIView):
 
         if user.role == "CONSULTANT":
             try:
-                profile = user.consultant_profile
+                profile = user.consultant_service_profile
+                from consultants.models import ConsultantServiceExpertise
+                services = list(
+                    ConsultantServiceExpertise.objects.filter(consultant=profile)
+                    .values_list('service__title', flat=True)
+                )
                 data["stats"] = {
-                    "current_load": profile.current_load,
-                    "max_capacity": profile.max_capacity,
-                    "services": profile.services,
+                    "current_load": profile.current_client_count,
+                    "max_capacity": profile.max_concurrent_clients,
+                    "consultation_fee": float(profile.consultation_fee),
+                    "services": services,
                 }
             except Exception:
                 data["stats"] = None

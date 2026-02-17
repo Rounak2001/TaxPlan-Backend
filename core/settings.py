@@ -242,12 +242,16 @@ SIMPLE_JWT = {
     'TOKEN_OBTAIN_SERIALIZER': 'core_auth.serializers.CustomTokenObtainPairSerializer',
 }
 
-CORS_ALLOW_ALL_ORIGINS = True  # For development
+CORS_ALLOW_ALL_ORIGINS = False  # For development
 CORS_ALLOW_CREDENTIALS = True
-# CORS_ALLOWED_ORIGINS = [
-#     "http://localhost:", # Example for a local React/frontend dev server
-#     "https://yourfrontenddomain.com",
-# ]
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:8080", # Example for a local React/frontend dev server
+    "https://yourfrontenddomain.com",
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:8080",
+]
 
 # Email Configuration (Gmail SMTP)
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
