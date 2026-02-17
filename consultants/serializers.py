@@ -60,11 +60,15 @@ class ClientServiceRequestSerializer(serializers.ModelSerializer):
     
     # Flat fields for backward compatibility
     client_email = serializers.EmailField(source='client.email', read_only=True)
+    client_name = serializers.SerializerMethodField()
+    
+    def get_client_name(self, obj):
+        return obj.client.get_full_name() or obj.client.username
     
     class Meta:
         model = ClientServiceRequest
         fields = [
-            'id', 'client', 'client_email', 
+            'id', 'client', 'client_email', 'client_name', 
             'service',  # Full service object
             'status', 
             'assigned_consultant',  # Full consultant object

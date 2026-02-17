@@ -237,6 +237,10 @@ class UserDashboardView(APIView):
             "role": user.role,
             "is_onboarded": user.is_onboarded,
             "is_phone_verified": user.is_phone_verified,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "phone": user.phone_number,
         }
 
         if user.role == "CONSULTANT":
@@ -252,6 +256,9 @@ class UserDashboardView(APIView):
                     "max_capacity": profile.max_concurrent_clients,
                     "consultation_fee": float(profile.consultation_fee),
                     "services": services,
+                    "qualification": profile.qualification,
+                    "experience_years": profile.experience_years,
+                    "certifications": profile.certifications,
                 }
             except Exception:
                 data["stats"] = None

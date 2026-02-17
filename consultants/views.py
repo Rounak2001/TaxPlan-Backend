@@ -44,6 +44,25 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         if category_id:
             queryset = queryset.filter(category_id=category_id)
         return queryset
+    
+    @action(detail=False, methods=['get'])
+    def by_category(self, request):
+        """
+        Returns all services grouped by category
+        """
+        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related('services')
+        result = []
+        for category in categories:
+            result.append({
+                'id': category.id,
+                'name': category.name,
+                'description': category.description,
+                'services': ServiceSerializer(
+                    category.services.filter(is_active=True), 
+                    many=True
+                ).data
+            })
+        return Response(result)
 
 
 class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
@@ -287,6 +306,50 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
         return Response({
             'message': f'Added {created_count} services to expertise',
             'total_services': ConsultantServiceExpertise.objects.filter(consultant=profile).count()
+        })
+    
+    @action(detail=False, methods=['get'])
+    def my_services(self, request):
+        """
+        Get current consultant's selected service IDs
+        """
+        try:
+            profile = ConsultantServiceProfile.objects.get(user=request.user)
+            expertise = ConsultantServiceExpertise.objects.filter(consultant=profile)
+            service_ids = list(expertise.values_list('service_id', flat=True))
+            return Response({'service_ids': service_ids})
+        except ConsultantServiceProfile.DoesNotExist:
+            return Response({'service_ids': []})
+    
+    @action(detail=False, methods=['post'])
+    def update_services(self, request):
+        """
+        Replace consultant's expertise with new service selection
+        Body: {"service_ids": [1, 2, 3, 5]}
+        """
+        try:
+            profile = ConsultantServiceProfile.objects.get(user=request.user)
+        except ConsultantServiceProfile.DoesNotExist:
+            return Response(
+                {'error': 'Consultant profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        service_ids = request.data.get('service_ids', [])
+        
+        # Delete all existing expertise
+        ConsultantServiceExpertise.objects.filter(consultant=profile).delete()
+        
+        # Add new selections
+        for service_id in service_ids:
+            ConsultantServiceExpertise.objects.create(
+                consultant=profile,
+                service_id=service_id
+            )
+        
+        return Response({
+            'message': f'Updated expertise with {len(service_ids)} services',
+            'service_ids': service_ids
         })
 
 
