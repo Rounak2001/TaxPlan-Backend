@@ -30,7 +30,7 @@ def noop(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('consultants', '0005_remove_consultantserviceprofile_email_and_more'),
+        ('consultants', '0006_remove_consultantserviceprofile_email_and_more'),
         ('core_auth', '0001_initial'),
     ]
 

@@ -265,6 +265,8 @@ class UserDashboardView(APIView):
         elif user.role == "CLIENT":
             try:
                 profile = user.client_profile
+                data["pan"] = profile.pan_number
+                data["gst"] = profile.gstin
                 advisor = profile.assigned_consultant
                 advisor_data = None
                 
