@@ -19,7 +19,10 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 # is populated before importing code that may import ORM models.
 django_asgi_app = get_asgi_application()
 
-from chat.routing import websocket_urlpatterns
+from chat.routing import websocket_urlpatterns as chat_websocket_urlpatterns
+from notifications.routing import websocket_urlpatterns as notification_websocket_urlpatterns
+
+websocket_urlpatterns = chat_websocket_urlpatterns + notification_websocket_urlpatterns
 from chat.middleware import JWTAuthMiddleware
 
 application = ProtocolTypeRouter({

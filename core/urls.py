@@ -15,6 +15,7 @@ urlpatterns = [
     path('api/payments/', include('service_orders.urls')),
     path('api/consultants/', include('consultants.urls')),
     path('api/calls/', include('exotel_calls.urls')),
+    path('api/', include('notifications.urls')),
     path('api/activity/', include('activity_timeline.urls')),
     path('api/conversations/', include('chat.urls')),  # Real-time Chat
 ]

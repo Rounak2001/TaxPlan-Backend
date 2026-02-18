@@ -64,6 +64,25 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             })
         return Response(result)
 
+    @action(detail=False, methods=['get'], url_path='by_category')
+    def by_category(self, request):
+        """
+        Get all categories with their nested services
+        """
+        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related('services')
+        
+        result = []
+        for cat in categories:
+            services = cat.services.filter(is_active=True)
+            result.append({
+                'id': cat.id,
+                'name': cat.name,
+                'description': cat.description,
+                'services': ServiceSerializer(services, many=True).data
+            })
+            
+        return Response(result)
+
 
 class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
     """
@@ -360,6 +379,46 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
             'message': f'Updated expertise with {len(service_ids)} services',
             'service_ids': service_ids
         })
+
+    @action(detail=False, methods=['get'], url_path='my_services')
+    def my_services(self, request):
+        """
+        Get IDs of services currently selected by the consultant
+        """
+        try:
+            profile = ConsultantServiceProfile.objects.get(user=request.user)
+        except ConsultantServiceProfile.DoesNotExist:
+            return Response({'service_ids': []})
+            
+        service_ids = ConsultantServiceExpertise.objects.filter(
+            consultant=profile
+        ).values_list('service_id', flat=True)
+        
+        return Response({'service_ids': list(service_ids)})
+
+    @action(detail=False, methods=['post'], url_path='update_services')
+    def update_services(self, request):
+        """
+        Set the exact list of services offered by the consultant
+        """
+        try:
+            profile = ConsultantServiceProfile.objects.get(user=request.user)
+        except ConsultantServiceProfile.DoesNotExist:
+            return Response({'error': 'Profile not found'}, status=404)
+            
+        service_ids = request.data.get('service_ids', [])
+        
+        # Remove old ones
+        ConsultantServiceExpertise.objects.filter(consultant=profile).delete()
+        
+        # Add new ones
+        new_expertise = [
+            ConsultantServiceExpertise(consultant=profile, service_id=sid)
+            for sid in service_ids
+        ]
+        ConsultantServiceExpertise.objects.bulk_create(new_expertise)
+        
+        return Response({'success': True, 'count': len(new_expertise)})
 
 
 class ClientServiceRequestViewSet(viewsets.ModelViewSet):

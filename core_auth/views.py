@@ -231,9 +231,13 @@ class UserDashboardView(APIView):
     def get(self, request):
         user = request.user
         data = {
-            "id": user.id,  # Required for chat message alignment
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
             "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
             "username": user.username,
+            "email": user.email,
+            "phone": user.phone_number,
             "role": user.role,
             "is_onboarded": user.is_onboarded,
             "is_phone_verified": user.is_phone_verified,
@@ -255,6 +259,9 @@ class UserDashboardView(APIView):
                     "current_load": profile.current_client_count,
                     "max_capacity": profile.max_concurrent_clients,
                     "consultation_fee": float(profile.consultation_fee),
+                    "qualification": profile.qualification,
+                    "experience_years": profile.experience_years,
+                    "certifications": profile.certifications,
                     "services": services,
                     "qualification": profile.qualification,
                     "experience_years": profile.experience_years,
@@ -262,11 +269,12 @@ class UserDashboardView(APIView):
                 }
             except Exception:
                 data["stats"] = None
-        elif user.role == "CLIENT":
+        if user.role == "CLIENT":
             try:
                 profile = user.client_profile
                 data["pan"] = profile.pan_number
                 data["gst"] = profile.gstin
+                
                 advisor = profile.assigned_consultant
                 advisor_data = None
                 
