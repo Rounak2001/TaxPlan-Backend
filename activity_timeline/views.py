@@ -2,11 +2,18 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
 from django.utils import timezone
 from datetime import timedelta
 from .models import Activity
 from .serializers import ActivitySerializer
 from consultants.models import ClientServiceRequest
+
+
+class ActivityPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 50
 
 
 class ActivityViewSet(viewsets.ReadOnlyModelViewSet):
@@ -16,6 +23,7 @@ class ActivityViewSet(viewsets.ReadOnlyModelViewSet):
     """
     serializer_class = ActivitySerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = ActivityPagination
     
     def get_queryset(self):
         """

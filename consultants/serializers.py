@@ -24,13 +24,19 @@ class ServiceSerializer(serializers.ModelSerializer):
 
 
 class ConsultantServiceProfileSerializer(serializers.ModelSerializer):
-    user_email = serializers.EmailField(source='user.email', read_only=True)
+    full_name = serializers.SerializerMethodField()
+    email = serializers.EmailField(source='user.email', read_only=True)
+    phone = serializers.CharField(source='user.phone_number', read_only=True)
+    
+    def get_full_name(self, obj):
+        return obj.user.get_full_name() or obj.user.username
     
     class Meta:
         model = ConsultantServiceProfile
         fields = [
-            'id', 'user', 'user_email', 'full_name', 'email', 'phone',
+            'id', 'user', 'full_name', 'email', 'phone',
             'qualification', 'experience_years', 'certifications',
+            'consultation_fee',
             'is_active', 'max_concurrent_clients', 'current_client_count',
             'created_at', 'updated_at'
         ]
@@ -54,11 +60,15 @@ class ClientServiceRequestSerializer(serializers.ModelSerializer):
     
     # Flat fields for backward compatibility
     client_email = serializers.EmailField(source='client.email', read_only=True)
+    client_name = serializers.SerializerMethodField()
+    
+    def get_client_name(self, obj):
+        return obj.client.get_full_name() or obj.client.username
     
     class Meta:
         model = ClientServiceRequest
         fields = [
-            'id', 'client', 'client_email', 
+            'id', 'client', 'client_email', 'client_name', 
             'service',  # Full service object
             'status', 
             'assigned_consultant',  # Full consultant object

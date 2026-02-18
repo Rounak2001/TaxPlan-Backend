@@ -311,9 +311,11 @@ class SharedReportViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only consultants can share reports.")
         
         client_id = self.request.data.get('client')
-        # Security: Ensure client is assigned to this consultant
+        # Security: Ensure client is assigned to this consultant (Primary OR Service)
         from core_auth.models import ClientProfile
-        if not ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists():
+        is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
+        is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
+        if not (is_primary or is_service):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("This client is not assigned to you.")
             
@@ -363,7 +365,9 @@ class LegalNoticeViewSet(viewsets.ModelViewSet):
         if user.role == 'CONSULTANT':
             client_id = self.request.data.get('client')
             from core_auth.models import ClientProfile
-            if not ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists():
+            is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
+            is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
+            if not (is_primary or is_service):
                 from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied("This client is not assigned to you.")
             

@@ -237,15 +237,28 @@ class UserDashboardView(APIView):
             "role": user.role,
             "is_onboarded": user.is_onboarded,
             "is_phone_verified": user.is_phone_verified,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "phone": user.phone_number,
         }
 
         if user.role == "CONSULTANT":
             try:
-                profile = user.consultant_profile
+                profile = user.consultant_service_profile
+                from consultants.models import ConsultantServiceExpertise
+                services = list(
+                    ConsultantServiceExpertise.objects.filter(consultant=profile)
+                    .values_list('service__title', flat=True)
+                )
                 data["stats"] = {
-                    "current_load": profile.current_load,
-                    "max_capacity": profile.max_capacity,
-                    "services": profile.services,
+                    "current_load": profile.current_client_count,
+                    "max_capacity": profile.max_concurrent_clients,
+                    "consultation_fee": float(profile.consultation_fee),
+                    "services": services,
+                    "qualification": profile.qualification,
+                    "experience_years": profile.experience_years,
+                    "certifications": profile.certifications,
                 }
             except Exception:
                 data["stats"] = None
@@ -434,6 +447,19 @@ class ConsultantClientsView(APIView):
                 'status_display': req.get_status_display()
             })
 
+        # Get completed requests for earnings calculation
+        completed_requests = ClientServiceRequest.objects.filter(
+            client_id__in=client_ids,
+            assigned_consultant__user=user,
+            status='completed'
+        ).select_related('service')
+
+        # Map earnings to clients
+        client_earnings_map = {}
+        for req in completed_requests:
+            price = req.service.price or 0
+            client_earnings_map[req.client_id] = client_earnings_map.get(req.client_id, 0) + float(price)
+
         clients_data = []
         for profile in assigned_clients:
             client_user = profile.user
@@ -446,10 +472,11 @@ class ConsultantClientsView(APIView):
                 'gst_username': profile.gst_username,
                 'status': 'active' if client_user.is_onboarded else 'pending',
                 'active_requests': client_requests_map.get(client_user.id, []),
+                'earnings': client_earnings_map.get(client_user.id, 0),
                 'avatarUrl': '',
                 'createdAt': client_user.date_joined.isoformat() if client_user.date_joined else None,
                 'consultantId': user.id,
-                'lastActivity': None, # Placeholder
+                'lastActivity': None,
             })
         
         return Response(clients_data)
