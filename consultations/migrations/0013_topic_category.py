@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('consultants', '0006_migrate_consultation_fee_data'),
+        ('consultants', '0007_migrate_consultation_fee_data'),
         ('consultations', '0012_alter_topic_consultants'),
     ]
 
