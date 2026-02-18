@@ -447,6 +447,19 @@ class ConsultantClientsView(APIView):
                 'status_display': req.get_status_display()
             })
 
+        # Get completed requests for earnings calculation
+        completed_requests = ClientServiceRequest.objects.filter(
+            client_id__in=client_ids,
+            assigned_consultant__user=user,
+            status='completed'
+        ).select_related('service')
+
+        # Map earnings to clients
+        client_earnings_map = {}
+        for req in completed_requests:
+            price = req.service.price or 0
+            client_earnings_map[req.client_id] = client_earnings_map.get(req.client_id, 0) + float(price)
+
         clients_data = []
         for profile in assigned_clients:
             client_user = profile.user
@@ -459,10 +472,11 @@ class ConsultantClientsView(APIView):
                 'gst_username': profile.gst_username,
                 'status': 'active' if client_user.is_onboarded else 'pending',
                 'active_requests': client_requests_map.get(client_user.id, []),
+                'earnings': client_earnings_map.get(client_user.id, 0),
                 'avatarUrl': '',
                 'createdAt': client_user.date_joined.isoformat() if client_user.date_joined else None,
                 'consultantId': user.id,
-                'lastActivity': None, # Placeholder
+                'lastActivity': None,
             })
         
         return Response(clients_data)

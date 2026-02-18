@@ -189,6 +189,14 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
         # Services offered
         expertise_count = ConsultantServiceExpertise.objects.filter(consultant=profile).count()
         
+        # Total earnings from completed requests
+        from django.db.models import Sum, F
+        total_earnings = service_requests.filter(
+            status='completed'
+        ).aggregate(
+            total=Sum('service__price')
+        )['total'] or 0
+        
         return Response({
             'service_requests': requests_by_status,
             'documents': {
@@ -198,7 +206,8 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
             },
             'clients': client_metrics,
             'services_offered': expertise_count,
-            'monthly_completed': monthly_completed
+            'monthly_completed': monthly_completed,
+            'total_earnings': float(total_earnings),
         })
     
     @action(detail=False, methods=['get'])
