@@ -255,17 +255,19 @@ class UserDashboardView(APIView):
                     ConsultantServiceExpertise.objects.filter(consultant=profile)
                     .values_list('service__title', flat=True)
                 )
+                from consultants.models import ClientServiceRequest
+                live_client_count = ClientServiceRequest.objects.filter(
+                    assigned_consultant=profile
+                ).exclude(status__in=['completed', 'cancelled']).values('client').distinct().count()
+
                 data["stats"] = {
-                    "current_load": profile.current_client_count,
+                    "current_load": live_client_count,
                     "max_capacity": profile.max_concurrent_clients,
                     "consultation_fee": float(profile.consultation_fee),
                     "qualification": profile.qualification,
                     "experience_years": profile.experience_years,
                     "certifications": profile.certifications,
                     "services": services,
-                    "qualification": profile.qualification,
-                    "experience_years": profile.experience_years,
-                    "certifications": profile.certifications,
                 }
             except Exception:
                 data["stats"] = None

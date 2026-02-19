@@ -120,15 +120,19 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
             assigned_consultant=profile
         ).exclude(status='completed').order_by('-created_at')
         
-        # Calculate stats
+        # Calculate stats — compute live client count from active requests
         total_completed = ClientServiceRequest.objects.filter(
             assigned_consultant=profile,
             status='completed'
         ).count()
         
+        live_client_count = ClientServiceRequest.objects.filter(
+            assigned_consultant=profile
+        ).exclude(status__in=['completed', 'cancelled']).values('client').distinct().count()
+
         stats = {
             'total_completed': total_completed,
-            'current_clients': profile.current_client_count,
+            'current_clients': live_client_count,
             'max_capacity': profile.max_concurrent_clients,
             'services_offered': len(services)
         }
@@ -183,14 +187,18 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
             status='REJECTED'
         ).count()
         
-        # Client metrics
+        # Client metrics — compute live from active requests so admin deletions are reflected immediately
+        live_client_count = ClientServiceRequest.objects.filter(
+            assigned_consultant=profile
+        ).exclude(status__in=['completed', 'cancelled']).values('client').distinct().count()
+
         client_metrics = {
-            'current_clients': profile.current_client_count,
+            'current_clients': live_client_count,
             'max_capacity': profile.max_concurrent_clients,
-            'available_slots': profile.max_concurrent_clients - profile.current_client_count,
+            'available_slots': profile.max_concurrent_clients - live_client_count,
             'utilization_percentage': round(
-                (profile.current_client_count / profile.max_concurrent_clients * 100) 
-                if profile.max_concurrent_clients > 0 else 0, 
+                (live_client_count / profile.max_concurrent_clients * 100)
+                if profile.max_concurrent_clients > 0 else 0,
                 1
             )
         }
@@ -255,8 +263,12 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
                     'tat': exp.service.tat
                 })
             
-            # Calculate availability
-            available_slots = consultant.max_concurrent_clients - consultant.current_client_count
+            # Calculate availability — compute live client count from active requests
+            live_client_count = ClientServiceRequest.objects.filter(
+                assigned_consultant=consultant
+            ).exclude(status__in=['completed', 'cancelled']).values('client').distinct().count()
+
+            available_slots = consultant.max_concurrent_clients - live_client_count
             availability_percentage = (available_slots / consultant.max_concurrent_clients * 100) if consultant.max_concurrent_clients > 0 else 0
             
             result.append({
@@ -268,7 +280,7 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
                 'experience_years': consultant.experience_years,
                 'certifications': consultant.certifications,
                 'availability': {
-                    'current_clients': consultant.current_client_count,
+                    'current_clients': live_client_count,
                     'max_clients': consultant.max_concurrent_clients,
                     'available_slots': available_slots,
                     'availability_percentage': round(availability_percentage, 1),
