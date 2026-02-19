@@ -18,6 +18,15 @@ def create_service_requests_from_order(order):
     """
     created_requests = []
     
+    # Idempotency Check: See if requests already exist for this order
+    existing_count = ClientServiceRequest.objects.filter(
+        client=order.user,
+        notes__contains=f'order #{order.id}'
+    ).count()
+    
+    if existing_count > 0:
+        return [] # Already processed
+    
     for item in order.items.all():
         if not item.service:
             # Skip if no service linked

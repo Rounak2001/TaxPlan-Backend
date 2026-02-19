@@ -126,18 +126,27 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
             'razorpay_signature': razorpay_signature
         }
 
-        # 1. Verify signature first
-        try:
-            razorpay_client.utility.verify_payment_signature(params_dict)
-        except Exception as sig_err:
-            print(f"Signature verification failed: {str(sig_err)}")
-            booking.payment_status = 'failed'
-            booking.save(update_fields=['payment_status'])
-            return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 2. If we are here, PAYMENT IS VERIFIED.
+        # 1. Atomic Transaction to prevent race conditions with Webhook
         try:
             with transaction.atomic():
+                # Lock the booking row
+                booking = ConsultationBooking.objects.select_for_update().get(pk=booking.pk)
+                
+                # Check if Webhook already processed this
+                if booking.payment_status == 'paid':
+                    return Response({'status': 'Payment already verified (via webhook)', 'booking_id': booking.id})
+
+                # 2. Verify signature
+                try:
+                    razorpay_client.utility.verify_payment_signature(params_dict)
+                except Exception as sig_err:
+                    print(f"Signature verification failed: {str(sig_err)}")
+                    # INDUSTRY STANDARD: Do NOT mark as 'failed' here. 
+                    # The frontend check might fail for many reasons (network, duplicate, etc.)
+                    # We only mark as failed if we receive an explicit 'payment.failed' webhook.
+                    return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
+
+                # 3. Update status
                 booking.payment_status = 'paid'
                 booking.status = 'confirmed'
                 booking.razorpay_payment_id = razorpay_payment_id

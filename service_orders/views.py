@@ -134,34 +134,38 @@ def verify_payment(request):
         'razorpay_signature': razorpay_signature
     }
 
+    # If we are here, PAYMENT DATA is received. 
+    # Use atomic transaction to prevent race conditions with Webhook
     try:
-        # 1. Truth: Verify signature first. If this fails, Exception is raised and we exit.
-        razorpay_client.utility.verify_payment_signature(params_dict)
-    except Exception as sig_err:
-        print(f"Signature verification failed: {str(sig_err)}")
-        return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
-
-    # If we are here, PAYMENT IS SUCCESSFUL.
-    service_requests = []
-    
-    try:
-        # 2. Try the Risky Business (Database Updates)
         with transaction.atomic():
             try:
+                # Lock the order row
                 order = ServiceOrder.objects.select_for_update().get(razorpay_order_id=razorpay_order_id)
             except ServiceOrder.DoesNotExist:
                  return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
-
+            
+            # 1. Check if Webhook already processed this
             if order.status == 'paid':
-                 return Response({'status': 'Order already paid', 'order_id': order.id})
+                 return Response({
+                     'status': 'Payment verified successfully (via webhook)', 
+                     'order_id': order.id,
+                     'already_paid': True
+                 })
 
-            # Update status
+            # 2. Verify signature
+            try:
+                razorpay_client.utility.verify_payment_signature(params_dict)
+            except Exception as sig_err:
+                print(f"Signature verification failed: {str(sig_err)}")
+                return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 3. Update status (Only if signature is valid and not already paid)
             order.status = 'paid'
             order.razorpay_payment_id = razorpay_payment_id
             order.razorpay_signature = razorpay_signature
             order.save()
             
-            # Create service requests (Fulfillment) - This might fail/crash
+            # 4. Create service requests (Fulfillment)
             service_requests = create_service_requests_from_order(order)
             
         # Success Response
