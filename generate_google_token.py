@@ -16,7 +16,9 @@ def main():
     
     # This will open a browser window for you to log in
     # Use port 0 to find any available port
-    creds = flow.run_local_server(port=0)
+    # access_type='offline' ensures we get a refresh token
+    # prompt='consent' ensures a refresh token is returned even if the user already authorized
+    creds = flow.run_local_server(port=0, access_type='offline', prompt='consent')
     
     print("\n" + "="*50)
     print("NEW REFRESH TOKEN GENERATED:")

@@ -99,7 +99,7 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
         try:
             booking.amount = booking.consultant.consultant_service_profile.consultation_fee
         except Exception:
-            booking.amount = 200.00 # Fallback
+            booking.amount = 1.00 # Fallback
         booking.save(update_fields=['amount'])
         
         # Create Razorpay Order
