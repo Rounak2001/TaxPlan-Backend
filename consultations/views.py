@@ -1,6 +1,7 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.contrib.auth import get_user_model
 from datetime import datetime, time, timedelta
 from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking
@@ -72,6 +73,7 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
                                  viewsets.mixins.CreateModelMixin,
                                  viewsets.mixins.ListModelMixin,
                                  viewsets.mixins.RetrieveModelMixin):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     serializer_class = ConsultationBookingSerializer
     permission_classes = [permissions.IsAuthenticated]
 

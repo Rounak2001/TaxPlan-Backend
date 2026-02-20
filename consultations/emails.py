@@ -101,6 +101,14 @@ def send_booking_confirmation(booking):
         )
         email_client.attach_alternative(html_content_client, "text/html")
         email_client.attach('meeting.ics', ics_content, 'text/calendar')
+        
+        # Attach uploaded files to client email
+        for attachment in booking.attachments.all():
+            try:
+                email_client.attach_file(attachment.file.path)
+            except Exception as e:
+                logger.error(f"Failed to attach file {attachment.id} to client email: {str(e)}")
+
         email_client.send()
         
         logger.info(f"Confirmation email sent to client: {booking.client.email}")
@@ -118,6 +126,14 @@ def send_booking_confirmation(booking):
         )
         email_consultant.attach_alternative(html_content_consultant, "text/html")
         email_consultant.attach('meeting.ics', ics_content, 'text/calendar')
+        
+        # Attach uploaded files to consultant email
+        for attachment in booking.attachments.all():
+            try:
+                email_consultant.attach_file(attachment.file.path)
+            except Exception as e:
+                logger.error(f"Failed to attach file {attachment.id} to consultant email: {str(e)}")
+
         email_consultant.send()
         
         logger.info(f"Confirmation email sent to consultant: {booking.consultant.email}")
