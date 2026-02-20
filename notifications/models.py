@@ -6,6 +6,8 @@ class Notification(models.Model):
         ('document', 'Document'),
         ('service', 'Service'),
         ('meeting', 'Meeting'),
+        ('consultation', 'Consultation'),
+        ('chat', 'Chat'),
         ('payment', 'Payment'),
         ('system', 'System'),
     ]
