@@ -272,6 +272,19 @@ RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID')
 RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET')
 RAZORPAY_WEBHOOK_SECRET = os.getenv('RAZORPAY_WEBHOOK_SECRET')
 
+# Meta WhatsApp Cloud API (OTP Verification)
+META_PHONE_NUMBER_ID = os.getenv('META_PHONE_NUMBER_ID')
+META_ACCESS_TOKEN = os.getenv('META_ACCESS_TOKEN')
+META_API_VERSION = os.getenv('META_API_VERSION', 'v21.0')
+
+# Django Cache (for OTP storage with TTL)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'django_cache_table',
+    }
+}
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Logging Configuration for debugging

@@ -1,3 +1,6 @@
+import re
+import logging
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -6,8 +9,15 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from core_auth.serializers import IsConsultantUser, IsClientUser
 from core_auth.models import User, ClientProfile
+from core_auth.services.whatsapp_otp import (
+    generate_otp, store_otp, send_whatsapp_otp,
+    verify_otp as verify_otp_service, can_resend_otp,
+    RESEND_COOLDOWN_SECONDS, OTP_EXPIRY_SECONDS
+)
 from django.conf import settings
 import requests
+
+logger = logging.getLogger(__name__)
 
 def set_auth_cookies(response, user):
     """Helper to set HttpOnly JWT cookies for a user."""
@@ -40,10 +50,143 @@ def set_auth_cookies(response, user):
     return response
 
 
-class OTPVerifyView(APIView):
-    # Basic placeholder for OTP verification URL name resolution in middleware
+class SendOTPView(APIView):
+    """
+    Send OTP to a phone number via WhatsApp.
+    Requires authenticated user (must be logged in via Google first).
+    """
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
-        return Response({"message": "OTP Verified"}, status=status.HTTP_200_OK)
+        phone_number = request.data.get('phone_number', '').strip()
+
+        # Validate: user should provide 10 digits (we add +91 prefix)
+        digits_only = re.sub(r'\D', '', phone_number)
+
+        # Handle cases where user sends +91XXXXXXXXXX or 91XXXXXXXXXX or just XXXXXXXXXX
+        if len(digits_only) == 12 and digits_only.startswith('91'):
+            digits_only = digits_only[2:]  # strip country code
+        elif len(digits_only) == 10:
+            pass  # already 10 digits
+        else:
+            return Response(
+                {'error': 'Please enter a valid 10-digit Indian mobile number.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate: Indian mobile numbers start with 6-9
+        if not re.match(r'^[6-9]\d{9}$', digits_only):
+            return Response(
+                {'error': 'Please enter a valid Indian mobile number starting with 6-9.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Store as +91XXXXXXXXXX for internal use, 91XXXXXXXXXX for WhatsApp API
+        full_phone = f'+91{digits_only}'
+        wa_phone = f'91{digits_only}'
+
+        # Check if a different user already has this phone number verified
+        existing_user = User.objects.filter(
+            phone_number=full_phone, is_phone_verified=True
+        ).exclude(id=request.user.id).first()
+        if existing_user:
+            return Response(
+                {'error': 'This phone number is already registered with another account.'},
+                status=status.HTTP_409_CONFLICT
+            )
+
+        # Rate limiting check
+        can_send, reason, wait_seconds = can_resend_otp(full_phone)
+        if not can_send:
+            return Response(
+                {'error': reason, 'cooldown': wait_seconds},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        # Generate and store OTP
+        otp = generate_otp()
+        store_otp(full_phone, otp)
+
+        # Send via WhatsApp
+        success, message = send_whatsapp_otp(wa_phone, otp)
+
+        if success:
+            logger.info(f"OTP sent to {full_phone[-4:]} for user {request.user.id}")
+            return Response({
+                'success': True,
+                'message': 'OTP sent to your WhatsApp number.',
+                'cooldown': RESEND_COOLDOWN_SECONDS,
+                'expiry': OTP_EXPIRY_SECONDS,
+                'phone_display': f'+91 {digits_only[:5]} {digits_only[5:]}',
+            })
+        else:
+            logger.error(f"Failed to send OTP to {full_phone[-4:]}: {message}")
+            return Response(
+                {'error': message},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+
+class VerifyOTPView(APIView):
+    """
+    Verify OTP and mark phone number as verified.
+    Requires authenticated user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        phone_number = request.data.get('phone_number', '').strip()
+        otp = request.data.get('otp', '').strip()
+
+        if not phone_number or not otp:
+            return Response(
+                {'error': 'Phone number and OTP are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if len(otp) != 6 or not otp.isdigit():
+            return Response(
+                {'error': 'OTP must be a 6-digit number.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Normalize phone number to +91XXXXXXXXXX
+        digits_only = re.sub(r'\D', '', phone_number)
+        if len(digits_only) == 12 and digits_only.startswith('91'):
+            digits_only = digits_only[2:]
+        if len(digits_only) != 10:
+            return Response(
+                {'error': 'Invalid phone number format.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        full_phone = f'+91{digits_only}'
+
+        # Verify OTP
+        success, message, remaining_attempts = verify_otp_service(full_phone, otp)
+
+        if success:
+            # Update user's phone number and verification status
+            user = request.user
+            user.phone_number = full_phone
+            user.is_phone_verified = True
+            user.is_onboarded = True
+            user.save(update_fields=['phone_number', 'is_phone_verified', 'is_onboarded'])
+
+            logger.info(f"Phone verified for user {user.id}: {full_phone[-4:]}")
+
+            return Response({
+                'success': True,
+                'verified': True,
+                'message': message,
+            })
+        else:
+            return Response({
+                'success': False,
+                'verified': False,
+                'message': message,
+                'remaining_attempts': remaining_attempts,
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
