@@ -9,8 +9,12 @@ from .models import ServiceOrder, OrderItem
 from consultants.models import Service, ClientServiceRequest
 from .utils import create_service_requests_from_order
 
+import logging
+
 # Initialize Razorpay client
 razorpay_client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+logger = logging.getLogger('service_orders')
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
@@ -24,7 +28,11 @@ def create_order(request):
     user = request.user
     items_data = request.data.get('items', [])
     
+    logger.debug(f"create_order called by {user.email}")
+    logger.debug(f"Razorpay Key ID: {settings.RAZORPAY_KEY_ID}")
+    
     if not items_data:
+        logger.warning("No items in cart")
         return Response({'error': 'No items in cart'}, status=status.HTTP_400_BAD_REQUEST)
 
     total_amount = 0
@@ -133,6 +141,9 @@ def verify_payment(request):
         'razorpay_payment_id': razorpay_payment_id,
         'razorpay_signature': razorpay_signature
     }
+    
+    logger.debug(f"verify_payment called for Order ID: {razorpay_order_id}")
+    logger.debug(f"Signature: {razorpay_signature}")
 
     # If we are here, PAYMENT DATA is received. 
     # Use atomic transaction to prevent race conditions with Webhook
@@ -156,7 +167,7 @@ def verify_payment(request):
             try:
                 razorpay_client.utility.verify_payment_signature(params_dict)
             except Exception as sig_err:
-                print(f"Signature verification failed: {str(sig_err)}")
+                logger.error(f"Signature verification failed: {str(sig_err)}")
                 return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
 
             # 3. Update status (Only if signature is valid and not already paid)
@@ -178,7 +189,7 @@ def verify_payment(request):
     except Exception as e:
         # 3. SAFETY NET: The transaction rolled back, so DB is clean.
         # But we MUST record that payment happened.
-        print(f"CRITICAL: Payment verified but processing failed: {str(e)}")
+        logger.critical(f"CRITICAL: Payment verified but processing failed: {str(e)}", exc_info=True)
         
         try:
             # Re-fetch the order (Transaction is gone, so this is fresh state)
@@ -191,7 +202,7 @@ def verify_payment(request):
             # We assume 'failed' status implies manual intervention needed for paid orders
             order.save()
         except Exception as save_err:
-            print(f"Double Fault: Could not save error state: {str(save_err)}")
+            logger.critical(f"Double Fault: Could not save error state: {str(save_err)}", exc_info=True)
 
         # Return a specific error so frontend can show "Contact Support"
         return Response({
@@ -242,7 +253,8 @@ def razorpay_webhook(request):
                     
                     # Trigger Fulfillment
                     create_service_requests_from_order(order)
-                    print(f"Webhook: Order {order.id} fulfilled successfully.")
+                    logger.info(f"Webhook: Order {order.id} fulfilled successfully.")
+
 
             except ServiceOrder.DoesNotExist:
                 # This might happen if the webhook belongs to 'consultations' app
@@ -252,5 +264,5 @@ def razorpay_webhook(request):
         return Response({'status': 'Webhook processed'}, status=status.HTTP_200_OK)
         
     except Exception as e:
-        print(f"Webhook error: {str(e)}")
+        logger.error(f"Webhook error: {str(e)}", exc_info=True)
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
