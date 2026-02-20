@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking
+from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking, ConsultationAttachment
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -8,6 +8,80 @@ class TopicSerializer(serializers.ModelSerializer):
     class Meta:
         model = Topic
         fields = ['id', 'name', 'description']
+
+# ... (rest of WeeklyAvailabilitySerializer and DateOverrideSerializer)
+
+class ConsultationAttachmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConsultationAttachment
+        fields = ['id', 'file', 'uploaded_at']
+
+class ConsultationBookingSerializer(serializers.ModelSerializer):
+    consultant_name = serializers.SerializerMethodField()
+    client_name = serializers.SerializerMethodField()
+    topic_name = serializers.CharField(source='topic.name', read_only=True)
+    attachments = ConsultationAttachmentSerializer(many=True, read_only=True)
+    uploaded_attachments = serializers.ListField(
+        child=serializers.FileField(),
+        write_only=True,
+        required=False
+    )
+    
+    class Meta:
+        model = ConsultationBooking
+        fields = [
+            'id', 'consultant', 'consultant_name', 'client', 'client_name',
+            'topic', 'topic_name', 'booking_date', 'start_time', 'end_time',
+            'notes', 'attachments', 'uploaded_attachments', 
+            'status', 'payment_status', 'razorpay_order_id', 
+            'razorpay_payment_id', 'amount', 'meeting_link', 'created_at'
+        ]
+        # Security: Prevent client from setting status, payment_status, or meeting_link
+        read_only_fields = [
+            'client', 'created_at', 'status', 'payment_status', 
+            'razorpay_order_id', 'razorpay_payment_id', 'amount', 'meeting_link'
+        ]
+    
+    def get_consultant_name(self, obj):
+        return f"{obj.consultant.first_name} {obj.consultant.last_name}".strip() or obj.consultant.username
+    
+    def get_client_name(self, obj):
+        return f"{obj.client.first_name} {obj.client.last_name}".strip() or obj.client.username
+
+    def validate(self, data):
+        """
+        Validate that the requested time slot is not already booked.
+        This prevents race conditions where two users book the same slot simultaneously.
+        """
+        consultant = data.get('consultant')
+        booking_date = data.get('booking_date')
+        start_time = data.get('start_time')
+        end_time = data.get('end_time')
+
+        # Check for overlaps with confirmed or pending bookings
+        # We explicitly check for collisions
+        overlapping_bookings = ConsultationBooking.objects.filter(
+            consultant=consultant,
+            booking_date=booking_date,
+            start_time__lt=end_time,
+            end_time__gt=start_time,
+            status__in=['pending', 'confirmed']
+        )
+        
+        if overlapping_bookings.exists():
+            raise serializers.ValidationError("This time slot is already booked. Please choose another time.")
+            
+        return data
+    
+    def create(self, validated_data):
+        uploaded_attachments = validated_data.pop('uploaded_attachments', [])
+        validated_data['client'] = self.context['request'].user
+        booking = super().create(validated_data)
+        
+        for file in uploaded_attachments:
+            ConsultationAttachment.objects.create(booking=booking, file=file)
+            
+        return booking
 
 class WeeklyAvailabilitySerializer(serializers.ModelSerializer):
     start_time = serializers.TimeField(format='%H:%M', input_formats=['%H:%M', '%H:%M:%S'])
@@ -115,56 +189,4 @@ class DateOverrideSerializer(serializers.ModelSerializer):
         validated_data['consultant'] = self.context['request'].user
         return super().create(validated_data)
 
-class ConsultationBookingSerializer(serializers.ModelSerializer):
-    consultant_name = serializers.SerializerMethodField()
-    client_name = serializers.SerializerMethodField()
-    topic_name = serializers.CharField(source='topic.name', read_only=True)
-    
-    class Meta:
-        model = ConsultationBooking
-        fields = [
-            'id', 'consultant', 'consultant_name', 'client', 'client_name',
-            'topic', 'topic_name', 'booking_date', 'start_time', 'end_time',
-            'notes', 'status', 'payment_status', 'razorpay_order_id', 
-            'razorpay_payment_id', 'amount', 'meeting_link', 'created_at'
-        ]
-        # Security: Prevent client from setting status, payment_status, or meeting_link
-        read_only_fields = [
-            'client', 'created_at', 'status', 'payment_status', 
-            'razorpay_order_id', 'razorpay_payment_id', 'amount', 'meeting_link'
-        ]
-    
-    def get_consultant_name(self, obj):
-        return f"{obj.consultant.first_name} {obj.consultant.last_name}".strip() or obj.consultant.username
-    
-    def get_client_name(self, obj):
-        return f"{obj.client.first_name} {obj.client.last_name}".strip() or obj.client.username
 
-    def validate(self, data):
-        """
-        Validate that the requested time slot is not already booked.
-        This prevents race conditions where two users book the same slot simultaneously.
-        """
-        consultant = data.get('consultant')
-        booking_date = data.get('booking_date')
-        start_time = data.get('start_time')
-        end_time = data.get('end_time')
-
-        # Check for overlaps with confirmed or pending bookings
-        # We explicitly check for collisions
-        overlapping_bookings = ConsultationBooking.objects.filter(
-            consultant=consultant,
-            booking_date=booking_date,
-            start_time__lt=end_time,
-            end_time__gt=start_time,
-            status__in=['pending', 'confirmed']
-        )
-        
-        if overlapping_bookings.exists():
-            raise serializers.ValidationError("This time slot is already booked. Please choose another time.")
-            
-        return data
-    
-    def create(self, validated_data):
-        validated_data['client'] = self.context['request'].user
-        return super().create(validated_data)

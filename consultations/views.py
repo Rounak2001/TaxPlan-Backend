@@ -1,6 +1,7 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.contrib.auth import get_user_model
 from datetime import datetime, time, timedelta
 from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking
@@ -11,15 +12,18 @@ from .serializers import (
 )
 from .utils import trigger_recording_bot
 from .google_meet import GoogleMeetService
-
 import razorpay
 from django.conf import settings
 from django.db import transaction
+import logging
 
 User = get_user_model()
 
 # Initialize Razorpay client
 razorpay_client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+logger = logging.getLogger('consultations')
+
 
 class WeeklyAvailabilityViewSet(viewsets.ModelViewSet):
     serializer_class = WeeklyAvailabilitySerializer
@@ -56,19 +60,20 @@ def process_booking_confirmation(booking):
                     booking.meeting_link = meet_link
                     booking.save(update_fields=['meeting_link'])
             except Exception as meet_err:
-                print(f"Failed to generate Google Meet link: {meet_err}")
+                logger.error(f"Failed to generate Google Meet link: {meet_err}")
 
         # Send confirmation email
         if not booking.confirmation_sent:
             send_booking_confirmation(booking)
             
     except Exception as e:
-        print(f"Error in background booking processing: {e}")
+        logger.error(f"Error in background booking processing: {e}")
 
 class ConsultationBookingViewSet(viewsets.GenericViewSet, 
                                  viewsets.mixins.CreateModelMixin,
                                  viewsets.mixins.ListModelMixin,
                                  viewsets.mixins.RetrieveModelMixin):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     serializer_class = ConsultationBookingSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -79,6 +84,7 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
         return ConsultationBooking.objects.filter(client=user)
 
     def create(self, request, *args, **kwargs):
+        logger.debug(f"ConsultationBookingViewSet.create called by {request.user.email}")
         response = super().create(request, *args, **kwargs)
         if response.status_code == status.HTTP_201_CREATED:
             # Add Razorpay Key ID for the frontend to initialize checkout
@@ -110,7 +116,7 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
             booking.razorpay_order_id = razorpay_order['id']
             booking.save(update_fields=['razorpay_order_id'])
         except Exception as e:
-            print(f"Failed to create Razorpay order: {str(e)}")
+            logger.error(f"Failed to create Razorpay order: {str(e)}", exc_info=True)
             # We still keep the booking as pending, but it won't have an order ID for checkout
 
     @action(detail=True, methods=['post'])
@@ -126,18 +132,27 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
             'razorpay_signature': razorpay_signature
         }
 
-        # 1. Verify signature first
-        try:
-            razorpay_client.utility.verify_payment_signature(params_dict)
-        except Exception as sig_err:
-            print(f"Signature verification failed: {str(sig_err)}")
-            booking.payment_status = 'failed'
-            booking.save(update_fields=['payment_status'])
-            return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 2. If we are here, PAYMENT IS VERIFIED.
+        # 1. Atomic Transaction to prevent race conditions with Webhook
         try:
             with transaction.atomic():
+                # Lock the booking row
+                booking = ConsultationBooking.objects.select_for_update().get(pk=booking.pk)
+                
+                # Check if Webhook already processed this
+                if booking.payment_status == 'paid':
+                    return Response({'status': 'Payment already verified (via webhook)', 'booking_id': booking.id})
+
+                # 2. Verify signature
+                try:
+                    razorpay_client.utility.verify_payment_signature(params_dict)
+                except Exception as sig_err:
+                    logger.error(f"Signature verification failed: {str(sig_err)}")
+                    # INDUSTRY STANDARD: Do NOT mark as 'failed' here.  
+                    # The frontend check might fail for many reasons (network, duplicate, etc.)
+                    # We only mark as failed if we receive an explicit 'payment.failed' webhook.
+                    return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
+
+                # 3. Update status
                 booking.payment_status = 'paid'
                 booking.status = 'confirmed'
                 booking.razorpay_payment_id = razorpay_payment_id
@@ -151,7 +166,7 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
 
         except Exception as e:
             # 3. SAFETY NET: Payment was verified but DB save failed.
-            print(f"CRITICAL: Payment verified but booking update failed: {str(e)}")
+            logger.critical(f"CRITICAL: Payment verified but booking update failed: {str(e)}", exc_info=True)
             try:
                 booking.refresh_from_db()
                 booking.payment_status = 'failed'
@@ -159,7 +174,7 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
                 booking.razorpay_signature = razorpay_signature
                 booking.save()
             except Exception as save_err:
-                print(f"Double Fault: Could not save error state: {str(save_err)}")
+                logger.critical(f"Double Fault: Could not save error state: {str(save_err)}", exc_info=True)
 
             return Response({
                 'error': 'Payment received but booking update failed. Please contact support.',
@@ -297,17 +312,17 @@ def razorpay_webhook(request):
                                 booking.meeting_link = meet_link
                                 booking.save(update_fields=['meeting_link'])
                         except Exception as meet_err:
-                            print(f"Webhook error generating link: {meet_err}")
+                            logger.error(f"Webhook error generating link: {meet_err}")
 
                     if not booking.confirmation_sent:
                         booking.refresh_from_db() # Ensure we have latest data
                         threading.Thread(target=process_booking_confirmation, args=(booking,)).start()
             except ConsultationBooking.DoesNotExist:
-                print(f"Webhook received for unknown order: {razorpay_order_id}")
+                logger.warning(f"Webhook received for unknown order: {razorpay_order_id}")
                 
         return Response({'status': 'Webhook processed'}, status=status.HTTP_200_OK)
     except Exception as e:
-        print(f"Webhook verification failed: {str(e)}")
+        logger.error(f"Webhook verification failed: {str(e)}", exc_info=True)
         # Return 200 even on error to stop Razorpay from retrying uselessly if sig is wrong
         return Response({'status': 'Invalid signature ignored'}, status=status.HTTP_200_OK)
 

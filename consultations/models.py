@@ -91,6 +91,7 @@ class ConsultationBooking(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     notes = models.TextField(blank=True, help_text="Client's query or meeting details")
+    # attachment field removed in favor of ConsultationAttachment model
     
     # Payment fields
     PAYMENT_STATUS_CHOICES = [
@@ -123,3 +124,11 @@ class ConsultationBooking(models.Model):
 
     def __str__(self):
         return f"{self.client.username} → {self.consultant.username} on {self.booking_date} ({self.start_time}-{self.end_time})"
+
+class ConsultationAttachment(models.Model):
+    booking = models.ForeignKey(ConsultationBooking, on_delete=models.CASCADE, related_name='attachments')
+    file = models.FileField(upload_to='consultation_attachments/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Attachment for booking {self.booking.id}"
