@@ -189,3 +189,26 @@ SIMPLE_JWT = {
 #         'LOCATION': os.environ['REDIS_URL'],
 #     }
 # }
+
+# =============================================================================
+# SENTRY ERROR TRACKING (PRODUCTION EXCLUSIVE)
+# =============================================================================
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn=os.environ.get('SENTRY_DSN', "https://cfb32d532836b45e114e94bd361c8c37@o4510925533741056.ingest.us.sentry.io/4510925550583808"),
+    
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for performance monitoring.
+    traces_sample_rate=1.0,
+    
+    # Set profiles_sample_rate to 1.0 to profile 100%
+    # of sampled transactions.
+    profiles_sample_rate=1.0,
+
+    # Send PII (like User IP/Cookies) to Sentry to help debug issues
+    send_default_pii=True,
+    
+    # Ensure it's tagged to the production environment
+    environment="production"
+)

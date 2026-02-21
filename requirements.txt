@@ -80,3 +80,4 @@ uritemplate==4.2.0
 urllib3==2.6.3
 websockets==15.0.1
 zope.interface==8.2
+sentry-sdk==2.53.0
