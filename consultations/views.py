@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.db.models import Q
 from datetime import datetime, time, timedelta
 from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking
 from .emails import send_booking_confirmation, send_booking_reschedule
@@ -537,12 +538,16 @@ def consultant_slots(request):
             slot_end = (current_time + timedelta(minutes=30)).time()
             
             # Check if this slot is already booked
+            # Only count 'pending' bookings if they are less than 15 minutes old (otherwise they are abandoned)
+            expiration_time = timezone.now() - timedelta(minutes=15)
             is_booked = ConsultationBooking.objects.filter(
                 consultant=consultant,
                 booking_date=date_obj,
                 start_time__lt=slot_end,
-                end_time__gt=slot_start,
-                status__in=['pending', 'confirmed']
+                end_time__gt=slot_start
+            ).filter(
+                Q(status='confirmed') | 
+                Q(status='pending', created_at__gt=expiration_time)
             ).exists()
             
             time_slots.append({
@@ -629,12 +634,16 @@ def available_consultants(request):
                 continue
 
         # Check if slot is already booked
+        # Only count 'pending' bookings if they are less than 15 minutes old
+        expiration_time = timezone.now() - timedelta(minutes=15)
         existing_booking = ConsultationBooking.objects.filter(
             consultant=consultant,
             booking_date=date_obj,
             start_time__lt=end_time_obj,
-            end_time__gt=start_time_obj,
-            status__in=['pending', 'confirmed']
+            end_time__gt=start_time_obj
+        ).filter(
+            Q(status='confirmed') |
+            Q(status='pending', created_at__gt=expiration_time)
         ).exists()
 
         if existing_booking:
