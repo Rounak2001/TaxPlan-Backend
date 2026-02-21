@@ -1,0 +1,20 @@
+{% if recipient_type == 'consultant' %}Hi {{ consultant_name }},
+
+Your consultation on the topic "{{ booking.topic.name }}" with {{ client_name }} has been successfully rescheduled.
+{% else %}Hi {{ client_name }},
+
+Your consultation on the topic "{{ booking.topic.name }}" with {{ consultant_name }} has been successfully rescheduled.{% endif %}
+
+New Meeting Details:
+Date: {{ booking.booking_date }}
+Time: {{ booking.start_time|time:"h:i A" }} - {{ booking.end_time|time:"h:i A" }}
+
+Google Meet Link: {{ booking.meeting_link }}
+
+{% if remaining_reschedules is not none %}
+You have {{ remaining_reschedules }} reschedule(s) remaining for this booking. Note that rescheduling requires at least 1-hour notice prior to the meeting.
+{% endif %}
+
+If you need to reschedule again or cancel, please contact us as soon as possible.
+
+Thank you!

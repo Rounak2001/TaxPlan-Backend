@@ -8,10 +8,10 @@ class ConsultantServiceProfile(models.Model):
     """Extended profile for consultants with service-specific professional details"""
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='consultant_service_profile')
     
-    # Professional details
     qualification = models.CharField(max_length=255, blank=True)
     experience_years = models.IntegerField(default=0)
     certifications = models.TextField(blank=True)  # JSON or comma-separated
+    bio = models.TextField(blank=True, help_text="Short professional biography displayed to clients")
     
     # Consultation fee (moved from core_auth.ConsultantProfile)
     consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.00)

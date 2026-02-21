@@ -145,8 +145,72 @@ def send_booking_confirmation(booking):
         return True
         
     except Exception as e:
-        logger.error(f"Failed to send booking confirmation for booking {booking.id}: {str(e)}")
-        return False
+        logger.error(f"Failed to send booking confirmation email: {str(e)}", exc_info=True)
+
+
+def send_booking_reschedule(booking):
+    """
+    Send booking reschedule email to both client and consultant.
+    """
+    try:
+        remaining_reschedules = max(0, 3 - booking.reschedule_count)
+        
+        context = {
+            'booking': booking,
+            'remaining_reschedules': remaining_reschedules,
+            'client_name': booking.client.get_full_name() or booking.client.username,
+            'consultant_name': booking.consultant.get_full_name() or booking.consultant.username,
+        }
+        
+        # 1. Email to Client
+        client_subject = f"Rescheduled: Consultation with {booking.consultant.get_full_name() or booking.consultant.username}"
+        client_html = render_to_string('emails/booking_reschedule.html', context | {'recipient_type': 'client'})
+        client_text = render_to_string('emails/booking_reschedule.txt', context | {'recipient_type': 'client'})
+        
+        client_msg = EmailMultiAlternatives(
+            subject=client_subject,
+            body=client_text,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[booking.client.email]
+        )
+        client_msg.attach_alternative(client_html, "text/html")
+        
+        # Generate and attach the updated ICS calendar file
+        ics_data = generate_ics_calendar(booking)
+        if ics_data:
+            client_msg.attach('rescheduled_consultation.ics', ics_data, 'text/calendar')
+            
+        client_msg.send(fail_silently=True)
+        
+        # 2. Email to Consultant
+        consultant_subject = f"Rescheduled: Consultation with {booking.client.get_full_name() or booking.client.username}"
+        consultant_html = render_to_string('emails/booking_reschedule.html', context | {'recipient_type': 'consultant'})
+        consultant_text = render_to_string('emails/booking_reschedule.txt', context | {'recipient_type': 'consultant'})
+        
+        consultant_msg = EmailMultiAlternatives(
+            subject=consultant_subject,
+            body=consultant_text,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[booking.consultant.email]
+        )
+        consultant_msg.attach_alternative(consultant_html, "text/html")
+        
+        if ics_data:
+            consultant_msg.attach('rescheduled_consultation.ics', ics_data, 'text/calendar')
+            
+        # Attach uploaded files to consultant email
+        for attachment in booking.attachments.all():
+            try:
+                consultant_msg.attach_file(attachment.file.path)
+            except Exception as e:
+                logger.error(f"Failed to attach file {attachment.id} to consultant reschedule email: {str(e)}")
+            
+        consultant_msg.send(fail_silently=True)
+        
+        logger.info(f"Reschedule emails sent for booking {booking.id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to send booking reschedule email: {str(e)}", exc_info=True)
 
 
 def send_booking_reminder(booking):

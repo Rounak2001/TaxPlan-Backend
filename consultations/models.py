@@ -116,6 +116,9 @@ class ConsultationBooking(models.Model):
     meeting_link = models.URLField(max_length=500, blank=True, null=True, help_text="Google Meet meeting link")
     bot_triggered = models.BooleanField(default=False, help_text="Whether the recording bot was launched")
     bot_recorded = models.BooleanField(default=False, help_text="Whether the recording was successfully started")
+    # Rescheduling fields
+    reschedule_count = models.IntegerField(default=0, help_text="Number of times this booking has been rescheduled")
+    reschedule_history = models.JSONField(default=list, blank=True, help_text="History of previous dates and times")
     
     created_at = models.DateTimeField(auto_now_add=True)
 

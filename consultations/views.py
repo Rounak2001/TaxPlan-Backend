@@ -3,9 +3,10 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from datetime import datetime, time, timedelta
 from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking
-from .emails import send_booking_confirmation
+from .emails import send_booking_confirmation, send_booking_reschedule
 from .serializers import (
     TopicSerializer, WeeklyAvailabilitySerializer, DateOverrideSerializer,
     ConsultationBookingSerializer
@@ -15,7 +16,10 @@ from .google_meet import GoogleMeetService
 import razorpay
 from django.conf import settings
 from django.db import transaction
+import threading
 import logging
+from notifications.signals import create_and_push_notification
+from notifications.whatsapp_service import send_whatsapp_template
 
 User = get_user_model()
 
@@ -85,11 +89,17 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
 
     def create(self, request, *args, **kwargs):
         logger.debug(f"ConsultationBookingViewSet.create called by {request.user.email}")
-        response = super().create(request, *args, **kwargs)
-        if response.status_code == status.HTTP_201_CREATED:
-            # Add Razorpay Key ID for the frontend to initialize checkout
-            response.data['razorpay_key_id'] = settings.RAZORPAY_KEY_ID
-        return response
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            logger.error(f"Booking validation failed: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        response_data = serializer.data
+        # Add Razorpay Key ID for the frontend to initialize checkout
+        response_data['razorpay_key_id'] = settings.RAZORPAY_KEY_ID
+        return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         # Default status is 'pending' from model
@@ -193,6 +203,138 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
         else:
             return Response({'error': 'Failed to trigger recording bot'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=['post'])
+    def reschedule(self, request, pk=None):
+        booking = self.get_object()
+        user = request.user
+        
+        # Ensure user is part of the booking
+        if user not in [booking.client, booking.consultant]:
+            return Response({'error': 'Not authorized to reschedule this booking.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        # 1. Validate Reschedule Count (Max 3)
+        if booking.reschedule_count >= 3:
+            return Response({'error': 'Maximum number of reschedules (3) has been reached.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # 2. Validate Time Constraint (At least 1 hour before current start time)
+        # Assuming booking.booking_date and booking.start_time are in IST
+        ist = timezone.get_current_timezone()
+        meeting_naive = datetime.combine(booking.booking_date, booking.start_time)
+        meeting_aware = timezone.make_aware(meeting_naive)
+        
+        # Get current time
+        now = timezone.now()
+        
+        if (meeting_aware - now).total_seconds() < 3600:
+            return Response({'error': 'Rescheduling is only allowed at least 1 hour before the meeting.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Extract new time slot
+        new_date_str = request.data.get('booking_date')
+        new_start_time_str = request.data.get('start_time')
+        new_end_time_str = request.data.get('end_time')
+        
+        if not all([new_date_str, new_start_time_str, new_end_time_str]):
+            return Response({'error': 'booking_date, start_time, and end_time are required.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            new_date = datetime.strptime(new_date_str, '%Y-%m-%d').date()
+            new_start_time = datetime.strptime(new_start_time_str, '%H:%M').time()
+            new_end_time = datetime.strptime(new_end_time_str, '%H:%M').time()
+        except ValueError:
+            return Response({'error': 'Invalid date or time format.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if new_start_time >= new_end_time:
+            return Response({'error': 'Start time must be before end time.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 3. Validate Overlap - same as in serializer
+        overlapping_bookings = ConsultationBooking.objects.filter(
+            consultant=booking.consultant,
+            booking_date=new_date,
+            start_time__lt=new_end_time,
+            end_time__gt=new_start_time,
+            status__in=['pending', 'confirmed']
+        ).exclude(pk=booking.pk)
+        
+        if overlapping_bookings.exists():
+            return Response({'error': 'This new time slot is already booked or overlaps with an existing booking.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Proceed with Reschedule
+        try:
+            with transaction.atomic():
+                # Store old details in history
+                old_details = {
+                    'date': booking.booking_date.strftime('%Y-%m-%d'),
+                    'start_time': booking.start_time.strftime('%H:%M'),
+                    'end_time': booking.end_time.strftime('%H:%M'),
+                    'meeting_link': booking.meeting_link,
+                    'rescheduled_at': now.isoformat()
+                }
+                
+                new_history = list(booking.reschedule_history) if isinstance(booking.reschedule_history, list) else []
+                new_history.append(old_details)
+                
+                # Update booking
+                booking.booking_date = new_date
+                booking.start_time = new_start_time
+                booking.end_time = new_end_time
+                booking.reschedule_count += 1
+                booking.reschedule_history = new_history
+                
+                # Regenerate Meet Link
+                try:
+                    service = GoogleMeetService()
+                    meet_link = service.create_meeting(booking)
+                    if meet_link:
+                        booking.meeting_link = meet_link
+                except Exception as meet_err:
+                    logger.error(f"Failed to generate new Meet link for reschedule: {meet_err}")
+                
+                booking.save()
+                
+            # Send Notification Async (in thread)
+            def _send_notifications():
+                send_booking_reschedule(booking)
+                
+                create_and_push_notification(
+                    recipient=booking.client,
+                    category='consultation',
+                    title="Consultation Rescheduled 🗓️",
+                    message=f"Your consultation with {booking.consultant.get_full_name() or booking.consultant.username} was rescheduled to {new_date.strftime('%d %b %Y')} at {new_start_time.strftime('%I:%M %p')}.",
+                    link="/client/meetings",
+                )
+                create_and_push_notification(
+                    recipient=booking.consultant,
+                    category='consultation',
+                    title="Consultation Rescheduled 🗓️",
+                    message=f"Consultation with {booking.client.get_full_name() or booking.client.username} was rescheduled to {new_date.strftime('%d %b %Y')} at {new_start_time.strftime('%I:%M %p')}.",
+                    link="/consultations",
+                )
+                
+                # WhatsApp Notification (Client only)
+                if getattr(booking.client, 'phone_number', None):
+                    send_whatsapp_template(
+                        phone_number=booking.client.phone_number,
+                        template_name="consultation_status_update",
+                        variables=[
+                            booking.client.first_name or booking.client.username,
+                            booking.consultant.get_full_name() or booking.consultant.username,
+                            new_date.strftime('%d %b %Y'),
+                            new_start_time.strftime('%I:%M %p'),
+                            "Rescheduled"
+                        ]
+                    )
+
+            threading.Thread(target=_send_notifications).start()
+                
+            return Response({
+                'status': 'Booking successfully rescheduled.',
+                'booking': ConsultationBookingSerializer(booking).data
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Reschedule failed: {str(e)}", exc_info=True)
+            return Response({'error': 'An error occurred while rescheduling.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def consultants_by_date(request):
@@ -254,13 +396,17 @@ def consultants_by_date(request):
                 has_availability = True
 
         if has_availability:
+            profile = getattr(consultant, 'consultant_service_profile', None)
             available_consultants.append({
                 'id': consultant.id,
                 'username': consultant.username,
                 'first_name': consultant.first_name,
                 'last_name': consultant.last_name,
                 'email': consultant.email,
-                'consultation_fee': getattr(getattr(consultant, 'consultant_service_profile', None), 'consultation_fee', 200.00),
+                'bio': profile.bio if profile else '',
+                'qualification': profile.qualification if profile else '',
+                'experience_years': profile.experience_years if profile else 0,
+                'consultation_fee': str(profile.consultation_fee) if profile else '200.00',
             })
 
     return Response({'consultants': available_consultants})
@@ -495,12 +641,19 @@ def available_consultants(request):
             continue
 
         # Add consultant to available list
+        # Fetch the service profile to get extended details
+        profile = getattr(consultant, 'consultant_service_profile', None)
+        
         available_consultants.append({
             'id': consultant.id,
             'username': consultant.username,
             'first_name': consultant.first_name,
             'last_name': consultant.last_name,
             'email': consultant.email,
+            'bio': profile.bio if profile else '',
+            'qualification': profile.qualification if profile else '',
+            'experience_years': profile.experience_years if profile else 0,
+            'consultation_fee': str(profile.consultation_fee) if profile else '0.00',
         })
 
     return Response({'consultants': available_consultants})

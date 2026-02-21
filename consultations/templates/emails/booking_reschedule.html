@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .details {
+            background-color: #ffffff;
+            padding: 15px;
+            border-left: 4px solid #007bff;
+            margin-bottom: 20px;
+        }
+
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+
+        .footer {
+            margin-top: 30px;
+            font-size: 0.9em;
+            color: #666;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Consultation Rescheduled</h2>
+            {% if recipient_type == 'consultant' %}
+            <p>Hi {{ consultant_name }},</p>
+            <p>Your consultation on the topic "<strong>{{ booking.topic.name }}</strong>" with {{ client_name }} has
+                been successfully rescheduled.</p>
+            {% else %}
+            <p>Hi {{ client_name }},</p>
+            <p>Your consultation on the topic "<strong>{{ booking.topic.name }}</strong>" with {{ consultant_name }} has
+                been successfully rescheduled.</p>
+            {% endif %}
+        </div>
+
+        <div class="details">
+            <h3>New Meeting Details:</h3>
+            <p><strong>Date:</strong> {{ booking.booking_date }}</p>
+            <p><strong>Time:</strong> {{ booking.start_time|time:"h:i A" }} - {{ booking.end_time|time:"h:i A" }}</p>
+
+            <p style="margin-top: 20px;">
+                <a href="{{ booking.meeting_link }}" class="button">Join Google Meet</a>
+            </p>
+            <p>Or use this link: {{ booking.meeting_link }}</p>
+        </div>
+
+        {% if remaining_reschedules is not none %}
+        <p>You have {{ remaining_reschedules }} reschedule(s) remaining for this booking. Note that rescheduling
+            requires at least 1-hour notice prior to the meeting.</p>
+        {% endif %}
+
+        <p>If you need to reschedule again or cancel, please contact us as soon as possible.</p>
+
+        <div class="footer">
+            <p>Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -1,5 +1,5 @@
 import logging
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -261,6 +261,18 @@ def notify_service_activity(sender, instance, created, **kwargs):
 # 3. CONSULTATION BOOKING EVENTS
 # =====================================================================
 
+@receiver(pre_save, sender=ConsultationBooking)
+def cache_old_booking_status(sender, instance, **kwargs):
+    """Cache the old status before saving to detect actual changes in post_save."""
+    if instance.pk:
+        try:
+            old_instance = ConsultationBooking.objects.get(pk=instance.pk)
+            instance._old_status = old_instance.status
+        except ConsultationBooking.DoesNotExist:
+            instance._old_status = None
+    else:
+        instance._old_status = None
+
 @receiver(post_save, sender=ConsultationBooking)
 def notify_consultation_activity(sender, instance, created, **kwargs):
     """
@@ -288,7 +300,14 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                 message=f"Your consultation on {instance.booking_date.strftime('%d %b %Y')} is pending confirmation.",
                 link="/client/consultations",
             )
-        else:
+            
+            # For created instance, we don't need to check old status. Wait for confirmation.
+            return
+
+        # We need to detect if the status *just* changed
+        old_status = getattr(instance, '_old_status', None)
+        
+        if old_status != instance.status:
             # Status update
             if instance.status == 'confirmed':
                 create_and_push_notification(
