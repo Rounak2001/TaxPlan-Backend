@@ -231,7 +231,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
             
         serializer = DocumentUploadSerializer(document, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save(status='UPLOADED', uploaded_at=timezone.now())
+            # Explicitly handle file_password if provided
+            file_password = request.data.get('file_password')
+            serializer.save(
+                status='UPLOADED', 
+                uploaded_at=timezone.now(),
+                file_password=file_password if file_password else document.file_password
+            )
             return Response(DocumentSerializer(document, context={'request': request}).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
