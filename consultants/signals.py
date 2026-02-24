@@ -1,6 +1,7 @@
 from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
-from .models import ClientServiceRequest, ConsultantServiceExpertise
+from django.db.models import Avg
+from .models import ClientServiceRequest, ConsultantServiceExpertise, ConsultantReview
 from core_auth.models import ClientProfile
 
 
@@ -398,3 +399,30 @@ def auto_progress_to_review(sender, instance, created, **kwargs):
         req.status = 'final_review'
         req.save()
         print(f"✅ [Signal] Auto-moved service '{req.service.title}' to Final Review due to report upload.")
+
+
+def update_consultant_rating(consultant_profile):
+    """Recalculate average rating and total reviews for a consultant"""
+    reviews = ConsultantReview.objects.filter(consultant=consultant_profile)
+    total_reviews = reviews.count()
+    
+    if total_reviews > 0:
+        avg_rating = reviews.aggregate(Avg('rating'))['rating__avg']
+        consultant_profile.average_rating = round(avg_rating, 2)
+        consultant_profile.total_reviews = total_reviews
+    else:
+        consultant_profile.average_rating = 0.00
+        consultant_profile.total_reviews = 0
+        
+    consultant_profile.save()
+
+@receiver(post_save, sender=ConsultantReview)
+def calculate_rating_on_review_save(sender, instance, created, **kwargs):
+    """Update consultant rating when a review is created or updated"""
+    update_consultant_rating(instance.consultant)
+
+@receiver(post_delete, sender=ConsultantReview)
+def calculate_rating_on_review_delete(sender, instance, **kwargs):
+    """Update consultant rating when a review is deleted"""
+    update_consultant_rating(instance.consultant)
+

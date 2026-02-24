@@ -8,7 +8,8 @@ from .models import (
     ServiceCategory,
     Service,
     ConsultantServiceExpertise,
-    ClientServiceRequest
+    ClientServiceRequest,
+    ConsultantReview
 )
 from .serializers import (
     ConsultantServiceProfileSerializer,
@@ -16,7 +17,8 @@ from .serializers import (
     ServiceSerializer,
     ConsultantServiceExpertiseSerializer,
     ClientServiceRequestSerializer,
-    ConsultantDashboardSerializer
+    ConsultantDashboardSerializer,
+    ConsultantReviewSerializer
 )
 from .services import assign_consultant_to_request, complete_service_request
 
@@ -601,3 +603,43 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
             'message': 'Revision requested. Consultant will be notified.',
             'request': ClientServiceRequestSerializer(service_request).data
         })
+
+class ConsultantReviewViewSet(viewsets.ModelViewSet):
+    """API endpoint for client reviews (Feedback & Review)"""
+    queryset = ConsultantReview.objects.all()
+    serializer_class = ConsultantReviewSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'CLIENT':
+            return ConsultantReview.objects.filter(client=user)
+        elif user.role == 'CONSULTANT':
+            try:
+                return ConsultantReview.objects.filter(consultant=user.consultant_service_profile)
+            except ConsultantServiceProfile.DoesNotExist:
+                return ConsultantReview.objects.none()
+        return super().get_queryset()
+
+    def perform_create(self, serializer):
+        from rest_framework import serializers
+        service_request = serializer.validated_data.get('service_request')
+        
+        print(f"[REVIEW] Creating review for service_request={service_request.id}, status={service_request.status}, client={service_request.client}, user={self.request.user}")
+        
+        # Validation checks
+        if service_request.client != self.request.user:
+            raise serializers.ValidationError({"error": "You can only review your own service requests."})
+            
+        if service_request.status not in ('completed', 'final_review', 'filed'):
+            raise serializers.ValidationError({"error": f"You can only review a completed service request. Current status: {service_request.status}"})
+            
+        # Ensure review doesn't already exist for this request
+        if ConsultantReview.objects.filter(service_request=service_request).exists():
+            raise serializers.ValidationError({"error": "A review already exists for this service request."})
+            
+        consultant = service_request.assigned_consultant
+        if not consultant:
+            raise serializers.ValidationError({"error": "No consultant was assigned to this service request."})
+            
+        serializer.save(client=self.request.user, consultant=consultant)

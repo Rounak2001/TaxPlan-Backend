@@ -5,7 +5,8 @@ from .views import (
     ServiceViewSet,
     ConsultantServiceProfileViewSet,
     ConsultantServiceExpertiseViewSet,
-    ClientServiceRequestViewSet
+    ClientServiceRequestViewSet,
+    ConsultantReviewViewSet
 )
 
 router = DefaultRouter()
@@ -14,6 +15,7 @@ router.register(r'services', ServiceViewSet, basename='service')
 router.register(r'consultant-profiles', ConsultantServiceProfileViewSet, basename='consultant-profile')
 router.register(r'expertise', ConsultantServiceExpertiseViewSet, basename='consultant-expertise')
 router.register(r'requests', ClientServiceRequestViewSet, basename='service-request')
+router.register(r'reviews', ConsultantReviewViewSet, basename='consultant-review')
 
 urlpatterns = [
     path('', include(router.urls)),

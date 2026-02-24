@@ -22,6 +22,10 @@ class ConsultantServiceProfile(models.Model):
     current_client_count = models.IntegerField(default=0)
     last_assigned_at = models.DateTimeField(null=True, blank=True)
     
+    # Ratings & Reviews
+    average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00, help_text="Average rating from 1 to 5")
+    total_reviews = models.IntegerField(default=0)
+    
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -150,3 +154,24 @@ User, on_delete=models.CASCADE, related_name='service_requests')
     
     def __str__(self):
         return f"{self.client.email} - {self.service.title} ({self.status})"
+
+
+class ConsultantReview(models.Model):
+    """Stores client reviews for a completed service"""
+    consultant = models.ForeignKey(ConsultantServiceProfile, on_delete=models.CASCADE, related_name='reviews')
+    client = models.ForeignKey(User, on_delete=models.CASCADE, related_name='consultant_reviews')
+    service_request = models.OneToOneField(ClientServiceRequest, on_delete=models.CASCADE, related_name='review')
+    
+    rating = models.IntegerField(choices=[(i, i) for i in range(1, 6)], help_text="Rating from 1 to 5")
+    review_text = models.TextField(blank=True, help_text="Optional text review from the client")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ['client', 'service_request']
+        
+    def __str__(self):
+        return f"Review by {self.client.email} for {self.consultant.full_name} ({self.rating} stars)"
+
