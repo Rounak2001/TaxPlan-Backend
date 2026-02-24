@@ -98,18 +98,64 @@ def sync_consultant_to_client_profile(sender, instance, created, **kwargs):
 def create_pending_document_requests(sender, instance, **kwargs):
     """
     Automatically synchronize pending document requests in the client's vault
-    with the service's requirements.
+    with the service's requirements. Each document is auto-routed into the
+    correct system folder based on its name.
     """
-    from document_vault.models import Document
+    from document_vault.models import Document, Folder
+    from document_vault.views import create_system_folders
     import re
-    
+
     # Only process if service is active/non-terminal
     if instance.status in ['completed', 'cancelled', 'pending']:
         return
 
     client = instance.client
     service = instance.service
-    
+
+    # Ensure all system folders exist for this client up front
+    create_system_folders(client)
+
+    # =========================================================================
+    # Keyword → Folder Mapping
+    # Based on the predefined document list in seed_services.py
+    # =========================================================================
+    FOLDER_KEYWORDS = {
+        "KYC": [
+            "pan", "aadhaar", "passport", "photo", "id proof", "address proof",
+            "director details", "kyc", "partner details", "nominee details",
+            "trustees list", "members list", "identity", "founders",
+        ],
+        "Bank Details": [
+            "bank statement", "bank proof", "bank details", "cheque",
+            "transaction documents", "investment proofs", "foreign assets",
+            "contribution data", "esi contribution", "payment register",
+        ],
+        "GST Details": [
+            "gst", "gstr", "sales/purchase invoice", "purchase invoice",
+            "sales invoice", "closing stock", "cancellation order",
+            "pending return", "trc", "tax residency", "remittee",
+            "annual financials", "gstr data",
+        ],
+        "Company Docs": [
+            "certificate of incorporation", "coi", "moa", "aoa",
+            "partnership deed", "llp agreement", "trust deed", "board resolution",
+            "audited", "balance sheet", "profit & loss", "p&l",
+            "audit report", "form 16", "salary slip", "salary register",
+            "itr", "income tax return", "form 26as", "digital signature", "dsc",
+            "valuation certificate", "fc-gpr", "prospectus", "ecr",
+            "employee list", "deductee list", "tds challan",
+        ],
+    }
+
+    def get_folder_for_document(title: str) -> Folder | None:
+        """Return the matching system Folder object for a document title."""
+        title_lower = title.lower()
+        for folder_name, keywords in FOLDER_KEYWORDS.items():
+            for kw in keywords:
+                if kw in title_lower:
+                    return Folder.objects.filter(client=client, name=folder_name).first()
+        return None  # Falls back to vault root (no folder)
+
     # 1. Parse current requirements from the service definition
     required_list = []
     if service.documents_required:
@@ -118,17 +164,15 @@ def create_pending_document_requests(sender, instance, **kwargs):
             title = re.sub(r'^[ \-\•\*\d\.]+', '', doc).strip()
             if title and len(title) > 1:
                 required_list.append(title)
-    
+
     # 2. Get existing PENDING documents for this service/client
-    # We match by description which contains the service title
     existing_pending = Document.objects.filter(
-        client=client, 
+        client=client,
         status='PENDING',
         description__icontains=service.title
     )
-    
+
     # 3. Delete PENDING documents that are no longer in the required list
-    # This cleans up old/outdated requirements if the service definition changed
     required_titles_lower = [t.lower() for t in required_list]
     for doc in existing_pending:
         if doc.title.lower() not in required_titles_lower:
@@ -137,27 +181,34 @@ def create_pending_document_requests(sender, instance, **kwargs):
 
     # 4. Add/Link missing requirements
     for doc_title in required_list:
-        # Check if it exists in any status (avoid duplicate titles)
+        target_folder = get_folder_for_document(doc_title)
+
         doc = Document.objects.filter(
-            client=client, 
+            client=client,
             title__iexact=doc_title
         ).first()
-        
+
         link_metadata = f"Required for {service.title}"
-        
+
         if not doc:
             Document.objects.create(
                 client=client,
                 consultant=instance.assigned_consultant.user if instance.assigned_consultant else None,
                 title=doc_title,
                 description=link_metadata,
-                status='PENDING'
+                status='PENDING',
+                folder=target_folder,
             )
-            print(f"[Sync] Added missing requirement: {doc_title}")
+            folder_name = target_folder.name if target_folder else "Root"
+            print(f"[Sync] Added '{doc_title}' → Folder: {folder_name}")
         else:
-            # Document exists. Ensure it has the service link in description for auto-progression logic.
             needs_save = False
-            
+
+            # Update folder if not already set correctly
+            if doc.folder != target_folder:
+                doc.folder = target_folder
+                needs_save = True
+
             if not doc.description or link_metadata not in doc.description:
                 if doc.description:
                     doc.description = f"{doc.description} | {link_metadata}"
@@ -165,14 +216,14 @@ def create_pending_document_requests(sender, instance, **kwargs):
                     doc.description = link_metadata
                 needs_save = True
                 print(f"[Sync] Linked existing document '{doc.title}' to service '{service.title}' metadata.")
-            
-            # If it's a PENDING request but consultant is not set, update it
+
             if doc.status == 'PENDING' and not doc.consultant and instance.assigned_consultant:
                 doc.consultant = instance.assigned_consultant.user
                 needs_save = True
-                
+
             if needs_save:
                 doc.save()
+
 
 
 @receiver(post_save, sender=ClientServiceRequest)
