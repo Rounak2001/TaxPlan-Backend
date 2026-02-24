@@ -623,6 +623,104 @@ class RefreshCallDetailsView(APIView):
             }
 
 
+def _get_client_and_consultants(caller_phone_raw, logger=None):
+    """
+    Given a raw phone number from Exotel, find the client and their active consultants.
+    Returns: (client, consultants_list)
+    where consultants_list is a list of dicts: 
+    [{'digit': '1', 'consultant': UserObj, 'services': ['GST', 'ITR']}, ...]
+    """
+    import logging
+    import re
+    from consultants.models import ClientServiceRequest
+    
+    if logger is None:
+        logger = logging.getLogger('exotel_incoming')
+        
+    # Normalize phone number
+    caller_phone = re.sub(r'[^\d]', '', caller_phone_raw)
+    if caller_phone.startswith('91') and len(caller_phone) > 10:
+        caller_phone = caller_phone[2:]
+    elif caller_phone.startswith('0') and len(caller_phone) > 10:
+        caller_phone = caller_phone[1:]
+        
+    phone_variants = [
+        caller_phone,
+        f"+91{caller_phone}",
+        f"91{caller_phone}",
+        f"0{caller_phone}",
+    ]
+    
+    client = None
+    for variant in phone_variants:
+        client = User.objects.filter(phone_number=variant, role=User.CLIENT).first()
+        if client:
+            break
+            
+    if not client:
+        client = User.objects.filter(phone_number__icontains=caller_phone, role=User.CLIENT).first()
+        
+    if not client:
+        logger.info(f"Helper: No client found for phone variants {phone_variants}")
+        return None, []
+        
+    logger.info(f"Helper: Found client {client.id} - {client.get_full_name()}")
+    
+    # Track unique consultants and their services
+    consultants_map = {}
+    
+    # 1. Check primary assigned consultant from ClientProfile
+    primary_consultant_user = None
+    if hasattr(client, 'client_profile') and client.client_profile:
+        primary_consultant_user = client.client_profile.assigned_consultant
+        
+    # 2. Add consultants from active ClientServiceRequests
+    # We include 'pending' as well because the admin might have just assigned them
+    # but the status hasn't moved to 'assigned' yet.
+    active_statuses = list(ClientServiceRequest.ACTIVE_STATUSES) + ['pending']
+    requests = ClientServiceRequest.objects.filter(
+        client=client, 
+        status__in=active_statuses,
+        assigned_consultant__isnull=False
+    ).select_related('assigned_consultant', 'assigned_consultant__user', 'service__category')
+    
+    for req in requests:
+        consultant_user = req.assigned_consultant.user
+        service_name = req.service.category.name if req.service.category else req.service.title
+        
+        if consultant_user.id not in consultants_map:
+            consultants_map[consultant_user.id] = {
+                'consultant': consultant_user,
+                'services': [service_name]
+            }
+        else:
+            if service_name not in consultants_map[consultant_user.id]['services']:
+                consultants_map[consultant_user.id]['services'].append(service_name)
+    
+    # 3. Add primary consultant ONLY if they are NOT already in the map (working on a service)
+    # OR if the map is entirely empty (preventing failure)
+    if primary_consultant_user and primary_consultant_user.id not in consultants_map:
+        consultants_map[primary_consultant_user.id] = {
+            'consultant': primary_consultant_user,
+            'services': ['General Advisory']
+        }
+                
+    # Format list with digits (max 9)
+    consultants_list = []
+    digit = 1
+    for cid, data in consultants_map.items():
+        if digit > 9: break
+        consultants_list.append({
+            'digit': str(digit),
+            'consultant': data['consultant'],
+            'services': data['services']
+        })
+        digit += 1
+        
+    logger.info(f"Helper: Found {len(consultants_list)} active unique consultants for client")
+    return client, consultants_list
+
+
 class IncomingCallRouteView(APIView):
     """
     Endpoint for Exotel Connect Applet to determine incoming call routing.
@@ -660,91 +758,72 @@ class IncomingCallRouteView(APIView):
         caller_phone_raw = request.GET.get('From', '')
         call_sid = request.GET.get('CallSid', '')
         exophone = request.GET.get('To', '')
+        digits = request.GET.get('digits', '').strip('"').strip() # Exotel might send "1" with quotes
         
         logger.info(f"=== INCOMING CALL ROUTING ===")
         logger.info(f"CallSid: {call_sid}")
         logger.info(f"From: {caller_phone_raw}")
         logger.info(f"To (ExoPhone): {exophone}")
+        logger.info(f"Digits: {digits}")
         
-        # Normalize phone number - extract just the 10 digit number
-        caller_phone = re.sub(r'[^\d]', '', caller_phone_raw)  # Remove non-digits
-        if caller_phone.startswith('91') and len(caller_phone) > 10:
-            caller_phone = caller_phone[2:]  # Remove 91 prefix
-        if caller_phone.startswith('0') and len(caller_phone) > 10:
-            caller_phone = caller_phone[1:]  # Remove leading 0
-        
-        # Now caller_phone should be 10 digits like "9975111931"
-        logger.info(f"Normalized caller phone: {caller_phone}")
-        
-        # Sales team fallback number
         sales_team_phone = getattr(settings, 'SALES_TEAM_PHONE', '+916393645999')
         
-        # Try to find the client by phone number
         try:
-            # Build all possible phone formats to match
-            phone_variants = [
-                caller_phone,              # 9975111931
-                f"+91{caller_phone}",      # +919975111931
-                f"91{caller_phone}",       # 919975111931
-                f"0{caller_phone}",        # 09975111931
-            ]
-            logger.info(f"Trying phone variants: {phone_variants}")
+            client, consultants_list = _get_client_and_consultants(caller_phone_raw, logger)
             
-            client = None
-            for variant in phone_variants:
-                client = User.objects.filter(phone_number=variant, role=User.CLIENT).first()
-                if client:
-                    logger.info(f"Matched with variant: {variant}")
-                    break
-            
-            # Also try icontains as fallback (matches partial)
-            if not client:
-                client = User.objects.filter(
-                    phone_number__icontains=caller_phone,
-                    role=User.CLIENT
-                ).first()
-                if client:
-                    logger.info(f"Matched with icontains")
-            
-            if client:
-                logger.info(f"Found client: {client.id} - {client.get_full_name()}")
+            if client and consultants_list:
+                selected_consultant = None
                 
-                # Check if client has an assigned consultant
-                if hasattr(client, 'client_profile') and client.client_profile:
-                    consultant = client.client_profile.assigned_consultant
-                    
-                    if consultant and consultant.phone_number:
-                        # Format consultant phone for Exotel
-                        consultant_phone = consultant.phone_number
-                        if not consultant_phone.startswith('+'):
-                            consultant_phone = f"+91{consultant_phone}"
-                        
-                        logger.info(f"Routing to assigned consultant: {consultant.get_full_name()} - {consultant_phone}")
-                        
-                        # Create incoming call log
-                        try:
-                            CallLog.objects.create(
-                                caller=consultant,  # Consultant will receive
-                                callee=client,      # Client is calling
-                                status='initiated',
-                                exotel_sid=call_sid,
-                                from_number=caller_phone_raw,
-                                to_number=exophone,
-                                notes=f"Incoming call routed to consultant"
-                            )
-                        except Exception as e:
-                            logger.warning(f"Could not create call log: {e}")
-                        
-                        return HttpResponse(consultant_phone, content_type='text/plain')
-                    else:
-                        logger.info(f"Consultant has no phone number, routing to sales team")
+                # If digits provided from IVR, find the matching consultant
+                if digits:
+                    for c_data in consultants_list:
+                        if c_data['digit'] == digits:
+                            selected_consultant = c_data['consultant']
+                            break
+                    if not selected_consultant:
+                        logger.warning(f"Invalid digit '{digits}' pressed. Falling back to default.")
+                        # Fallback to the first consultant if they pressed wrong key
+                        selected_consultant = consultants_list[0]['consultant']
                 else:
-                    logger.info(f"Client has no assigned consultant, routing to sales team")
+                    # Default: direct call (usually 1 consultant, or user skipped IVR)
+                    selected_consultant = consultants_list[0]['consultant']
+                
+                if selected_consultant and getattr(selected_consultant, 'phone_number', None):
+                    consultant_phone = selected_consultant.phone_number
+                    if not consultant_phone.startswith('+'):
+                        consultant_phone = f"+91{consultant_phone}"
+                        
+                    logger.info(f"Routing to assigned consultant: {selected_consultant.get_full_name()} - {consultant_phone}")
+                    
+                    # Create CallLog entry so the Passthru endpoint can update it later
+                    if call_sid and not CallLog.objects.filter(exotel_sid=call_sid).exists():
+                        try:
+                            # Normalize the incoming phones for the CallLog DB format
+                            from_phone = caller_phone_raw
+                            to_phone = consultant_phone
+                            if not from_phone.startswith('+') and len(from_phone) >= 10:
+                                from_phone = f"+91{from_phone[-10:]}"
+                                
+                            CallLog.objects.create(
+                                exotel_sid=call_sid,
+                                caller=client,
+                                callee=selected_consultant,
+                                from_number=from_phone,
+                                to_number=to_phone,
+                                status='in-progress'
+                            )
+                            logger.info(f"Created initial CallLog for incoming call {call_sid}")
+                        except Exception as create_e:
+                            logger.error(f"Failed to create initial CallLog: {create_e}")
+                            
+                    return HttpResponse(consultant_phone, content_type='text/plain')
+                else:
+                    logger.warning(f"Selected consultant {selected_consultant} has no phone number, routing to sales team")
             else:
-                logger.info(f"No client found with phone {caller_phone}, routing to sales team")
+                logger.info(f"Client found but has no assigned consultant, routing to sales team" if client else f"No client found with phone {caller_phone_raw}, routing to sales team")
             
         except Exception as e:
-            logger.error(f"Error looking up client: {e}")
+            logger.error(f"Error determining routing: {e}", exc_info=True)
         
         # Fallback: Route to sales team
         logger.info(f"Routing to sales team: {sales_team_phone}")
@@ -889,3 +968,95 @@ class IncomingCallPassthruView(APIView):
             return {'success': False}
         except:
             return {'success': False}
+
+
+class CheckConsultantCountView(APIView):
+    """
+    Passthru endpoint to check if a client has multiple active consultants.
+    Returns HTTP 200 (OK) if 0 or 1 consultant.
+    Returns HTTP 302 (Found) if > 1 consultant (triggering IVR flow).
+    """
+    permission_classes = []
+    authentication_classes = []
+    
+    def get(self, request):
+        import logging
+        from django.http import HttpResponse, HttpResponseNotFound
+        
+        logger = logging.getLogger('exotel_incoming')
+        caller_phone_raw = request.GET.get('From', '')
+        
+        try:
+            client, consultants = _get_client_and_consultants(caller_phone_raw, logger)
+            
+            if len(consultants) > 1:
+                logger.info(f"Client has {len(consultants)} consultants. Triggering IVR (404 Not Found to take other branch).")
+                # Exotel Passthru considers 200 as Success branch, 3xx/4xx as Failure branch.
+                # A 302 redirect causes Exotel to actually try and follow the redirect.
+                # A 404 will correctly tell Exotel to execute the "If undefined/failure" applet (Gather).
+                return HttpResponseNotFound("Multiple Consultants")
+        except Exception as e:
+            logger.error(f"Error checking consultant count: {e}", exc_info=True)
+            
+        logger.info(f"Client has 1 or 0 consultants. Skipping IVR (200 OK).")
+        return HttpResponse("OK", content_type='text/plain')
+
+
+class DynamicIVRView(APIView):
+    """
+    Programmable Gather endpoint. 
+    Returns JSON specifying what audio to play ("Press 1 for X, Press 2 for Y").
+    """
+    permission_classes = []
+    authentication_classes = []
+    
+    def get(self, request):
+        import logging
+        from django.http import JsonResponse
+        
+        logger = logging.getLogger('exotel_incoming')
+        caller_phone_raw = request.GET.get('From', '')
+        
+        try:
+            client, consultants = _get_client_and_consultants(caller_phone_raw, logger)
+            
+            if len(consultants) > 1:
+                # Build the text prompt
+                prompt_parts = []
+                for c_data in consultants:
+                    digit = c_data['digit']
+                    name = c_data['consultant'].get_full_name() or c_data['consultant'].username
+                    # Extract first name to sound better
+                    first_name = name.split()[0]
+                    services = " and ".join(c_data['services'][:2])
+                    prompt_parts.append(f"For {services} with {first_name} press {digit}.")
+                
+                full_prompt = "Welcome to Tax Plan Advisor. " + " ".join(prompt_parts)
+                logger.info(f"Generated IVR prompt: {full_prompt}")
+                
+                return JsonResponse({
+                    "gather_prompt": {
+                        "text": full_prompt
+                    },
+                    "max_input_digits": "1",
+                    "input_timeout": "5",
+                    "repeat_menu": "2",
+                    "repeat_gather_prompt": {
+                        "text": full_prompt
+                    }
+                })
+        except Exception as e:
+            logger.error(f"Error generating dynamic IVR: {e}", exc_info=True)
+            
+        # Fallback if error or only 1 consultant ended up here
+        return JsonResponse({
+            "gather_prompt": {
+                "text": "Please wait while we connect your call."
+            },
+            "max_input_digits": "1",
+            "input_timeout": "5",
+            "repeat_menu": "2",
+            "repeat_gather_prompt": {
+                "text": "Please wait while we connect your call."
+            }
+        })
