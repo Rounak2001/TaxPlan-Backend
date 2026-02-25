@@ -24,6 +24,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Google Login (Web)
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
+# Onboarding portal uses a different Google OAuth client
+GOOGLE_ONBOARDING_CLIENT_ID = os.getenv('GOOGLE_ONBOARDING_CLIENT_ID')
 
 # Google OAuth (Meeting Links - Desktop/Web)
 GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID')
@@ -87,6 +89,9 @@ INSTALLED_APPS = [
     'activity_timeline',
     'chat',
     'notifications',
+    
+    # New Onboarding App
+    'consultant_onboarding',
 ]
 
 # Exotel Configuration
@@ -207,6 +212,8 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'core_auth.authentication.CookieJWTAuthentication',
+        # Onboarding applicant auth - reads applicant_token cookie, sets request.application
+        'consultant_onboarding.authentication.ApplicantAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -219,6 +226,7 @@ AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
 AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'ap-south-1')
+AWS_REGION = AWS_S3_REGION_NAME  # Alias used by Rekognition and Transcribe clients
 
 # Media Files Storage
 STORAGES = {
@@ -235,6 +243,10 @@ STORAGES = {
 
 
 from datetime import timedelta
+
+# Admin Panel JWT (used by consultant_onboarding admin views)
+JWT_SECRET_KEY = os.getenv('JWT_SIGNING_KEY', SECRET_KEY)
+
 SIMPLE_JWT = {
     'SIGNING_KEY': os.getenv('JWT_SIGNING_KEY', SECRET_KEY),
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
@@ -248,10 +260,14 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080", # Example for a local React/frontend dev server
     "https://yourfrontenddomain.com",
+    "https://apply.yourdomain.com", # Onboarding frontend subdomain
+    "http://localhost:5174", # Local testing for onboarding app
+    "http://localhost:5173",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8080",
+    "http://localhost:5173",
 ]
 
 # Email Configuration (Gmail SMTP)
@@ -286,6 +302,36 @@ CACHES = {
 }
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# # Celery Configuration (for async video evaluation in consultant_onboarding)
+# CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+# CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', os.getenv('REDIS_URL', 'redis://localhost:6379/1'))
+# CELERY_ACCEPT_CONTENT = ['application/json']
+# CELERY_TASK_SERIALIZER = 'json'
+# CELERY_RESULT_SERIALIZER = 'json'
+# CELERY_TIMEZONE = 'Asia/Kolkata'
+
+import os
+
+# Get the URL
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+
+# Dynamically add SSL settings ONLY if the URL starts with 'rediss'
+if REDIS_URL.startswith('rediss'):
+    CELERY_BROKER_USE_SSL = {
+        'ssl_cert_reqs': 'none' # Or ssl.CERT_NONE if you import ssl
+    }
+    CELERY_REDIS_BACKEND_USE_SSL = {
+        'ssl_cert_reqs': 'none'
+    }
+
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Kolkata'
 
 # Logging Configuration for debugging
 # Logging Configuration for debugging

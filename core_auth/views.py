@@ -225,8 +225,13 @@ class GoogleAuthView(APIView):
         id_token = request.data.get('id_token')
         access_token = request.data.get('access_token')
         
+        # Accept 'token' as an alias for 'id_token' (used by onboarding frontend)
         if not id_token and not access_token:
-            return Response({'error': 'ID token or Access token is required'}, status=status.HTTP_400_BAD_REQUEST)
+            token_alias = request.data.get('token')
+            if token_alias:
+                id_token = token_alias
+            else:
+                return Response({'error': 'ID token or Access token is required'}, status=status.HTTP_400_BAD_REQUEST)
         
         email = None
         first_name = ''
@@ -244,8 +249,14 @@ class GoogleAuthView(APIView):
                 
                 google_data = google_response.json()
                 
-                # Verify the token is for our app
-                if google_data.get('aud') != settings.GOOGLE_CLIENT_ID:
+                # Verify the token is for our app - accept multiple client IDs
+                # (main SaaS frontend + onboarding frontend may use different OAuth clients)
+                allowed_client_ids = [cid for cid in [
+                    settings.GOOGLE_CLIENT_ID,
+                    getattr(settings, 'GOOGLE_ONBOARDING_CLIENT_ID', None),
+                ] if cid]
+                token_aud = google_data.get('aud')
+                if token_aud not in allowed_client_ids:
                     return Response({'error': 'Token not issued for this app'}, status=status.HTTP_401_UNAUTHORIZED)
                 
                 email = google_data.get('email')
@@ -288,6 +299,22 @@ class GoogleAuthView(APIView):
             # Create ClientProfile if new user
             if created:
                 ClientProfile.objects.create(user=user)
+
+            # Auto-create a ConsultantApplication for this email so that
+            # onboarding endpoints using IsApplicant can resolve request.application
+            # via the email fallback (for users who sign in via main SaaS auth flow).
+            try:
+                from consultant_onboarding.models import ConsultantApplication
+                ConsultantApplication.objects.get_or_create(
+                    email=email,
+                    defaults={
+                        'first_name': first_name,
+                        'last_name': last_name,
+                        'status': 'PENDING',
+                    }
+                )
+            except Exception:
+                pass  # Non-critical: onboarding flow will create it if missing
             
             # Create response with user data
             response_data = {

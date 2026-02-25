@@ -18,6 +18,9 @@ urlpatterns = [
     path('api/', include('notifications.urls')),
     path('api/activity/', include('activity_timeline.urls')),
     path('api/conversations/', include('chat.urls')),  # Real-time Chat
+    
+    # Onboarding Portal API
+    path('api/', include('consultant_onboarding.urls')),
 ]
 
 if settings.DEBUG:
