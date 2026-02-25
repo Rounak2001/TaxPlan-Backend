@@ -338,6 +338,24 @@ class SharedReportViewSet(viewsets.ModelViewSet):
         
         return super().destroy(request, *args, **kwargs)
 
+    @decorators.action(detail=True, methods=['post'], url_path='mark-read', permission_classes=[permissions.IsAuthenticated])
+    def mark_read(self, request, pk=None):
+        """Mark a specific shared report as read by the client."""
+        report = self.get_object()
+        if report.client != request.user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+        report.is_read = True
+        report.save(update_fields=['is_read'])
+        return Response({'status': 'ok', 'is_read': True})
+
+    @decorators.action(detail=False, methods=['get'], url_path='unread-count', permission_classes=[permissions.IsAuthenticated])
+    def unread_count(self, request):
+        """Returns the count of unread shared reports for the authenticated client."""
+        if request.user.role != 'CLIENT':
+            return Response({'count': 0})
+        count = SharedReport.objects.filter(client=request.user, is_read=False).count()
+        return Response({'count': count})
+
 
 class LegalNoticeViewSet(viewsets.ModelViewSet):
     """

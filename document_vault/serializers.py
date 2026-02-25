@@ -52,7 +52,7 @@ class SharedReportSerializer(serializers.ModelSerializer):
         model = SharedReport
         fields = [
             'id', 'consultant', 'consultant_name', 'client', 'client_name',
-            'title', 'description', 'file', 'report_type', 'created_at'
+            'title', 'description', 'file', 'report_type', 'is_read', 'created_at'
         ]
         read_only_fields = ['consultant', 'created_at']
 
