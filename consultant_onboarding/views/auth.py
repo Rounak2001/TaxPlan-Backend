@@ -80,6 +80,15 @@ def google_auth(request):
         first_name = name_parts[0] if name_parts else ''
         last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ''
 
+        # OPTION A ENFORCEMENT: Clients cannot use their existing email to register as a consultant.
+        # Check if this email is already a core_auth User with CLIENT role
+        from core_auth.models import User
+        if User.objects.filter(email=email, role=User.CLIENT).exists():
+            return Response(
+                {'error': 'This email is already registered as a Client. To become a Consultant, please use a different email address (e.g. yourname+consultant@gmail.com).'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         application, created = ConsultantApplication.objects.get_or_create(
             email=email,
             defaults={

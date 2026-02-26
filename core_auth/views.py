@@ -287,7 +287,13 @@ class GoogleAuthView(APIView):
             try:
                 user = User.objects.get(email=email)
                 created = False
-                # If they exist, we just log them in (could be CONSULTANT or CLIENT)
+                
+                # OPTION A ENFORCEMENT: Consultants cannot log in via Google
+                if user.role == User.CONSULTANT:
+                    return Response(
+                        {'error': 'Consultants must use their provided email and password to log in.'}, 
+                        status=status.HTTP_403_FORBIDDEN
+                    )
             except User.DoesNotExist:
                 # New users signing up via Google on main app default to CLIENT
                 user = User.objects.create(
