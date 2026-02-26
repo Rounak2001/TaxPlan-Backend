@@ -333,6 +333,11 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Kolkata'
 
+# Gevent worker pool
+CELERY_WORKER_POOL = 'gevent'
+CELERY_WORKER_CONCURRENCY = 100
+
+
 # Logging Configuration for debugging
 # Logging Configuration for debugging
 LOGGING = {

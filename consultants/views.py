@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 from .models import (
     ConsultantServiceProfile,
@@ -47,40 +48,27 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(category_id=category_id)
         return queryset
     
-    @action(detail=False, methods=['get'])
-    def by_category(self, request):
-        """
-        Returns all services grouped by category
-        """
-        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related('services')
-        result = []
-        for category in categories:
-            result.append({
-                'id': category.id,
-                'name': category.name,
-                'description': category.description,
-                'services': ServiceSerializer(
-                    category.services.filter(is_active=True), 
-                    many=True
-                ).data
-            })
-        return Response(result)
-
     @action(detail=False, methods=['get'], url_path='by_category')
     def by_category(self, request):
         """
-        Get all categories with their nested services
+        Get all categories with their nested services.
+        Uses Prefetch to avoid N+1 queries on the services relation.
         """
-        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related('services')
+        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related(
+            Prefetch(
+                'services',
+                queryset=Service.objects.filter(is_active=True),
+                to_attr='active_services'
+            )
+        )
         
         result = []
         for cat in categories:
-            services = cat.services.filter(is_active=True)
             result.append({
                 'id': cat.id,
                 'name': cat.name,
                 'description': cat.description,
-                'services': ServiceSerializer(services, many=True).data
+                'services': ServiceSerializer(cat.active_services, many=True).data
             })
             
         return Response(result)
