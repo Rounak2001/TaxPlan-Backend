@@ -8,6 +8,31 @@ from ..serializers import ConsultantDocumentSerializer
 from ..authentication import IsApplicant
 
 
+class GetDocumentUploadUrlView(APIView):
+    permission_classes = [IsApplicant]
+
+    def post(self, request):
+        application = request.application
+        filename = request.data.get('filename', 'document')
+        file_ext = request.data.get('file_ext', 'pdf').strip('.')
+        content_type = request.data.get('content_type', 'application/pdf')
+        
+        timestamp = int(time.time())
+        safe_filename = "".join(x for x in filename if x.isalnum() or x in "._- ")
+        if not safe_filename:
+            safe_filename = "doc"
+            
+        file_path = f"consultant_documents/{application.id}/{timestamp}_{safe_filename}.{file_ext}"
+        
+        from consultant_onboarding.utils.s3_utils import generate_presigned_upload_url
+        url_data = generate_presigned_upload_url(file_path, content_type=content_type)
+        
+        if not url_data:
+            return Response({'error': 'Failed to generate upload URL'}, status=500)
+            
+        return Response(url_data, status=200)
+
+
 class UploadDocumentView(APIView):
     permission_classes = [IsApplicant]
 
@@ -15,24 +40,17 @@ class UploadDocumentView(APIView):
         application = request.application
         qualification_type = request.data.get('qualification_type')
         document_type = request.data.get('document_type')
-        file_obj = request.FILES.get('file')
+        s3_path = request.data.get('s3_path')
 
-        if not all([qualification_type, document_type, file_obj]):
-            return Response({'error': 'Missing required fields: qualification_type, document_type, file'}, status=400)
-
-        timestamp = int(time.time())
-        filename = "".join(x for x in file_obj.name if x.isalnum() or x in "._- ")
-        file_path = f"consultant_documents/{application.id}/{timestamp}_{filename}"
+        if not all([qualification_type, document_type, s3_path]):
+            return Response({'error': 'Missing required fields: qualification_type, document_type, s3_path'}, status=400)
 
         try:
-            from django.core.files.storage import default_storage
-            saved_path = default_storage.save(file_path, file_obj)
-            
             document = ConsultantDocument.objects.create(
                 application=application,
                 qualification_type=qualification_type,
                 document_type=document_type,
-                file_path=saved_path
+                file_path=s3_path
             )
 
             # Verify with Gemini asynchronously

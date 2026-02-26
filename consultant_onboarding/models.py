@@ -219,6 +219,9 @@ class UserSession(models.Model):
     end_time = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, default='ongoing', choices=[('ongoing', 'Ongoing'), ('completed', 'Completed'), ('flagged', 'Flagged')])
     violation_count = models.IntegerField(default=0)
+    tab_switch_count = models.IntegerField(default=0)
+    cam_violation_count = models.IntegerField(default=0)
+    is_disqualified = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'application_assessment_usersession'

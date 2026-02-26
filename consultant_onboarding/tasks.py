@@ -35,6 +35,19 @@ def evaluate_video_task(video_response_id, question_text):
         video_response.ai_status = 'completed'
         video_response.save()
         logger.info(f"Successfully evaluated VideoResponse ID {video_response_id}")
+
+        # After successful evaluation, check if all conditions are met for auto-credential generation
+        try:
+            from .credential_service import check_and_auto_generate_credentials
+            application = video_response.session.application
+            success, msg = check_and_auto_generate_credentials(application)
+            if success:
+                logger.info(f"Auto-credentials triggered for {application.email} after video eval.")
+            else:
+                logger.debug(f"Auto-credential check for {application.email}: {msg}")
+        except Exception as cred_err:
+            # Never let credential generation failure break the video evaluation task
+            logger.warning(f"Auto-credential check failed (non-fatal): {cred_err}")
         
     except Exception as e:
         logger.error(f"Failed to evaluate VideoResponse ID {video_response_id}: {e}")

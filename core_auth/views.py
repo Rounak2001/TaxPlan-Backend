@@ -283,21 +283,26 @@ class GoogleAuthView(APIView):
             if not email:
                 return Response({'error': 'Email not provided by Google'}, status=status.HTTP_400_BAD_REQUEST)
             
-            # Find or create user
-            user, created = User.objects.get_or_create(
-                email=email,
-                defaults={
-                    'username': email.split('@')[0],
-                    'first_name': first_name,
-                    'last_name': last_name,
-                    'role': User.CLIENT,
-                    'is_phone_verified': False,  # Will need phone verification later
-                    'phone_number': None,  # Google users don't have phone yet
-                }
-            )
+            # Find existing user or create a new client
+            try:
+                user = User.objects.get(email=email)
+                created = False
+                # If they exist, we just log them in (could be CONSULTANT or CLIENT)
+            except User.DoesNotExist:
+                # New users signing up via Google on main app default to CLIENT
+                user = User.objects.create(
+                    email=email,
+                    username=email.split('@')[0],
+                    first_name=first_name,
+                    last_name=last_name,
+                    role=User.CLIENT,
+                    is_phone_verified=False,
+                    phone_number=None
+                )
+                created = True
             
-            # Create ClientProfile if new user
-            if created:
+            # Create ClientProfile if it's a new client
+            if created and user.role == User.CLIENT:
                 ClientProfile.objects.create(user=user)
 
             # Auto-create a ConsultantApplication for this email so that

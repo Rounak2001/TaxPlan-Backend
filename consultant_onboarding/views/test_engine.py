@@ -94,16 +94,29 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         if not selected_tests:
             return Response({'error': 'No domains selected'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check for Max Attempts (2 failures allowed)
-        past_sessions = UserSession.objects.filter(application=request.application).exclude(status='ongoing')
-        failed_attempts = 0
-        for s in past_sessions:
-            if s.status == 'flagged' or (s.status == 'completed' and s.score < 30):
-                failed_attempts += 1
+        # Check if user was disqualified due to violations
+        if UserSession.objects.filter(application=request.application, is_disqualified=True).exists():
+            return Response(
+                {'error': 'You have been disqualified due to assessment violations and cannot retake the test.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Block if there's already an ongoing session
+        if UserSession.objects.filter(application=request.application, status='ongoing').exists():
+            return Response(
+                {'error': 'You already have an ongoing session. Please complete or wait for it to finish.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Check for Max Attempts: Total sessions started (completed OR flagged) is capped at 2
+        total_attempts = UserSession.objects.filter(
+            application=request.application,
+            status__in=['completed', 'flagged']
+        ).count()
         
-        if failed_attempts >= 2:
+        if total_attempts >= 2:
              return Response(
-                 {'error': 'You have exceeded the maximum of 2 failed attempts. You are disqualified from further assessments.'}, 
+                 {'error': 'You have used all 2 permitted assessment attempts.'},
                  status=status.HTTP_403_FORBIDDEN
              )
        
@@ -193,6 +206,8 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         session = self.get_object()
         if session.status == 'completed':
             return Response({'error': 'Test already submitted'}, status=status.HTTP_400_BAD_REQUEST)
+        if session.is_disqualified:
+            return Response({'error': 'You have been disqualified and cannot submit this test.'}, status=status.HTTP_403_FORBIDDEN)
 
         user_answers = request.data.get('answers', {}) 
         
@@ -214,25 +229,40 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         return Response({'status': 'Test submitted', 'score': score, 'total': total_questions}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
+    def get_video_upload_url(self, request, pk=None):
+        session = self.get_object()
+        question_id = request.data.get('question_id')
+        file_ext = request.data.get('file_ext', 'webm').strip('.')
+        content_type = request.data.get('content_type', f"video/{file_ext}")
+
+        if not question_id:
+            return Response({'error': 'question_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        import uuid
+        file_path = f"assessment_videos/{session.application.id}/{session.id}/{question_id}_{uuid.uuid4()}.{file_ext}"
+
+        from consultant_onboarding.utils.s3_utils import generate_presigned_upload_url
+        url_data = generate_presigned_upload_url(file_path, content_type=content_type)
+        
+        if not url_data:
+            return Response({'error': 'Could not generate upload URL'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(url_data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
     def submit_video(self, request, pk=None):
         session = self.get_object()
-        video_file = request.FILES.get('video')
+        s3_path = request.data.get('s3_path')
         question_id = request.data.get('question_id')
 
-        if not video_file or not question_id:
-            return Response({'error': 'Video file and question_id are required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not s3_path or not question_id:
+            return Response({'error': 's3_path and question_id are required'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            file_ext = video_file.name.split('.')[-1]
-            file_path = f"assessment_videos/{session.application.id}/{session.id}/{question_id}_{uuid.uuid4()}.{file_ext}"
-
-            from django.core.files.storage import default_storage
-            saved_path = default_storage.save(file_path, video_file)
-
             video_response = VideoResponse.objects.create(
                 session=session,
                 question_identifier=str(question_id),
-                video_file=saved_path,
+                video_file=s3_path,
                 ai_status='pending'
             )
             
@@ -245,7 +275,7 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             from ..tasks import evaluate_video_task
             evaluate_video_task.delay(video_response.id, question_text)
 
-            return Response({'status': 'Video uploaded. Evaluation processing in background.', 'path': saved_path}, status=status.HTTP_201_CREATED)
+            return Response({'status': 'Video evaluation started.', 'path': s3_path}, status=status.HTTP_201_CREATED)
             
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -258,7 +288,16 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             if s.status == 'flagged' or (s.status == 'completed' and s.score < 30):
                 failed_attempts += 1
         
-        is_disqualified = failed_attempts >= 2
+        total_attempts = UserSession.objects.filter(
+            application=request.application,
+            status__in=['completed', 'flagged']
+        ).count()
+        
+        # Disqualified if: violations OR used all 2 total attempts
+        violation_disqualified = UserSession.objects.filter(
+            application=request.application, is_disqualified=True
+        ).exists()
+        is_disqualified = violation_disqualified or total_attempts >= 2
 
         session = UserSession.objects.filter(application=request.application, status__in=['completed', 'flagged']).order_by('-end_time').first()
         
@@ -268,6 +307,20 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         }
 
         if session:
+            # If disqualified due to violations, hide the score
+            if session.is_disqualified:
+                response_data.update({
+                    'score': None,
+                    'total': len(session.question_set),
+                    'passed': False,
+                    'status': 'disqualified',
+                    'session_id': session.id,
+                    'disqualification_reason': 'tab_switch' if session.tab_switch_count >= 3 else 'cam_violation',
+                    'tab_switch_count': session.tab_switch_count,
+                    'cam_violation_count': session.cam_violation_count,
+                })
+                return Response(response_data, status=status.HTTP_200_OK)
+
             video_responses = VideoResponse.objects.filter(session=session)
             video_score = sum([vr.ai_score for vr in video_responses if vr.ai_score])
             video_total_possible = len(session.video_question_set) * 5 
@@ -293,16 +346,33 @@ class UserSessionViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def log_violation(self, request, pk=None):
         session = self.get_object()
+
+        # Guard: don't log violations for sessions that are already done
+        if session.status != 'ongoing':
+            return Response({'status': session.status, 'violation_count': session.violation_count}, status=status.HTTP_200_OK)
+
         serializer = ViolationSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(session=session)
             session.violation_count += 1
             
-            if session.violation_count >= 10: 
+            # Track tab-switch violations separately
+            violation_type = request.data.get('violation_type', '')
+            if violation_type == 'tab_switch':
+                session.tab_switch_count += 1
+            
+            # Disqualify at 3 tab switches
+            if session.tab_switch_count >= 3:
                 session.status = 'flagged'
+                session.is_disqualified = True
                 session.end_time = timezone.now()
                 session.save()
-                return Response({'status': 'terminated', 'violation_count': session.violation_count}, status=status.HTTP_200_OK)
+                return Response({
+                    'status': 'disqualified',
+                    'reason': 'tab_switch_limit',
+                    'tab_switch_count': session.tab_switch_count,
+                    'violation_count': session.violation_count,
+                }, status=status.HTTP_200_OK)
             
             session.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -317,11 +387,6 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         image_file = request.FILES.get('image')
         if not image_file:
             return Response({'error': 'Image required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if session.violation_count >= 10:
-             session.status = 'flagged'
-             session.save()
-             return Response({'status': 'terminated', 'violation_count': session.violation_count}, status=status.HTTP_200_OK)
 
         try:
             from django.core.files.storage import default_storage
@@ -378,12 +443,15 @@ class UserSessionViewSet(viewsets.ModelViewSet):
     
             if is_violation:
                 session.violation_count += 1
-                session.save()
+                session.cam_violation_count += 1
+            
+            # Disqualify at 3 camera violations
+            if session.cam_violation_count >= 3:
+                session.status = 'flagged'
+                session.is_disqualified = True
+                session.end_time = timezone.now()
 
-                if session.violation_count >= 10:
-                     session.status = 'flagged'
-                     session.end_time = timezone.now()
-                     session.save()
+            session.save()
             
             from ..models import ProctoringSnapshot
             ProctoringSnapshot.objects.create(
@@ -398,11 +466,13 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             response_data = {
                 'status': 'ok',
                 'violation': is_violation,
-                'violation_count': session.violation_count
+                'violation_count': session.violation_count,
+                'cam_violation_count': session.cam_violation_count,
             }
 
-            if session.status == 'flagged':
-                 response_data['status'] = 'terminated'
+            if session.is_disqualified:
+                 response_data['status'] = 'disqualified'
+                 response_data['reason'] = 'cam_violation_limit'
             elif is_violation:
                  response_data['status'] = 'warning'
                  response_data['reason'] = violation_reason

@@ -167,9 +167,10 @@ class UserSessionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'application', 'test_type', 'selected_domains', 
             'score', 'start_time', 'end_time', 'status', 
-            'violation_count', 'violations'
+            'violation_count', 'tab_switch_count', 'cam_violation_count',
+            'is_disqualified', 'violations'
         ]
-        read_only_fields = ['id', 'application', 'score', 'start_time', 'end_time', 'status', 'violation_count']
+        read_only_fields = ['id', 'application', 'score', 'start_time', 'end_time', 'status', 'violation_count', 'tab_switch_count', 'cam_violation_count', 'is_disqualified']
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)

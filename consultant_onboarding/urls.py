@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import auth, test_engine, face_matching, admin_panel
-from .views.documents import UploadDocumentView, DocumentListView
+from .views.documents import UploadDocumentView, DocumentListView, GetDocumentUploadUrlView
 
 router = DefaultRouter()
 router.register(r'test-types', test_engine.TestTypeViewSet, basename='test-types')
@@ -21,9 +21,11 @@ urlpatterns = [
     path('auth/documents/list/', auth.get_user_documents, name='onboarding_get_user_documents'),
 
     # Identity Documents (for Gemini ID verification)
+    path('auth/identity/get-upload-url/', auth.get_identity_upload_url, name='onboarding_get_identity_upload_url'),
     path('auth/identity/upload-doc/', auth.upload_identity_document, name='onboarding_upload_identity_document'),
 
     # Qualification Documents (degree, certificates with Gemini check)
+    path('documents/get-upload-url/', GetDocumentUploadUrlView.as_view(), name='onboarding_get_document_upload_url'),
     path('documents/upload/', UploadDocumentView.as_view(), name='onboarding_document_upload'),
     path('documents/list/', DocumentListView.as_view(), name='onboarding_document_list'),
 

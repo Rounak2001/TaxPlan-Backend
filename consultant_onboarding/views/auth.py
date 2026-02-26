@@ -234,32 +234,50 @@ def get_user_documents(request):
 
 @api_view(['POST'])
 @permission_classes([IsApplicant])
+def get_identity_upload_url(request):
+    """Get presigned URL to upload identity document directly to S3"""
+    file_ext = request.data.get('file_ext', 'pdf').strip('.')
+    content_type = request.data.get('content_type', 'application/pdf')
+    
+    import uuid
+    file_path = f"identity_documents/{request.application.id}/identity_{uuid.uuid4()}.{file_ext}"
+    
+    try:
+        from consultant_onboarding.utils.s3_utils import generate_presigned_upload_url
+        url_data = generate_presigned_upload_url(file_path, content_type=content_type)
+    except Exception as e:
+        # Log the error or handle it appropriately
+        print(f"Error generating presigned URL: {e}")
+        url_data = None
+    
+    if not url_data:
+        return Response({'error': 'Failed to generate upload URL'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    return Response(url_data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsApplicant])
 def upload_identity_document(request):
     """
-    Upload identity document to S3 and verify with Gemini.
+    Record an identity document uploaded directly to S3 and verify with Gemini.
     """
     application = request.application
-    uploaded_file = request.FILES.get('identity_document')
+    s3_path = request.data.get('s3_path')
     
-    if not uploaded_file:
-        return Response({"error": "No document uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+    if not s3_path:
+        return Response({"error": "s3_path is required"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        file_ext = uploaded_file.name.split('.')[-1]
-        file_path = f"identity_documents/{application.id}/identity_{uuid.uuid4()}.{file_ext}"
-        
-        from django.core.files.storage import default_storage
-        saved_path = default_storage.save(file_path, uploaded_file)
-
         identity_doc = IdentityDocument.objects.create(
             application=application,
-            file_path=saved_path
+            file_path=s3_path
         )
         
         # TODO: Move the Gemini verification into consultant_onboarding/services.py 
         # (This will be done in the next step when we copy the services)
         try:
-            from ..services import IdentityDocumentVerifier
+            from consultant_onboarding.services import IdentityDocumentVerifier
             verifier = IdentityDocumentVerifier()
             result = verifier.verify_document(identity_doc)
             
@@ -272,7 +290,7 @@ def upload_identity_document(request):
 
         return Response({
             "message": "Identity document uploaded successfully", 
-            "path": saved_path,
+            "path": s3_path,
             "verification": {
                 "document_type": identity_doc.document_type,
                 "status": identity_doc.verification_status
