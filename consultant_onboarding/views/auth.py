@@ -263,6 +263,13 @@ def upload_identity_document(request):
     Record an identity document uploaded directly to S3 and verify with Gemini.
     """
     application = request.application
+    
+    # DEBUG prints to help diagnose production 400 Bad Request
+    print("--- DEBUG INITIAL UPLOAD IDENTITY ---")
+    print(f"Content-Type: {request.content_type}")
+    print(f"Request Data: {request.data}")
+    print("-------------------------------------")
+    
     s3_path = request.data.get('s3_path')
     
     if not s3_path:
