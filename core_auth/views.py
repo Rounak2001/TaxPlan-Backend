@@ -295,6 +295,22 @@ class GoogleAuthView(APIView):
                         status=status.HTTP_403_FORBIDDEN
                     )
             except User.DoesNotExist:
+                # OPTION A ENFORCEMENT (early detection): Before creating a new Client,
+                # check if this email is already used in the Consultant Onboarding portal.
+                # This prevents someone from registering as a Client with an email they 
+                # already used to apply as a Consultant (which would conflict later at approval).
+                try:
+                    from consultant_onboarding.models import ConsultantApplication
+                    if ConsultantApplication.objects.filter(
+                        email=email
+                    ).exclude(status='REJECTED').exists():
+                        return Response(
+                            {'error': 'This email is already registered in our Consultant Onboarding portal. Please use a different email to sign up as a Client.'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except Exception:
+                    pass  # Non-critical — proceed if consultant_onboarding is unavailable
+
                 # New users signing up via Google on main app default to CLIENT
                 user = User.objects.create(
                     email=email,
@@ -311,22 +327,6 @@ class GoogleAuthView(APIView):
             if created and user.role == User.CLIENT:
                 ClientProfile.objects.create(user=user)
 
-            # Auto-create a ConsultantApplication for this email so that
-            # onboarding endpoints using IsApplicant can resolve request.application
-            # via the email fallback (for users who sign in via main SaaS auth flow).
-            try:
-                from consultant_onboarding.models import ConsultantApplication
-                ConsultantApplication.objects.get_or_create(
-                    email=email,
-                    defaults={
-                        'first_name': first_name,
-                        'last_name': last_name,
-                        'status': 'PENDING',
-                    }
-                )
-            except Exception:
-                pass  # Non-critical: onboarding flow will create it if missing
-            
             # Create response with user data
             response_data = {
                 'success': True,

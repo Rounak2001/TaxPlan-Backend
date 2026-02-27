@@ -9,7 +9,7 @@ router.register(r'sessions', test_engine.UserSessionViewSet, basename='sessions'
 
 urlpatterns = [
     # Auth & Profile Endpoints
-    path('auth/google/', auth.google_auth, name='onboarding_google_auth'),
+    path('onboarding/auth/google/', auth.google_auth, name='onboarding_google_auth'),
     path('auth/onboarding/complete/', auth.complete_onboarding, name='onboarding_complete'),
     path('auth/profile/', auth.get_user_profile, name='onboarding_profile'),
     path('auth/accept-declaration/', auth.accept_declaration, name='onboarding_accept_declaration'),

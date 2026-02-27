@@ -353,6 +353,14 @@ def _generate_and_send_credentials(app):
     if ConsultantCredential.objects.filter(application=app).exists():
         return False, "Credentials already generated for this applicant"
 
+    # DEBUG: Check if email settings are loaded
+    from django.conf import settings
+    logger.info(f"DEBUG: Attempting to send email for {app.email}")
+    if not settings.EMAIL_HOST_USER:
+        logger.error(f"CRITICAL: EMAIL_HOST_USER is MISSING in this environment! Check if .env is loaded.")
+    else:
+        logger.info(f"DEBUG: Using EMAIL_HOST_USER: {settings.EMAIL_HOST_USER}")
+
     try:
         first_name_clean = ''.join(filter(str.isalnum, app.first_name.lower())) if app.first_name else 'consultant'
         if not first_name_clean:
@@ -381,9 +389,18 @@ def _generate_and_send_credentials(app):
             password=password,
         )
 
-        # Create the live User and ConsultantServiceProfile (same logic as admin.py approve_applications)
+        # Create the live User and ConsultantServiceProfile
         from core_auth.models import User
         from consultants.models import ConsultantServiceProfile
+
+        # OPTION A ENFORCEMENT: If a CLIENT already exists with this email, block credential
+        # generation. The admin must ask the applicant to re-apply with a different email.
+        existing_user = User.objects.filter(email=app.email).first()
+        if existing_user and existing_user.role == User.CLIENT:
+            return False, (
+                f"Cannot generate credentials: {app.email} is already registered as a Client. "
+                "Ask the applicant to use a different email address for their consultant account."
+            )
 
         user, created = User.objects.get_or_create(
             email=app.email,
@@ -399,7 +416,7 @@ def _generate_and_send_credentials(app):
             }
         )
 
-        # Explicitly update existing user properties
+        # Update existing CONSULTANT user (safe — same role, just refresh fields)
         if not created:
             user.username = username
             user.role = User.CONSULTANT
@@ -435,17 +452,28 @@ def _generate_and_send_credentials(app):
             f"Here are your login credentials for the consultant portal:\n\n"
             f"Username: {username}\n"
             f"Password: {password}\n\n"
+            f"Login at: https://main.taxplanadvisor.co\n\n"
             f"Please keep these credentials safe and do not share them.\n\n"
             f"Best regards,\nTaxPlan Advisor Team"
         )
 
-        send_mail(
-            subject,
-            message,
-            settings.DEFAULT_FROM_EMAIL or 'admin@taxplanadvisor.com',
-            [app.email],
-            fail_silently=True,
-        )
+        try:
+            from_email = settings.DEFAULT_FROM_EMAIL or 'admin@taxplanadvisor.com'
+            send_mail(
+                subject,
+                message,
+                from_email,
+                [app.email],
+                fail_silently=False,  # Raise exception so we can log it
+            )
+            logger.info(f"Credentials email sent successfully to {app.email}")
+        except Exception as email_err:
+            # Log prominently but don't fail credential generation — creds are already saved
+            logger.error(
+                f"CRITICAL: Credentials were generated for {app.email} but email FAILED to send. "
+                f"Error: {email_err}. "
+                f"Username: {username} | Password saved in ConsultantCredential record."
+            )
 
         return True, {"username": username, "password": password, "message": "Credentials generated and sent successfully"}
 
