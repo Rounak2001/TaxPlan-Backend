@@ -54,3 +54,29 @@ def evaluate_video_task(video_response_id, question_text):
         video_response.ai_status = 'failed'
         video_response.save(update_fields=['ai_status'])
         raise e
+
+@shared_task
+def test_mail_task(recipient_email):
+    """
+    Test task to verify if Celery can send emails.
+    """
+    from django.core.mail import send_mail
+    from django.conf import settings
+    import os
+
+    logger.info(f"DEBUG: Celery test_mail_task started for {recipient_email}")
+    logger.info(f"DEBUG: EMAIL_HOST_USER in task: {settings.EMAIL_HOST_USER}")
+    logger.info(f"DEBUG: EMAIL_HOST in task: {settings.EMAIL_HOST}")
+    
+    try:
+        subject = "Celery Email Diagnostic Test"
+        message = "This is a test email sent from a Celery background worker."
+        from_email = settings.DEFAULT_FROM_EMAIL
+        
+        send_mail(subject, message, from_email, [recipient_email], fail_silently=False)
+        logger.info(f"DEBUG: Celery test_mail_task SUCCESS for {recipient_email}")
+        return True
+    except Exception as e:
+        logger.error(f"DEBUG: Celery test_mail_task FAILED: {str(e)}")
+        return str(e)
+
