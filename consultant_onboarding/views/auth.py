@@ -58,11 +58,15 @@ def google_auth(request):
     token = serializer.validated_data['token']
     
     try:
-        # Verify the Google token
+        # Verify the Google token against the ONBOARDING portal's OAuth client.
+        # The onboarding frontend sends a token issued for GOOGLE_ONBOARDING_CLIENT_ID
+        # (App.jsx: VITE_GOOGLE_CLIENT_ID). Using the wrong client_id here causes an
+        # "audience mismatch" ValueError from Google's library → 400 Bad Request.
+        onboarding_client_id = getattr(settings, 'GOOGLE_ONBOARDING_CLIENT_ID', None) or settings.GOOGLE_CLIENT_ID
         idinfo = id_token.verify_oauth2_token(
             token, 
             google_requests.Request(), 
-            settings.GOOGLE_CLIENT_ID,
+            onboarding_client_id,
             clock_skew_in_seconds=10
         )
         
