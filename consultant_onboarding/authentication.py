@@ -78,24 +78,11 @@ class IsApplicant(BasePermission):
     """
     Allows access only to authenticated applicants.
 
-    Works with both:
-    - applicant_token cookie/header → request.application set by ApplicantAuthentication
-    - Main SaaS User JWT → looks up ConsultantApplication by the user's email as a fallback.
-      This lets the aliased endpoints at /api/auth/ work when the user signed in via
-      the main Google auth flow rather than the dedicated onboarding flow.
+    ONLY accepts applicant_token (cookie or Bearer header) resolved by
+    ApplicantAuthentication.  The main SaaS JWT is intentionally NOT
+    accepted here — the two auth systems must stay completely separate
+    so that being logged into the main SaaS app doesn't silently
+    cross-authenticate into the onboarding portal.
     """
     def has_permission(self, request, view):
-        # Fast path: applicant_token auth already resolved the application
-        if hasattr(request, 'application') and request.application is not None:
-            return True
-        
-        # Fallback: main SaaS JWT authenticated user – find their ConsultantApplication by email
-        if hasattr(request, 'user') and request.user and request.user.is_authenticated:
-            try:
-                application = ConsultantApplication.objects.get(email=request.user.email)
-                request.application = application
-                return True
-            except ConsultantApplication.DoesNotExist:
-                pass
-        
-        return False
+        return hasattr(request, 'application') and request.application is not None
