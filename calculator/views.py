@@ -1,4 +1,5 @@
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.http import HttpResponse
@@ -114,4 +115,28 @@ def generate_excel(request):
     )
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     
-    return response
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def save_calculator_data(request):
+    """Save or update calculator data for the current user"""
+    from .serializers import CalculatorSaveSerializer
+    serializer = CalculatorSaveSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_calculator_data(request, calculator_type):
+    """Retrieve saved calculator data for a specific type"""
+    from .models import CalculatorSave
+    from .serializers import CalculatorSaveSerializer
+    try:
+        save_obj = CalculatorSave.objects.get(user=request.user, calculator_type=calculator_type)
+        serializer = CalculatorSaveSerializer(save_obj)
+        return Response(serializer.data)
+    except CalculatorSave.DoesNotExist:
+        return Response({"detail": "No saved data found"}, status=status.HTTP_404_NOT_FOUND)

@@ -87,6 +87,7 @@ INSTALLED_APPS = [
     'activity_timeline',
     'chat',
     'notifications',
+    'calculator',
 ]
 
 # Exotel Configuration
