@@ -92,6 +92,7 @@ INSTALLED_APPS = [
     
     # New Onboarding App
     'consultant_onboarding',
+    'calculator',
 ]
 
 # Exotel Configuration

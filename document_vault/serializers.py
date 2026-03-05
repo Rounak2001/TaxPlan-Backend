@@ -30,7 +30,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         model = Document
         fields = [
             'id', 'client', 'client_name', 'consultant', 'consultant_name',
-            'folder', 'folder_name', 'title', 'description', 'file', 'status', 
+            'folder', 'folder_name', 'title', 'description', 'file', 'file_password', 'status', 
             'created_at', 'uploaded_at'
         ]
         read_only_fields = ['client', 'consultant', 'status', 'created_at', 'uploaded_at']
@@ -38,7 +38,7 @@ class DocumentSerializer(serializers.ModelSerializer):
 class DocumentUploadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
-        fields = ['file']
+        fields = ['file', 'file_password']
         extra_kwargs = {
             'file': {'required': True}
         }
@@ -52,7 +52,7 @@ class SharedReportSerializer(serializers.ModelSerializer):
         model = SharedReport
         fields = [
             'id', 'consultant', 'consultant_name', 'client', 'client_name',
-            'title', 'description', 'file', 'report_type', 'created_at'
+            'title', 'description', 'file', 'report_type', 'is_read', 'created_at'
         ]
         read_only_fields = ['consultant', 'created_at']
 

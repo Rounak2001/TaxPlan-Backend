@@ -63,4 +63,43 @@ class CalculateRequestSerializer(serializers.Serializer):
 class ExcelRequestSerializer(serializers.Serializer):
     """Serializer for Excel generation request"""
     deductor = DeductorSerializer()
-    results = serializers.ListField(child=serializers.DictField())
+
+class CalculatorSaveSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models import CalculatorSave
+        model = CalculatorSave
+        fields = ['calculator_type', 'data', 'updated_at']
+        read_only_fields = ['updated_at']
+
+    def validate_calculator_type(self, value):
+        if value != 'partnership':
+            raise serializers.ValidationError("Saving data is currently only supported for the Partnership calculator.")
+        return value
+
+    def validate_data(self, value):
+        import json
+        
+        # Prevent ridiculously large payloads
+        if len(json.dumps(value)) > 102400: # 100KB limit
+            raise serializers.ValidationError("Payload size exceeds maximum allowed limit.")
+            
+        # If there's a history structure, enforce max 10
+        if isinstance(value, dict) and 'history' in value:
+            history = value.get('history', [])
+            if isinstance(history, list) and len(history) > 10:
+                value['history'] = history[:10]
+                
+        return value
+
+    def create(self, validated_data):
+        from .models import CalculatorSave
+        user = self.context['request'].user
+        calculator_type = validated_data.get('calculator_type')
+        data = validated_data.get('data')
+        
+        obj, created = CalculatorSave.objects.update_or_create(
+            user=user,
+            calculator_type=calculator_type,
+            defaults={'data': data}
+        )
+        return obj

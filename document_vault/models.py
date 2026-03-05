@@ -70,6 +70,7 @@ class Document(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField(null=True, blank=True)
     file = models.FileField(upload_to=document_file_path, null=True, blank=True)
+    file_password = models.CharField(max_length=255, null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -117,6 +118,7 @@ class SharedReport(models.Model):
     description = models.TextField(null=True, blank=True)
     file = models.FileField(upload_to=shared_report_file_path)
     report_type = models.CharField(max_length=20, choices=REPORT_TYPE_CHOICES, default='OTHER')
+    is_read = models.BooleanField(default=False, help_text="Set to True once the client has viewed the report")
     
     created_at = models.DateTimeField(auto_now_add=True)
 
