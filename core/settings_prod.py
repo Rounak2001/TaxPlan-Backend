@@ -51,10 +51,20 @@ CSRF_COOKIE_SAMESITE = 'None'
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 
-CORS_ALLOWED_ORIGINS = [
-    os.getenv('FRONTEND_URL', 'http://localhost:8080'),
-]
 FRONTEND_URL = os.getenv('FRONTEND_URL')
+# ONBOARDING_FRONTEND_URL should be set to https://partner-onboard.taxplanadvisor.in
+ONBOARDING_FRONTEND_URL = os.getenv('ONBOARDING_FRONTEND_URL')
+
+_cors_origins = [
+    FRONTEND_URL or 'http://localhost:8080',
+]
+if ONBOARDING_FRONTEND_URL:
+    _cors_origins.append(ONBOARDING_FRONTEND_URL)
+
+CORS_ALLOWED_ORIGINS = _cors_origins
+
+# Vercel reverse proxy sends requests from the frontend domain — trust it for CSRF
+CSRF_TRUSTED_ORIGINS = _cors_origins.copy()
 
 CORS_ALLOW_HEADERS = [
     'accept',

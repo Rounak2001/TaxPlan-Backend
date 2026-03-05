@@ -114,6 +114,11 @@ def google_auth(request):
         response_data = get_profile_response_data(application)
         response_data['is_new_user'] = created
         response_data['needs_onboarding'] = application.status == 'PENDING' and not application.first_name
+        # Also expose the token in the body so the frontend can store it in
+        # localStorage and send it as 'Authorization: Bearer' on cross-origin
+        # requests (the Vercel reverse proxy handles same-domain in production,
+        # but the Bearer path is a reliable fallback for all environments).
+        response_data['applicant_token'] = jwt_token
         
         response = Response(response_data, status=status.HTTP_200_OK)
         

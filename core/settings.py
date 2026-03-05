@@ -265,6 +265,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://apply.taxplanadvisor.co",
     "https://taxplanadvisor.co",
     "https://taxplanadvisor.in",
+    # Onboarding portal — Vercel deployment
+    "https://partner-onboard.taxplanadvisor.in",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -274,6 +276,8 @@ CSRF_TRUSTED_ORIGINS = [
     "https://apply.taxplanadvisor.co",
     "https://taxplanadvisor.co",
     "https://taxplanadvisor.in",
+    # Onboarding portal — Vercel deployment
+    "https://partner-onboard.taxplanadvisor.in",
 ]
 
 # Email Configuration (Gmail SMTP)
