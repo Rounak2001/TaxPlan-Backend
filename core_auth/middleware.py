@@ -18,6 +18,7 @@ class PreOnboardingMiddleware:
             if not request.user.is_phone_verified:
                 # List of allowed paths for unverified users
                 allowed_urls = [
+                    'send-otp',
                     'verify-otp',
                     'token_obtain_pair',
                     'token_refresh',

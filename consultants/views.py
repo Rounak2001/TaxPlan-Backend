@@ -2,13 +2,15 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 from .models import (
     ConsultantServiceProfile,
     ServiceCategory,
     Service,
     ConsultantServiceExpertise,
-    ClientServiceRequest
+    ClientServiceRequest,
+    ConsultantReview
 )
 from .serializers import (
     ConsultantServiceProfileSerializer,
@@ -16,7 +18,8 @@ from .serializers import (
     ServiceSerializer,
     ConsultantServiceExpertiseSerializer,
     ClientServiceRequestSerializer,
-    ConsultantDashboardSerializer
+    ConsultantDashboardSerializer,
+    ConsultantReviewSerializer
 )
 from .services import assign_consultant_to_request, complete_service_request
 
@@ -45,40 +48,27 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(category_id=category_id)
         return queryset
     
-    @action(detail=False, methods=['get'])
-    def by_category(self, request):
-        """
-        Returns all services grouped by category
-        """
-        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related('services')
-        result = []
-        for category in categories:
-            result.append({
-                'id': category.id,
-                'name': category.name,
-                'description': category.description,
-                'services': ServiceSerializer(
-                    category.services.filter(is_active=True), 
-                    many=True
-                ).data
-            })
-        return Response(result)
-
     @action(detail=False, methods=['get'], url_path='by_category')
     def by_category(self, request):
         """
-        Get all categories with their nested services
+        Get all categories with their nested services.
+        Uses Prefetch to avoid N+1 queries on the services relation.
         """
-        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related('services')
+        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related(
+            Prefetch(
+                'services',
+                queryset=Service.objects.filter(is_active=True),
+                to_attr='active_services'
+            )
+        )
         
         result = []
         for cat in categories:
-            services = cat.services.filter(is_active=True)
             result.append({
                 'id': cat.id,
                 'name': cat.name,
                 'description': cat.description,
-                'services': ServiceSerializer(services, many=True).data
+                'services': ServiceSerializer(cat.active_services, many=True).data
             })
             
         return Response(result)
@@ -601,3 +591,43 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
             'message': 'Revision requested. Consultant will be notified.',
             'request': ClientServiceRequestSerializer(service_request).data
         })
+
+class ConsultantReviewViewSet(viewsets.ModelViewSet):
+    """API endpoint for client reviews (Feedback & Review)"""
+    queryset = ConsultantReview.objects.all()
+    serializer_class = ConsultantReviewSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'CLIENT':
+            return ConsultantReview.objects.filter(client=user)
+        elif user.role == 'CONSULTANT':
+            try:
+                return ConsultantReview.objects.filter(consultant=user.consultant_service_profile)
+            except ConsultantServiceProfile.DoesNotExist:
+                return ConsultantReview.objects.none()
+        return super().get_queryset()
+
+    def perform_create(self, serializer):
+        from rest_framework import serializers
+        service_request = serializer.validated_data.get('service_request')
+        
+        print(f"[REVIEW] Creating review for service_request={service_request.id}, status={service_request.status}, client={service_request.client}, user={self.request.user}")
+        
+        # Validation checks
+        if service_request.client != self.request.user:
+            raise serializers.ValidationError({"error": "You can only review your own service requests."})
+            
+        if service_request.status not in ('completed', 'final_review', 'filed'):
+            raise serializers.ValidationError({"error": f"You can only review a completed service request. Current status: {service_request.status}"})
+            
+        # Ensure review doesn't already exist for this request
+        if ConsultantReview.objects.filter(service_request=service_request).exists():
+            raise serializers.ValidationError({"error": "A review already exists for this service request."})
+            
+        consultant = service_request.assigned_consultant
+        if not consultant:
+            raise serializers.ValidationError({"error": "No consultant was assigned to this service request."})
+            
+        serializer.save(client=self.request.user, consultant=consultant)

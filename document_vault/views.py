@@ -95,7 +95,7 @@ class FolderViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 class DocumentViewSet(viewsets.ModelViewSet):
-    queryset = Document.objects.all()
+    queryset = Document.objects.select_related('client', 'consultant', 'folder').all()
     serializer_class = DocumentSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -113,7 +113,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             # Consultants see docs for clients who are:
             # 1. Primary assigned clients OR
             # 2. Clients with active service assignments
-            qs = Document.objects.filter(
+            qs = Document.objects.select_related('client', 'consultant', 'folder').filter(
                 models.Q(client__client_profile__assigned_consultant=user) |
                 models.Q(client_id__in=service_client_ids)
             ).distinct()
@@ -140,7 +140,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 valid_consultant_ids.append(primary_consultant.id)
             
             # Filter: Show all docs EXCEPT pending requests from unassigned consultants
-            qs = Document.objects.filter(client=user).filter(
+            qs = Document.objects.select_related('client', 'consultant', 'folder').filter(client=user).filter(
                 models.Q(status__in=['UPLOADED', 'VERIFIED', 'REJECTED']) |  # Non-pending docs
                 models.Q(status='PENDING', consultant_id__in=valid_consultant_ids) |  # Pending from assigned consultants
                 models.Q(status='PENDING', consultant__isnull=True)  # Pending without consultant (client-initiated)

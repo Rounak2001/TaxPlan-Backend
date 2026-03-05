@@ -36,8 +36,8 @@ SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 
 # HSTS Settings (commented out initially - enable after confirming HTTPS works)
-# SECURE_HSTS_SECONDS = 31536000  # 1 year
-# SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_SECONDS = 31536000  # 1 year
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 # SECURE_HSTS_PRELOAD = True
 
 # Cookie Settings for Cross-Origin (Vercel frontend + EC2 backend)
@@ -77,7 +77,8 @@ import os
 DATABASES = {
     'default': dj_database_url.config(
         default=os.environ.get('DATABASE_URL'),
-        conn_max_age=600
+        conn_max_age=60,
+        ssl_require=True
     )
 }
 
@@ -189,3 +190,26 @@ SIMPLE_JWT = {
 #         'LOCATION': os.environ['REDIS_URL'],
 #     }
 # }
+
+# =============================================================================
+# SENTRY ERROR TRACKING (PRODUCTION EXCLUSIVE)
+# =============================================================================
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn=os.environ.get('SENTRY_DSN', "https://cfb32d532836b45e114e94bd361c8c37@o4510925533741056.ingest.us.sentry.io/4510925550583808"),
+    
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for performance monitoring.
+    traces_sample_rate=1.0,
+    
+    # Set profiles_sample_rate to 1.0 to profile 100%
+    # of sampled transactions.
+    profiles_sample_rate=1.0,
+
+    # Send PII (like User IP/Cookies) to Sentry to help debug issues
+    send_default_pii=True,
+    
+    # Ensure it's tagged to the production environment
+    environment="production"
+)

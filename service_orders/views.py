@@ -223,7 +223,15 @@ def razorpay_webhook(request):
         return Response({'error': 'Webhook secret not configured'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     payload = request.body.decode('utf-8')
-    signature = request.headers.get('X-Razorpay-Signature')
+    # Try both header access methods - Nginx sometimes passes it differently
+    signature = (
+        request.headers.get('X-Razorpay-Signature')
+        or request.META.get('HTTP_X_RAZORPAY_SIGNATURE')
+    )
+
+    if not signature:
+        logger.warning("Razorpay webhook received without X-Razorpay-Signature header - rejecting")
+        return Response({'error': 'Missing signature'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         # Verify webhook signature

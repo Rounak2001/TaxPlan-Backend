@@ -4,7 +4,8 @@ from .models import (
     ServiceCategory,
     Service,
     ConsultantServiceExpertise,
-    ClientServiceRequest
+    ClientServiceRequest,
+    ConsultantReview
 )
 
 
@@ -38,9 +39,24 @@ class ConsultantServiceProfileSerializer(serializers.ModelSerializer):
             'qualification', 'experience_years', 'certifications',
             'consultation_fee',
             'is_active', 'max_concurrent_clients', 'current_client_count',
+            'average_rating', 'total_reviews',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['current_client_count', 'created_at', 'updated_at']
+        read_only_fields = ['current_client_count', 'average_rating', 'total_reviews', 'created_at', 'updated_at']
+
+
+class ConsultantReviewSerializer(serializers.ModelSerializer):
+    client_name = serializers.SerializerMethodField()
+    client_email = serializers.EmailField(source='client.email', read_only=True)
+    
+    def get_client_name(self, obj):
+        return obj.client.get_full_name() or obj.client.username
+        
+    class Meta:
+        model = ConsultantReview
+        fields = ['id', 'consultant', 'client', 'client_name', 'client_email', 'service_request', 'rating', 'review_text', 'created_at']
+        read_only_fields = ['consultant', 'client', 'created_at']
+
 
 
 class ConsultantServiceExpertiseSerializer(serializers.ModelSerializer):
@@ -73,9 +89,15 @@ class ClientServiceRequestSerializer(serializers.ModelSerializer):
             'status', 
             'assigned_consultant',  # Full consultant object
             'assigned_at', 'notes', 'revision_notes', 'priority',
+            'has_review',
             'created_at', 'updated_at', 'completed_at'
         ]
         read_only_fields = ['assigned_consultant', 'assigned_at', 'created_at', 'updated_at', 'completed_at']
+
+    has_review = serializers.SerializerMethodField()
+    
+    def get_has_review(self, obj):
+        return hasattr(obj, 'review')
 
 
 class ConsultantDashboardSerializer(serializers.Serializer):

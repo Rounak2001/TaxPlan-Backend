@@ -1,11 +1,16 @@
 import json
+import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+logger = logging.getLogger(__name__)
 
 class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        self.user = self.scope["user"]
+        self.user = self.scope.get("user")
+        print(f"[WS NOTIF] Connecting attempt for user: {self.user}")
         
-        if not self.user.is_authenticated:
+        if not self.user or not self.user.is_authenticated:
+            print("[WS NOTIF] Connection rejected: User not authenticated")
             await self.close()
             return
 
@@ -18,6 +23,7 @@ class NotificationConsumer(AsyncWebsocketConsumer):
         )
 
         await self.accept()
+        print(f"[WS NOTIF] Connection accepted for user: {self.user.username} (Group: {self.group_name})")
 
     async def disconnect(self, close_code):
         # Leave room group
