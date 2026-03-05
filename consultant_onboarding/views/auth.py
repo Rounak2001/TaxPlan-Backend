@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from django.views.decorators.csrf import csrf_exempt
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests 
 
@@ -43,6 +44,7 @@ def get_profile_response_data(application):
     
     return data
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @authentication_classes([])
@@ -205,6 +207,7 @@ def accept_declaration(request):
     return Response(get_profile_response_data(application), status=status.HTTP_200_OK)
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def logout(request):

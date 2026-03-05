@@ -58,14 +58,20 @@ class ApplicantAuthentication(authentication.BaseAuthentication):
             raise exceptions.AuthenticationFailed('Application not found')
             
         request.application = application
-        
-        class MockApplicantUser:
-            is_authenticated = True
-            application = application
-            id = application.id
-            email = application.email
-        
-        return (MockApplicantUser(), token)
+
+        # Use SimpleNamespace instead of an inline class to avoid Python's
+        # class-body scoping issue: inside a class body, `application = application`
+        # looks up 'application' in class scope first (where it doesn't exist yet),
+        # causing: NameError: name 'application' is not defined.
+        import types
+        mock_user = types.SimpleNamespace(
+            is_authenticated=True,
+            application=application,
+            id=application.id,
+            email=application.email,
+        )
+
+        return (mock_user, token)
 
 
 class IsApplicant(BasePermission):
