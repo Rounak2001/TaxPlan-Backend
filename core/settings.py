@@ -256,19 +256,24 @@ SIMPLE_JWT = {
     'TOKEN_OBTAIN_SERIALIZER': 'core_auth.serializers.CustomTokenObtainPairSerializer',
 }
 
-CORS_ALLOW_ALL_ORIGINS = False  # For development
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:8080", # Example for a local React/frontend dev server
-    "https://yourfrontenddomain.com",
-    "https://apply.yourdomain.com", # Onboarding frontend subdomain
-    "http://localhost:5174", # Local testing for onboarding app
     "http://localhost:5173",
+    "http://localhost:5174",
+    "https://main.taxplanadvisor.co",
+    "https://apply.taxplanadvisor.co",
+    "https://taxplanadvisor.co",
+    "https://taxplanadvisor.in",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:8080",
     "http://localhost:5173",
+    "http://localhost:5174",
+    "https://main.taxplanadvisor.co",
+    "https://apply.taxplanadvisor.co",
+    "https://taxplanadvisor.co",
+    "https://taxplanadvisor.in",
 ]
 
 # Email Configuration (Gmail SMTP)

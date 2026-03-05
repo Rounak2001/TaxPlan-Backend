@@ -118,16 +118,21 @@ def google_auth(request):
         response = Response(response_data, status=status.HTTP_200_OK)
         
         # Set JWT token in HttpOnly cookie
-        # In dev (DEBUG=True), use secure=False and samesite='Lax' so cookie works over plain HTTP.
-        # In prod, use secure=True and samesite='None' for cross-domain (apply.yourdomain.com -> api.yourdomain.com).
+        # We use SameSite='None' and Secure=True in production to allow cross-subdomain
+        # authentication (e.g., from apply.taxplanadvisor.co to main.taxplanadvisor.co)
         is_production = not settings.DEBUG
+        
+        # Determine cookie security based on whether the request is secure or in production
+        is_secure = request.is_secure() or is_production
+        
         response.set_cookie(
             key='applicant_token',
             value=jwt_token,
-            max_age=3 * 60 * 60,  
+            max_age=3 * 60 * 60,  # 3 hours
             httponly=True,
-            samesite='None' if is_production else 'Lax',
-            secure=is_production,
+            samesite='None' if is_secure else 'Lax',
+            secure=is_secure,
+            domain=None, # Defaults to current host; set to '.taxplanadvisor.co' if shared across ALL subdomains
         )
         
         return response
