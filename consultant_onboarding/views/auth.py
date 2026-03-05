@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from django.views.decorators.csrf import csrf_exempt
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests 
 
@@ -43,6 +44,7 @@ def get_profile_response_data(application):
     
     return data
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @authentication_classes([])
@@ -58,11 +60,15 @@ def google_auth(request):
     token = serializer.validated_data['token']
     
     try:
-        # Verify the Google token
+        # Verify the Google token against the ONBOARDING portal's OAuth client.
+        # The onboarding frontend sends a token issued for GOOGLE_ONBOARDING_CLIENT_ID
+        # (App.jsx: VITE_GOOGLE_CLIENT_ID). Using the wrong client_id here causes an
+        # "audience mismatch" ValueError from Google's library → 400 Bad Request.
+        onboarding_client_id = getattr(settings, 'GOOGLE_ONBOARDING_CLIENT_ID', None) or settings.GOOGLE_CLIENT_ID
         idinfo = id_token.verify_oauth2_token(
             token, 
             google_requests.Request(), 
-            settings.GOOGLE_CLIENT_ID,
+            onboarding_client_id,
             clock_skew_in_seconds=10
         )
         
@@ -114,20 +120,30 @@ def google_auth(request):
         response_data = get_profile_response_data(application)
         response_data['is_new_user'] = created
         response_data['needs_onboarding'] = application.status == 'PENDING' and not application.first_name
+        # Also expose the token in the body so the frontend can store it in
+        # localStorage and send it as 'Authorization: Bearer' on cross-origin
+        # requests (the Vercel reverse proxy handles same-domain in production,
+        # but the Bearer path is a reliable fallback for all environments).
+        response_data['applicant_token'] = jwt_token
         
         response = Response(response_data, status=status.HTTP_200_OK)
         
         # Set JWT token in HttpOnly cookie
-        # In dev (DEBUG=True), use secure=False and samesite='Lax' so cookie works over plain HTTP.
-        # In prod, use secure=True and samesite='None' for cross-domain (apply.yourdomain.com -> api.yourdomain.com).
+        # We use SameSite='None' and Secure=True in production to allow cross-subdomain
+        # authentication (e.g., from apply.taxplanadvisor.co to main.taxplanadvisor.co)
         is_production = not settings.DEBUG
+        
+        # Determine cookie security based on whether the request is secure or in production
+        is_secure = request.is_secure() or is_production
+        
         response.set_cookie(
             key='applicant_token',
             value=jwt_token,
-            max_age=3 * 60 * 60,  
+            max_age=3 * 60 * 60,  # 3 hours
             httponly=True,
-            samesite='None' if is_production else 'Lax',
-            secure=is_production,
+            samesite='None' if is_secure else 'Lax',
+            secure=is_secure,
+            domain=None, # Defaults to current host; set to '.taxplanadvisor.co' if shared across ALL subdomains
         )
         
         return response
@@ -191,6 +207,7 @@ def accept_declaration(request):
     return Response(get_profile_response_data(application), status=status.HTTP_200_OK)
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def logout(request):
