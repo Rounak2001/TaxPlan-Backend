@@ -7,6 +7,25 @@ import google.generativeai as genai
 from django.conf import settings
 from botocore.config import Config
 
+TARGET_BACHELOR_FIELD_KEYWORDS = [
+    "commerce",
+    "account",
+    "accountancy",
+    "finance",
+    "tax",
+    "taxation",
+    "business",
+    "management",
+    "economics",
+    "law",
+    "bcom",
+    "b.com",
+    "bba",
+    "bms",
+    "llb",
+    "ba economics",
+]
+
 class VideoEvaluator:
     def __init__(self):
         # Configure AWS Transcribe Client
@@ -209,11 +228,18 @@ class IdentityDocumentVerifier:
             
             Identify the type of document. Is it an Aadhaar Card, a PAN Card, a Masked Aadhaar, a Masked PAN, or something else (Unknown/Invalid)?
             Also, verify if the document looks like a valid, legitimate document (Verification Status: Verified or Invalid).
+            Extract the following details from the document if they are visible: Full Name, Date of Birth (DOB), and the ID Number (e.g. Aadhaar Number or PAN Number).
+            Privacy policy: the document must be privacy-safe (sensitive numbers masked/redacted except minimal readable suffix if present).
             
             Respond strictly in the following JSON format:
             {
                 "document_type": "Aadhaar Card" | "PAN Card" | "Masked Aadhaar" | "Masked PAN" | "Unknown",
                 "verification_status": "Verified" | "Invalid",
+                "is_sensitive_data_masked": true | false,
+                "privacy_notes": "Brief reason about masking",
+                "extracted_name": "Full Name",
+                "extracted_dob": "DD/MM/YYYY text",
+                "extracted_id_number": "ID Number text",
                 "notes": "Any additional observations"
             }
             """
@@ -241,11 +267,17 @@ class IdentityDocumentVerifier:
                 
             result_json = response.text
             result = json.loads(result_json)
+            is_masked = bool(result.get("is_sensitive_data_masked", False))
             
             return {
                 "document_type": result.get("document_type", "Unknown"),
                 "verification_status": result.get("verification_status", "Unverified"),
-                "raw_response": result_json
+                "is_sensitive_data_masked": is_masked,
+                "privacy_notes": result.get("privacy_notes", ""),
+                "extracted_name": result.get("extracted_name", ""),
+                "extracted_dob": result.get("extracted_dob", ""),
+                "extracted_id_number": result.get("extracted_id_number", ""),
+                "raw_response": result_json,
             }
             
         except Exception as e:
@@ -253,6 +285,11 @@ class IdentityDocumentVerifier:
             return {
                 "document_type": "Error",
                 "verification_status": "Failed",
+                "is_sensitive_data_masked": False,
+                "privacy_notes": "Could not verify masking state",
+                "extracted_name": "",
+                "extracted_dob": "",
+                "extracted_id_number": "",
                 "raw_response": json.dumps({"error": str(e)})
             }
         finally:
@@ -291,11 +328,19 @@ class QualificationDocumentVerifier:
             
             1. Identify the type of document. Is it a Bachelor's Degree, Master's Degree, Certificate, Transcript, or something else (Unknown/Invalid)?
             2. Verify if the document looks like a valid, legitimate document (Verification Status: Verified or Invalid).
+            3. If it is a Bachelor's degree, extract the program/field and decide if it belongs to a relevant domain for this platform.
+               Relevant-domain keywords: {", ".join(TARGET_BACHELOR_FIELD_KEYWORDS)}.
+               Mark is_target_field=true only when the extracted field clearly matches one of those keywords.
             
             Respond strictly in the following JSON format:
             {{
-                "determined_type": "Bachelor's Degree",
+                "determined_type": "Bachelor's Degree" | "Master's Degree" | "Certificate" | "Transcript" | "Unknown",
                 "verification_status": "Verified",
+                "degree_level": "bachelors" | "masters" | "other",
+                "extracted_name": "Full name of document holder if visible",
+                "degree_field": "Extracted field text if any",
+                "is_target_field": true | false,
+                "rejection_reason": "Short rejection reason if invalid",
                 "notes": "Any additional observations, e.g., University Name, Student Name, etc."
             }}
             """
@@ -328,6 +373,11 @@ class QualificationDocumentVerifier:
             return {
                 "determined_type": result.get("determined_type", "Unknown"),
                 "verification_status": result.get("verification_status", "Unverified"),
+                "degree_level": result.get("degree_level", "other"),
+                "extracted_name": result.get("extracted_name", ""),
+                "degree_field": result.get("degree_field", ""),
+                "is_target_field": bool(result.get("is_target_field", False)),
+                "rejection_reason": result.get("rejection_reason", ""),
                 "raw_response": result_json
             }
             
@@ -336,6 +386,11 @@ class QualificationDocumentVerifier:
             return {
                 "determined_type": "Unknown",
                 "verification_status": "Error",
+                "degree_level": "other",
+                "extracted_name": "",
+                "degree_field": "",
+                "is_target_field": False,
+                "rejection_reason": "Verification service error",
                 "raw_response": json.dumps({"error": str(e)})
             }
         finally:
@@ -344,4 +399,3 @@ class QualificationDocumentVerifier:
                     os.remove(local_image_path)
                 except OSError as e:
                     print(f"Error removing temp file {local_image_path}: {e}")
-
