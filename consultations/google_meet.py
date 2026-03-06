@@ -64,8 +64,7 @@ class GoogleMeetService:
                     }
                 },
                 'attendees': [
-                    {'email': booking.consultant.email},
-                    {'email': booking.client.email},
+                    {'email': email} for email in [booking.consultant.email, booking.client.email] if email
                 ],
                 'guestsCanModify': True,
                 'guestsCanInviteOthers': True,
