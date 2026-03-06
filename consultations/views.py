@@ -527,6 +527,16 @@ def consultant_slots(request):
         for slot in weekly_slots:
             available_ranges.append((slot.start_time, slot.end_time))
 
+    # Pre-fetch all existing bookings for the date to avoid N+1 queries in the loop
+    expiration_time = timezone.now() - timedelta(minutes=15)
+    existing_bookings = list(ConsultationBooking.objects.filter(
+        consultant=consultant,
+        booking_date=date_obj
+    ).filter(
+        Q(status='confirmed') | 
+        Q(status='pending', created_at__gt=expiration_time)
+    ).values('start_time', 'end_time'))
+
     # Generate 30-minute time slots
     time_slots = []
     for start_time, end_time in available_ranges:
@@ -537,18 +547,11 @@ def consultant_slots(request):
             slot_start = current_time.time()
             slot_end = (current_time + timedelta(minutes=30)).time()
             
-            # Check if this slot is already booked
-            # Only count 'pending' bookings if they are less than 15 minutes old (otherwise they are abandoned)
-            expiration_time = timezone.now() - timedelta(minutes=15)
-            is_booked = ConsultationBooking.objects.filter(
-                consultant=consultant,
-                booking_date=date_obj,
-                start_time__lt=slot_end,
-                end_time__gt=slot_start
-            ).filter(
-                Q(status='confirmed') | 
-                Q(status='pending', created_at__gt=expiration_time)
-            ).exists()
+            # Check if this slot overlaps with any pre-fetched booking
+            is_booked = any(
+                b['start_time'] < slot_end and b['end_time'] > slot_start
+                for b in existing_bookings
+            )
             
             time_slots.append({
                 'start': slot_start.strftime('%H:%M'),
