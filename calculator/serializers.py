@@ -72,22 +72,30 @@ class CalculatorSaveSerializer(serializers.ModelSerializer):
         read_only_fields = ['updated_at']
 
     def validate_calculator_type(self, value):
-        if value != 'partnership':
-            raise serializers.ValidationError("Saving data is currently only supported for the Partnership calculator.")
+        if value not in ['partnership', 'bulk_tds']:
+            raise serializers.ValidationError("Saving data is currently only supported for the Partnership and Bulk TDS calculators.")
         return value
 
     def validate_data(self, value):
         import json
+        calculator_type = self.initial_data.get('calculator_type', 'partnership')
         
         # Prevent ridiculously large payloads
-        if len(json.dumps(value)) > 102400: # 100KB limit
-            raise serializers.ValidationError("Payload size exceeds maximum allowed limit.")
+        payload_string = json.dumps(value)
+        if calculator_type == 'bulk_tds':
+            if len(payload_string) > 2048000: # 2MB limit for bulk TDS (large excel files)
+                raise serializers.ValidationError("Payload size exceeds maximum allowed limit for Bulk TDS (2MB).")
+        else:
+            if len(payload_string) > 102400: # 100KB limit for other calculators
+                raise serializers.ValidationError("Payload size exceeds maximum allowed limit (100KB).")
             
-        # If there's a history structure, enforce max 10
+        # Enforce history limits
         if isinstance(value, dict) and 'history' in value:
             history = value.get('history', [])
-            if isinstance(history, list) and len(history) > 10:
-                value['history'] = history[:10]
+            if isinstance(history, list):
+                max_history = 5 if calculator_type == 'bulk_tds' else 10
+                if len(history) > max_history:
+                    value['history'] = history[:max_history]
                 
         return value
 
