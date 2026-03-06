@@ -4,6 +4,10 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 # The scope for Google Calendar Events
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
+# FIXED PORT — must be added to your OAuth client's authorized redirect URIs:
+# http://localhost:8765/
+PORT = 8765
+
 def main():
     client_secret_path = os.path.join(os.path.dirname(__file__), 'client_secret.json')
     
@@ -11,24 +15,31 @@ def main():
         print(f"Error: {client_secret_path} not found.")
         return
 
+    print("\n" + "="*60)
+    print("IMPORTANT: Before authorizing, make sure you have added")
+    print(f"  http://localhost:{PORT}/")
+    print("to your OAuth 2.0 client's authorized redirect URIs in")
+    print("Google Cloud Console > APIs & Services > Credentials")
+    print("="*60 + "\n")
+
     flow = InstalledAppFlow.from_client_secrets_file(
         client_secret_path, SCOPES)
     
-    # This will open a browser window for you to log in
-    # Use port 0 to find any available port
-    # access_type='offline' ensures we get a refresh token
-    # prompt='consent' ensures a refresh token is returned even if the user already authorized
-    creds = flow.run_local_server(port=0, access_type='offline', prompt='consent')
+    # Use a FIXED port so the redirect URI is predictable and can be whitelisted.
+    # access_type='offline' ensures we get a refresh token.
+    # prompt='consent' ensures a refresh token is ALWAYS returned.
+    creds = flow.run_local_server(port=PORT, access_type='offline', prompt='consent')
     
-    print("\n" + "="*50)
-    print("NEW REFRESH TOKEN GENERATED:")
-    print("="*50)
+    print("\n" + "="*60)
+    print("SUCCESS! NEW REFRESH TOKEN GENERATED:")
+    print("="*60)
     print(creds.refresh_token)
-    print("="*50)
+    print("="*60)
     print("\nAction Required:")
-    print("Copy the token above and paste it into your .env file as:")
-    print("GOOGLE_OAUTH_REFRESH_TOKEN=[the_token_above]")
-    print("="*50)
+    print("Copy the token above and update your .env file:")
+    print("  GOOGLE_OAUTH_REFRESH_TOKEN=<paste_token_here>")
+    print("\nThen restart the Django server for changes to take effect.")
+    print("="*60)
 
 if __name__ == '__main__':
     main()

@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:8080')
 
 # Load environment variables from .env file
 load_dotenv()
@@ -259,7 +259,8 @@ SIMPLE_JWT = {
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
+    "http://localhost:8080",
+    "http://localhost:8000",
     "http://localhost:5174",
     "https://main.taxplanadvisor.co",
     "https://apply.taxplanadvisor.co",
@@ -270,7 +271,8 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:5173",
+    "http://localhost:8080",
+    "http://localhost:8000",
     "http://localhost:5174",
     "https://main.taxplanadvisor.co",
     "https://apply.taxplanadvisor.co",

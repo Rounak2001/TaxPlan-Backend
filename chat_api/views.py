@@ -6,7 +6,7 @@ from typing import Dict, Any
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from dotenv import load_dotenv
 import logging
 from google import genai
@@ -368,3 +368,123 @@ No text before or after JSON.
 #         except Exception as e:
 #             logger.error(f"Clear chat error: {e}")
 #             return Response({"error": "Failed to clear chat"}, status=500)
+
+class PublicChatbotView(APIView):
+    """Enhanced chatbot without authentication for landing page"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if client is None:
+            return Response({"error": "AI service misconfigured"}, status=503)
+
+        prompt = request.data.get("prompt", "").strip()
+
+        if not prompt:
+            return Response({"error": "Prompt required"}, status=400)
+
+        try:
+            context = "Context: This is a new public user inquiring on the landing page."
+            today = datetime.datetime.now().strftime("%d %B %Y")
+            
+            # Tool selection
+            tool_decision_instruction = f"""
+You are a tool selector AI.
+
+User Query: "{prompt}"
+
+Decide the BEST tool:
+
+- Respond ONLY with one of these: "google_search", "file_search", "none"
+- Do NOT add quotes, JSON, explanations, or extra text.
+- Only output exactly one word.
+
+Rules:
+- Use "google_search" for latest updates, current year rules, news, recent changes.
+- Use "file_search" for sections, forms, legal provisions, Income Tax Act references.
+- Use "none" for general questions.
+"""
+
+            tool_choice_response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=tool_decision_instruction
+            )
+
+            tool_raw = tool_choice_response.text.strip().lower()
+
+            if "google" in tool_raw:
+                tool_used = "google_search"
+            elif "file" in tool_raw:
+                tool_used = "file_search"
+            else:
+                tool_used = "none"
+
+            logger.info(f"🔍 Public tool selected: {tool_used}")
+
+            # Generate response with selected tool
+            system_instruction = f"""
+You are an expert Indian Tax Assistant AI. Today is {today}.
+
+**CONTEXT**:
+You are chatting with a generic site visitor. Give concise and helpful answers to build trust.
+
+**STRICT JSON OUTPUT**:
+Return ONLY valid JSON like:
+{{"answer": "...", "follow_up_questions": ["q1", "q2", "q3"]}}
+
+No text before or after JSON.
+"""
+
+            tools_list = []
+
+            if tool_used == "google_search":
+                tools_list.append(types.Tool(google_search=types.GoogleSearch()))
+            elif tool_used == "file_search":
+                tools_list.append(
+                    types.Tool(
+                        file_search=types.FileSearch(
+                            file_search_store_names=[STORE_NAME]
+                        )
+                    )
+                )
+
+            config_args = {
+                "system_instruction": system_instruction,
+                "temperature": 0.3,
+            }
+
+            if tools_list:
+                config_args["tools"] = tools_list
+
+            config = types.GenerateContentConfig(**config_args)
+            full_prompt = f"{context}\n\n**User Query:** {prompt}"
+
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=full_prompt,
+                config=config
+            )
+
+            parsed = extract_json_from_text(response.text)
+            answer = parsed.get("answer", "")
+            follow_ups = parsed.get("follow_up_questions", [])
+
+            # Add citations if google search used
+            try:
+                candidate = response.candidates[0]
+                if candidate.grounding_metadata and tool_used == "google_search":
+                    answer = format_citations(answer, candidate.grounding_metadata)
+            except:
+                pass
+
+            return Response({
+                "response": answer,
+                "follow_ups": follow_ups,
+                "tool_used": tool_used
+            })
+
+        except Exception as e:
+            logger.error(f"Public Chatbot Error: {e}", exc_info=True)
+            return Response({
+                "response": "Something went wrong. Please try again.",
+                "follow_ups": []
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

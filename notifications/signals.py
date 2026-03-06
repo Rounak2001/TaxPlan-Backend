@@ -229,7 +229,7 @@ def notify_service_activity(sender, instance, created, **kwargs):
                     category='service',
                     title="New Service Request",
                     message=f"{instance.client.get_full_name() or instance.client.username} requested {instance.service.title}",
-                    link="/consultant/services",
+                    link="/clients",
                 )
         else:
             # Status update → notify client
@@ -290,7 +290,7 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                 category='consultation',
                 title="New Consultation Booking 📅",
                 message=f"{instance.client.get_full_name() or instance.client.username} booked on {instance.booking_date.strftime('%d %b %Y')} ({instance.start_time.strftime('%I:%M %p')} – {instance.end_time.strftime('%I:%M %p')})",
-                link="/consultant/consultations",
+                link="/consultations",
             )
             # Also let the client know
             create_and_push_notification(
@@ -298,7 +298,7 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                 category='consultation',
                 title="Booking Submitted",
                 message=f"Your consultation on {instance.booking_date.strftime('%d %b %Y')} is pending confirmation.",
-                link="/client/consultations",
+                link="/client/meetings",
             )
             
             # For created instance, we don't need to check old status. Wait for confirmation.
@@ -315,7 +315,7 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                     category='consultation',
                     title="Booking Confirmed ✅",
                     message=f"Your consultation on {instance.booking_date.strftime('%d %b %Y')} at {instance.start_time.strftime('%I:%M %p')} is confirmed.",
-                    link="/client/consultations",
+                    link="/client/meetings",
                 )
                 # Send WhatsApp Template
                 if getattr(instance.client, 'phone_number', None):
@@ -337,7 +337,7 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                     category='consultation',
                     title="Booking Cancelled",
                     message=f"Consultation on {instance.booking_date.strftime('%d %b %Y')} has been cancelled.",
-                    link="/client/consultations",
+                    link="/client/meetings",
                 )
                 # Send WhatsApp Template
                 if getattr(instance.client, 'phone_number', None):
@@ -357,7 +357,7 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                     category='consultation',
                     title="Booking Cancelled",
                     message=f"Consultation with {instance.client.get_full_name() or instance.client.username} on {instance.booking_date.strftime('%d %b %Y')} was cancelled.",
-                    link="/consultant/consultations",
+                    link="/consultations",
                 )
     except Exception as exc:
         print(f"[SIGNAL] ConsultationBooking ERROR: {exc}")

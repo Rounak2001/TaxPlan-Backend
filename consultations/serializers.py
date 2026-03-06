@@ -34,7 +34,8 @@ class ConsultationBookingSerializer(serializers.ModelSerializer):
             'topic', 'topic_name', 'booking_date', 'start_time', 'end_time',
             'notes', 'attachments', 'uploaded_attachments', 
             'status', 'payment_status', 'razorpay_order_id', 
-            'razorpay_payment_id', 'amount', 'meeting_link', 'created_at'
+            'razorpay_payment_id', 'amount', 'meeting_link', 'created_at',
+            'reschedule_count'
         ]
         # Security: Prevent client from setting status, payment_status, or meeting_link
         read_only_fields = [

@@ -291,7 +291,10 @@ class GoogleAuthView(APIView):
                 # OPTION A ENFORCEMENT: Consultants cannot log in via Google
                 if user.role == User.CONSULTANT:
                     return Response(
-                        {'error': 'Consultants must use their provided email and password to log in.'}, 
+                        {
+                            'error': 'Consultants must use their provided email and password to log in.',
+                            'code': 'EMAIL_CONFLICT'
+                        }, 
                         status=status.HTTP_403_FORBIDDEN
                     )
             except User.DoesNotExist:
@@ -305,7 +308,10 @@ class GoogleAuthView(APIView):
                         email=email
                     ).exclude(status='REJECTED').exists():
                         return Response(
-                            {'error': 'This email is already registered in our Consultant Onboarding portal. Please use a different email to sign up as a Client.'},
+                            {
+                                'error': 'This email is already registered in our Consultant Onboarding portal. Please use a different email to sign up as a Client.',
+                                'code': 'EMAIL_CONFLICT'
+                            },
                             status=status.HTTP_403_FORBIDDEN
                         )
                 except Exception:
