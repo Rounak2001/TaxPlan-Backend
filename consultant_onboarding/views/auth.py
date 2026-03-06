@@ -1,4 +1,8 @@
 import uuid
+import re
+import json
+from datetime import datetime
+from difflib import SequenceMatcher
 from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -11,6 +15,80 @@ from google.auth.transport import requests as google_requests
 from ..models import ConsultantApplication, IdentityDocument, ConsultantDocument as RealConsultantDocument
 from ..serializers import ApplicationSerializer, GoogleAuthSerializer, OnboardingSerializer, AuthConsultantDocumentSerializer
 from ..authentication import generate_applicant_token, IsApplicant
+
+NAME_MATCH_THRESHOLD = 50
+
+
+def _normalize_name(value):
+    text = str(value or '').strip().lower()
+    text = re.sub(r'[^a-z\s]', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _fuzzy_name_similarity_pct(left, right):
+    left_norm = _normalize_name(left)
+    right_norm = _normalize_name(right)
+    if not left_norm or not right_norm:
+        return 0
+    return int(round(SequenceMatcher(None, left_norm, right_norm).ratio() * 100))
+
+
+def _first_last_name(value):
+    tokens = _normalize_name(value).split()
+    if not tokens:
+        return ''
+    if len(tokens) == 1:
+        return tokens[0]
+    return f"{tokens[0]} {tokens[-1]}"
+
+
+def _fuzzy_first_last_similarity_pct(left, right):
+    left_norm = _first_last_name(left)
+    right_norm = _first_last_name(right)
+    if not left_norm or not right_norm:
+        return 0
+    return int(round(SequenceMatcher(None, left_norm, right_norm).ratio() * 100))
+
+
+def _parse_date_text(value):
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+
+    formats = (
+        '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
+        '%Y-%m-%d', '%Y/%m/%d',
+        '%d/%m/%y', '%d-%m-%y',
+    )
+    for fmt in formats:
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+
+    dmy_match = re.search(r'(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})', raw)
+    if dmy_match:
+        day = int(dmy_match.group(1))
+        month = int(dmy_match.group(2))
+        year = int(dmy_match.group(3))
+        if year < 100:
+            year += 2000 if year < 50 else 1900
+        try:
+            return datetime(year, month, day).date()
+        except ValueError:
+            return None
+
+    ymd_match = re.search(r'(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})', raw)
+    if ymd_match:
+        year = int(ymd_match.group(1))
+        month = int(ymd_match.group(2))
+        day = int(ymd_match.group(3))
+        try:
+            return datetime(year, month, day).date()
+        except ValueError:
+            return None
+
+    return None
 
 def get_profile_response_data(application):
     """Utility to return a consistent profile status object"""
@@ -286,47 +364,132 @@ def get_identity_upload_url(request):
 @permission_classes([IsApplicant])
 def upload_identity_document(request):
     """
-    Record an identity document uploaded directly to S3 and verify with Gemini.
+    Upload identity document directly (multipart) and verify with Gemini.
+    Checks name and DOB extracted from the ID against the application profile.
+    Returns PERSONAL_DETAILS_MISMATCH if they don't match.
     """
     application = request.application
-    
-    # DEBUG prints to help diagnose production 400 Bad Request
-    print("--- DEBUG INITIAL UPLOAD IDENTITY ---")
-    print(f"Content-Type: {request.content_type}")
-    print(f"Request Data: {request.data}")
-    print("-------------------------------------")
-    
-    s3_path = request.data.get('s3_path')
-    
-    if not s3_path:
-        return Response({"error": "s3_path is required"}, status=status.HTTP_400_BAD_REQUEST)
+    uploaded_file = request.FILES.get('identity_document')
+
+    if not uploaded_file:
+        return Response({"error": "No document uploaded"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        file_ext = uploaded_file.name.split('.')[-1]
+        file_path = f"identity_documents/{application.id}/identity_{uuid.uuid4()}.{file_ext}"
+
+        # Save to S3 via default storage
+        from django.core.files.storage import default_storage
+        saved_path = default_storage.save(file_path, uploaded_file)
+
+        # Create database record
         identity_doc = IdentityDocument.objects.create(
             application=application,
-            file_path=s3_path
+            file_path=saved_path
         )
-        
-        # TODO: Move the Gemini verification into consultant_onboarding/services.py 
-        # (This will be done in the next step when we copy the services)
-        try:
-            from consultant_onboarding.services import IdentityDocumentVerifier
-            verifier = IdentityDocumentVerifier()
-            result = verifier.verify_document(identity_doc)
-            
-            identity_doc.document_type = result.get('document_type')
-            identity_doc.verification_status = result.get('verification_status')
-            identity_doc.gemini_raw_response = result.get('raw_response')
-            identity_doc.save()
-        except Exception as e:
-            print(f"Failed to verify via Gemini immediately: {e}")
+
+        # Verify with Gemini
+        from consultant_onboarding.services import IdentityDocumentVerifier
+        verifier = IdentityDocumentVerifier()
+        result = verifier.verify_document(identity_doc)
+
+        # Save Gemini results
+        identity_doc.document_type = result.get('document_type')
+        identity_doc.verification_status = result.get('verification_status')
+        identity_doc.gemini_raw_response = result.get('raw_response')
+        identity_doc.save()
+
+        # ---- Name & DOB matching ----
+        verification_status = str(identity_doc.verification_status or '').strip().lower()
+        extracted_name = str(result.get('extracted_name') or '').strip()
+        extracted_dob = str(result.get('extracted_dob') or '').strip()
+        profile_name = f"{application.first_name or ''} {application.last_name or ''}".strip()
+        profile_dob = getattr(application, 'dob', None)
+        name_similarity_pct = _fuzzy_name_similarity_pct(profile_name, extracted_name) if extracted_name else 0
+        name_match = (name_similarity_pct >= NAME_MATCH_THRESHOLD) if extracted_name else None
+        parsed_extracted_dob = _parse_date_text(extracted_dob)
+        # Only compare DOB if BOTH the profile and the ID have a date; skip otherwise
+        if profile_dob and parsed_extracted_dob:
+            dob_match = (profile_dob == parsed_extracted_dob)
+        else:
+            dob_match = None  # not enough data to compare — skip
+
+        # DEBUG: Log matching results
+        print(f"--- IDENTITY VERIFICATION DEBUG ---")
+        print(f"  Gemini verification_status: {verification_status}")
+        print(f"  Extracted name: '{extracted_name}' | Profile name: '{profile_name}'")
+        print(f"  Name similarity: {name_similarity_pct}% (threshold: {NAME_MATCH_THRESHOLD}%) → match: {name_match}")
+        print(f"  Extracted DOB: '{extracted_dob}' | Profile DOB: {profile_dob} | Parsed: {parsed_extracted_dob}")
+        print(f"  DOB match: {dob_match}")
+        print(f"-----------------------------------")
+
+        # If we can detect personal-details mismatch, delete the doc and reject.
+        has_detectable_mismatch = (name_match is False) or (dob_match is False)
+        if has_detectable_mismatch:
+            try:
+                default_storage.delete(saved_path)
+            except Exception:
+                pass
+            identity_doc.delete()
+            return Response({
+                "error": "Personal details do not match the uploaded Government ID.",
+                "code": "PERSONAL_DETAILS_MISMATCH",
+                "verification": {
+                    "document_type": result.get('document_type'),
+                    "status": result.get('verification_status'),
+                    "name_similarity_pct": name_similarity_pct,
+                    "name_threshold_pct": NAME_MATCH_THRESHOLD,
+                    "name_match": name_match,
+                    "dob_match": dob_match,
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if verification_status != 'verified':
+            # If verification couldn't be performed (quota/outage), don't tell the user their ID is "invalid".
+            error_code = result.get('error_code')
+            if verification_status in ('error', 'failed') or error_code in ('GEMINI_QUOTA_EXCEEDED', 'IDENTITY_VERIFICATION_UNAVAILABLE'):
+                try:
+                    default_storage.delete(saved_path)
+                except Exception:
+                    pass
+                identity_doc.delete()
+                retry_in_s = result.get('retry_in_s')
+                return Response({
+                    "error": "Identity verification is temporarily unavailable. Please try again shortly.",
+                    "code": error_code or "IDENTITY_VERIFICATION_UNAVAILABLE",
+                    "verification": {
+                        "document_type": result.get('document_type'),
+                        "status": result.get('verification_status'),
+                        "privacy_notes": result.get('privacy_notes', ''),
+                        "retry_in_s": retry_in_s,
+                    }
+                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            try:
+                default_storage.delete(saved_path)
+            except Exception:
+                pass
+            identity_doc.delete()
+            return Response({
+                "error": "Document verification failed. Please upload a valid government ID.",
+                "code": "IDENTITY_INVALID",
+                "verification": {
+                    "document_type": result.get('document_type'),
+                    "status": result.get('verification_status'),
+                    "privacy_notes": result.get('privacy_notes', ''),
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({
-            "message": "Identity document uploaded successfully", 
-            "path": s3_path,
+            "message": "Identity document uploaded and verified successfully",
+            "path": saved_path,
             "verification": {
                 "document_type": identity_doc.document_type,
-                "status": identity_doc.verification_status
+                "status": identity_doc.verification_status,
+                "name_similarity_pct": name_similarity_pct,
+                "name_threshold_pct": NAME_MATCH_THRESHOLD,
+                "name_match": name_match,
+                "dob_match": dob_match,
             }
         }, status=status.HTTP_200_OK)
 

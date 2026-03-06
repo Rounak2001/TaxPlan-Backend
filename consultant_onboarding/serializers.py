@@ -167,10 +167,9 @@ class UserSessionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'application', 'test_type', 'selected_domains', 
             'score', 'start_time', 'end_time', 'status', 
-            'violation_count', 'tab_switch_count', 'cam_violation_count',
-            'is_disqualified', 'violations'
+            'violation_count', 'violation_counters', 'violations'
         ]
-        read_only_fields = ['id', 'application', 'score', 'start_time', 'end_time', 'status', 'violation_count', 'tab_switch_count', 'cam_violation_count', 'is_disqualified']
+        read_only_fields = ['id', 'application', 'score', 'start_time', 'end_time', 'status', 'violation_count', 'violation_counters']
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -188,3 +187,16 @@ class UserSessionSerializer(serializers.ModelSerializer):
             representation['video_questions'] = instance.video_question_set
 
         return representation
+
+class ProctoringSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProctoringSnapshot
+        fields = [
+            'id', 'session', 'snapshot_id', 'image_url', 'timestamp', 'is_violation', 'violation_reason',
+            'face_count', 'match_score',
+            'pose_yaw', 'pose_pitch', 'pose_roll',
+            'mouth_state', 'audio_detected', 'gaze_violation',
+            'label_detection_results',
+            'rule_outcomes',
+        ]
+        read_only_fields = ['session', 'timestamp']

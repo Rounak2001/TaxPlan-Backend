@@ -53,14 +53,19 @@ def verify_face(request, user_id=None):
         return Response({"error": "Live photo required"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # Get stored ID photo path
+        # Get stored ID photo path (from IdentityDocument)
         try:
-            verification = FaceVerification.objects.get(application=application)
-            id_photo_path = verification.id_image_path
-            if not id_photo_path:
-                return Response({"error": "ID photo not found. Please upload ID photo first."}, status=status.HTTP_404_NOT_FOUND)
-        except FaceVerification.DoesNotExist:
-            return Response({"error": "ID photo not found. Please upload ID photo first."}, status=status.HTTP_404_NOT_FOUND)
+            from ..models import IdentityDocument
+            identity_doc = IdentityDocument.objects.filter(application=application).latest('uploaded_at')
+            id_photo_path = identity_doc.file_path
+
+            # Create or get FaceVerification record for live photo tracking
+            verification, _ = FaceVerification.objects.get_or_create(application=application)
+            verification.id_image_path = id_photo_path
+        except IdentityDocument.DoesNotExist:
+            return Response({"error": "Government ID not found. Please upload ID photo first."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"error": f"Failed to retrieve ID document: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # 1. Download ID photo from S3
         from django.core.files.storage import default_storage
@@ -99,7 +104,7 @@ def verify_face(request, user_id=None):
         response = rekognition.compare_faces(
             SourceImage={"Bytes": id_photo_data},
             TargetImage={"Bytes": live_photo_bytes},
-            SimilarityThreshold=85
+            SimilarityThreshold=0  # Get actual similarity score
         )
 
         matches = response.get("FaceMatches", [])
@@ -108,8 +113,8 @@ def verify_face(request, user_id=None):
 
         if matches:
             similarity = matches[0]["Similarity"]
-            is_match = True
             confidence = similarity
+            is_match = similarity >= 80.0
         
         verification.is_match = is_match
         verification.confidence = confidence

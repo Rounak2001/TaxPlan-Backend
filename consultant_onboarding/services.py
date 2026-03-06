@@ -4,8 +4,53 @@ import json
 import os
 import requests
 import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted
 from django.conf import settings
 from botocore.config import Config
+
+TARGET_BACHELOR_FIELD_KEYWORDS = [
+    "commerce",
+    "account",
+    "accountancy",
+    "finance",
+    "tax",
+    "taxation",
+    "business",
+    "management",
+    "economics",
+    "law",
+    "bcom",
+    "b.com",
+    "bba",
+    "bms",
+    "llb",
+    "ba economics",
+]
+
+def _parse_retry_delay_seconds(message):
+    text = str(message or '')
+    import re
+    m = re.search(r'Please retry in ([0-9]+(?:\.[0-9]+)?)s', text)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    m = re.search(r'retry_delay\\s*\\{\\s*seconds:\\s*([0-9]+)', text)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _is_quota_exhausted_error(exc):
+    if isinstance(exc, ResourceExhausted):
+        return True
+    msg = str(exc or '').lower()
+    return 'quota' in msg and 'exceeded' in msg and ('429' in msg or 'resourceexhausted' in msg)
+
 
 class VideoEvaluator:
     def __init__(self):
@@ -20,6 +65,25 @@ class VideoEvaluator:
         # Configure Gemini
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+
+    def download_video_to_temp(self, video_response):
+        """
+        Download the stored video to a local temp file and return its path.
+        Caller owns cleanup (os.remove).
+        """
+        import tempfile
+        from django.core.files.storage import default_storage
+
+        # Get file extension safely, default to mp4
+        file_ext = video_response.video_file.split('.')[-1] if '.' in video_response.video_file else 'mp4'
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp_file:
+            local_video_path = tmp_file.name
+            with default_storage.open(video_response.video_file, 'rb') as f:
+                for chunk in f.chunks() if hasattr(f, 'chunks') else [f.read()]:
+                    tmp_file.write(chunk)
+
+        return local_video_path
 
     def transcribe_video(self, video_response):
         """
@@ -134,9 +198,7 @@ class VideoEvaluator:
         """
         Orchestrates the full process.
         """
-        import tempfile
         import os
-        from django.core.files.storage import default_storage
         
         local_video_path = None
         try:
@@ -146,18 +208,7 @@ class VideoEvaluator:
             
             # 2. Download Video to local temp file for Gemini
             print("Downloading video from storage for Gemini analysis...")
-            
-            # Get file extension safely, default to mp4
-            file_ext = video_response.video_file.split('.')[-1] if '.' in video_response.video_file else 'mp4'
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp_file:
-                local_video_path = tmp_file.name
-                
-                # Use Django storage to read the file
-                with default_storage.open(video_response.video_file, 'rb') as f:
-                    # Write in chunks to handle large files efficiently
-                    for chunk in f.chunks() if hasattr(f, 'chunks') else [f.read()]:
-                        tmp_file.write(chunk)
+            local_video_path = self.download_video_to_temp(video_response)
             
             # 3. Evaluate with both Transcript and Video
             print(f"Evaluating transcript and video...")
@@ -209,11 +260,18 @@ class IdentityDocumentVerifier:
             
             Identify the type of document. Is it an Aadhaar Card, a PAN Card, a Masked Aadhaar, a Masked PAN, or something else (Unknown/Invalid)?
             Also, verify if the document looks like a valid, legitimate document (Verification Status: Verified or Invalid).
+            Extract the following details from the document if they are visible: Full Name, Date of Birth (DOB), and the ID Number (e.g. Aadhaar Number or PAN Number).
+            Privacy policy: the document must be privacy-safe (sensitive numbers masked/redacted except minimal readable suffix if present).
             
             Respond strictly in the following JSON format:
             {
                 "document_type": "Aadhaar Card" | "PAN Card" | "Masked Aadhaar" | "Masked PAN" | "Unknown",
                 "verification_status": "Verified" | "Invalid",
+                "is_sensitive_data_masked": true | false,
+                "privacy_notes": "Brief reason about masking",
+                "extracted_name": "Full Name",
+                "extracted_dob": "DD/MM/YYYY text",
+                "extracted_id_number": "ID Number text",
                 "notes": "Any additional observations"
             }
             """
@@ -241,18 +299,45 @@ class IdentityDocumentVerifier:
                 
             result_json = response.text
             result = json.loads(result_json)
+            is_masked = bool(result.get("is_sensitive_data_masked", False))
             
             return {
                 "document_type": result.get("document_type", "Unknown"),
                 "verification_status": result.get("verification_status", "Unverified"),
-                "raw_response": result_json
+                "is_sensitive_data_masked": is_masked,
+                "privacy_notes": result.get("privacy_notes", ""),
+                "extracted_name": result.get("extracted_name", ""),
+                "extracted_dob": result.get("extracted_dob", ""),
+                "extracted_id_number": result.get("extracted_id_number", ""),
+                "raw_response": result_json,
             }
             
         except Exception as e:
             print(f"Identity Verification Error: {e}")
+            if _is_quota_exhausted_error(e):
+                retry_in_s = _parse_retry_delay_seconds(e)
+                return {
+                    "document_type": "Error",
+                    "verification_status": "Error",
+                    "error_code": "GEMINI_QUOTA_EXCEEDED",
+                    "retry_in_s": retry_in_s,
+                    "is_sensitive_data_masked": False,
+                    "privacy_notes": "Verification temporarily unavailable (Gemini quota/rate limit).",
+                    "extracted_name": "",
+                    "extracted_dob": "",
+                    "extracted_id_number": "",
+                    "raw_response": json.dumps({"error": str(e)})
+                }
             return {
                 "document_type": "Error",
-                "verification_status": "Failed",
+                "verification_status": "Error",
+                "error_code": "IDENTITY_VERIFICATION_UNAVAILABLE",
+                "retry_in_s": None,
+                "is_sensitive_data_masked": False,
+                "privacy_notes": "Verification temporarily unavailable.",
+                "extracted_name": "",
+                "extracted_dob": "",
+                "extracted_id_number": "",
                 "raw_response": json.dumps({"error": str(e)})
             }
         finally:
@@ -291,11 +376,19 @@ class QualificationDocumentVerifier:
             
             1. Identify the type of document. Is it a Bachelor's Degree, Master's Degree, Certificate, Transcript, or something else (Unknown/Invalid)?
             2. Verify if the document looks like a valid, legitimate document (Verification Status: Verified or Invalid).
+            3. If it is a Bachelor's degree, extract the program/field and decide if it belongs to a relevant domain for this platform.
+               Relevant-domain keywords: {", ".join(TARGET_BACHELOR_FIELD_KEYWORDS)}.
+               Mark is_target_field=true only when the extracted field clearly matches one of those keywords.
             
             Respond strictly in the following JSON format:
             {{
-                "determined_type": "Bachelor's Degree",
-                "verification_status": "Verified",
+                "determined_type": "Bachelor's Degree" | "Master's Degree" | "Certificate" | "Transcript" | "Unknown",
+                "verification_status": "Verified" | "Invalid" | "Error",
+                "degree_level": "bachelors" | "masters" | "other",
+                "extracted_name": "Full name of document holder if visible",
+                "degree_field": "Extracted field text if any",
+                "is_target_field": true | false,
+                "rejection_reason": "Short rejection reason if invalid",
                 "notes": "Any additional observations, e.g., University Name, Student Name, etc."
             }}
             """
@@ -324,11 +417,42 @@ class QualificationDocumentVerifier:
                 
             result_json = response.text
             result = json.loads(result_json)
-            
+
+            determined_type = result.get("determined_type", "Unknown")
+            degree_level = result.get("degree_level", "other")
+            is_target_field = bool(result.get("is_target_field", False))
+            verification_status = result.get("verification_status", "Unverified")
+            rejection_reason = result.get("rejection_reason", "")
+
+            # Enforce validity for bachelor's submissions:
+            # - Must actually be a bachelor's degree
+            # - Must be in a finance/tax/accounting related field (is_target_field)
+            claimed_doc_type = str(consultant_document.document_type or "").strip().lower()
+            if claimed_doc_type == "bachelors_degree":
+                is_bachelors = (determined_type == "Bachelor's Degree") or (str(degree_level).strip().lower() == "bachelors")
+                if not is_bachelors:
+                    verification_status = "Invalid"
+                    rejection_reason = rejection_reason or "Not a Bachelor's degree"
+                    is_target_field = False
+                elif not is_target_field:
+                    verification_status = "Invalid"
+                    rejection_reason = rejection_reason or "Bachelor's degree field not related to finance/tax/accounting"
+
+            normalized = {
+                "determined_type": determined_type,
+                "verification_status": verification_status,
+                "degree_level": degree_level,
+                "extracted_name": result.get("extracted_name", ""),
+                "degree_field": result.get("degree_field", ""),
+                "is_target_field": is_target_field,
+                "rejection_reason": rejection_reason,
+                "notes": result.get("notes", ""),
+            }
+
+            normalized_json = json.dumps(normalized)
             return {
-                "determined_type": result.get("determined_type", "Unknown"),
-                "verification_status": result.get("verification_status", "Unverified"),
-                "raw_response": result_json
+                **normalized,
+                "raw_response": normalized_json,
             }
             
         except Exception as e:
@@ -336,6 +460,11 @@ class QualificationDocumentVerifier:
             return {
                 "determined_type": "Unknown",
                 "verification_status": "Error",
+                "degree_level": "other",
+                "extracted_name": "",
+                "degree_field": "",
+                "is_target_field": False,
+                "rejection_reason": "Verification service error",
                 "raw_response": json.dumps({"error": str(e)})
             }
         finally:
@@ -344,4 +473,3 @@ class QualificationDocumentVerifier:
                     os.remove(local_image_path)
                 except OSError as e:
                     print(f"Error removing temp file {local_image_path}: {e}")
-

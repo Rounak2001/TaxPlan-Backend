@@ -1,17 +1,37 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import action, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 import random
+import json
 import uuid
 
-from ..models import TestType, UserSession, VideoResponse
+from ..models import TestType, UserSession, VideoResponse, Violation
 from ..serializers import (
     TestTypeSerializer, UserSessionSerializer,
     ViolationSerializer
 )
 from ..authentication import IsApplicant
+from ..proctoring_policy import (
+    MAX_SESSION_VIOLATIONS,
+    MAX_VIOLATIONS_PER_TYPE,
+    HEAD_POSE_YAW_THRESHOLD,
+    HEAD_POSE_PITCH_THRESHOLD,
+    HEAD_POSE_ROLL_THRESHOLD,
+    HEAD_POSE_SUSTAINED_WINDOW,
+    HEAD_POSE_SUSTAINED_MIN_HITS,
+    GAZE_SUSTAINED_WINDOW,
+    GAZE_SUSTAINED_MIN_HITS,
+    policy_payload,
+    STATUS_OK,
+    STATUS_WARNING,
+    STATUS_TERMINATED,
+    is_supported_device,
+    parse_bool,
+    proctoring_response,
+)
+from ..risk import compute_proctoring_risk_summary
+
 
 def get_all_questions_from_module(module, var_names=None):
     all_questions = []
@@ -24,6 +44,7 @@ def get_all_questions_from_module(module, var_names=None):
             if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict) and 'question' in val[0]:
                 all_questions.extend(val)
     return all_questions
+
 
 from .. import gst as gst_module
 from .. import income_tax as income_tax_module
@@ -80,7 +101,60 @@ class UserSessionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return UserSession.objects.filter(application=self.request.application)
 
+    def _apply_violation(self, session, violation_type):
+        """Centralized violation tracking using violation_counters JSONField."""
+        violation_type = (violation_type or 'unknown').strip().lower()
+        # Fullscreen exits are intentionally not counted as violations.
+        if violation_type == 'fullscreen_exit':
+            counters = dict(session.violation_counters or {})
+            return {
+                'terminated': False,
+                'reason': "Fullscreen exit is not counted as a violation",
+                'violation_type': violation_type,
+                'violation_type_count': int(counters.get(violation_type, 0)),
+                'violation_counters': counters,
+                'violation_count': int(session.violation_count or 0),
+                'ignored': True,
+            }
+
+        counters = dict(session.violation_counters or {})
+        counters[violation_type] = int(counters.get(violation_type, 0)) + 1
+        session.violation_counters = counters
+        session.violation_count = int(session.violation_count or 0) + 1
+
+        reason = None
+        terminated = False
+        if counters[violation_type] >= MAX_VIOLATIONS_PER_TYPE:
+            terminated = True
+            reason = f"Maximum '{violation_type}' violations reached ({counters[violation_type]})"
+        elif session.violation_count >= MAX_SESSION_VIOLATIONS:
+            terminated = True
+            reason = f"Maximum total violations reached ({session.violation_count})"
+
+        if terminated:
+            session.status = 'flagged'
+            session.end_time = timezone.now()
+        session.save()
+        return {
+            'terminated': terminated,
+            'reason': reason,
+            'violation_type': violation_type,
+            'violation_type_count': counters[violation_type],
+            'violation_counters': counters,
+            'violation_count': session.violation_count,
+        }
+
     def create(self, request, *args, **kwargs):
+        # Device policy check
+        if not is_supported_device(request.META.get('HTTP_USER_AGENT', '')):
+            return Response(
+                {
+                    'error': 'Assessment is supported only on desktop or laptop browsers.',
+                    'device_policy': policy_payload().get('device_policy', {}),
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         selected_tests = request.data.get('selected_tests', []) 
         test_type_id = request.data.get('test_type')
         
@@ -94,12 +168,23 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         if not selected_tests:
             return Response({'error': 'No domains selected'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check if user was disqualified due to violations
-        if UserSession.objects.filter(application=request.application, is_disqualified=True).exists():
-            return Response(
-                {'error': 'You have been disqualified due to assessment violations and cannot retake the test.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
+        # Check for Max Attempts (2 failures allowed) OR permanent disqualification (flagged)
+        past_sessions = UserSession.objects.filter(application=request.application).exclude(status='ongoing')
+        failed_attempts = 0
+        for s in past_sessions:
+            if s.status == 'flagged':
+                return Response(
+                    {'error': 'You have been permanently disqualified due to a proctoring violation. You cannot take further assessments.'}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            if s.status == 'completed' and s.score < 30:
+                failed_attempts += 1
+        
+        if failed_attempts >= 2:
+             return Response(
+                 {'error': 'You have exceeded the maximum of 2 failed attempts. You are disqualified from further assessments.'}, 
+                 status=status.HTTP_403_FORBIDDEN
+             )
 
         # Block if there's already an ongoing session
         if UserSession.objects.filter(application=request.application, status='ongoing').exists():
@@ -108,18 +193,6 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Check for Max Attempts: Total sessions started (completed OR flagged) is capped at 2
-        total_attempts = UserSession.objects.filter(
-            application=request.application,
-            status__in=['completed', 'flagged']
-        ).count()
-        
-        if total_attempts >= 2:
-             return Response(
-                 {'error': 'You have used all 2 permitted assessment attempts.'},
-                 status=status.HTTP_403_FORBIDDEN
-             )
-       
         total_mcqs = 50
         num_domains = len(selected_tests)
         questions_per_domain = total_mcqs // num_domains
@@ -201,13 +274,17 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         
         return Response(data, status=status.HTTP_201_CREATED)
 
+    @action(detail=False, methods=['get'])
+    def proctoring_policy(self, request):
+        """Expose proctoring policy for frontend display and enforcement."""
+        return Response(policy_payload(), status=status.HTTP_200_OK)
+
     @action(detail=True, methods=['post'])
-    def submit_test(self, request, pk=None):
+    def save_mcq(self, request, pk=None):
+        """Save MCQ answers mid-test without marking it as completed."""
         session = self.get_object()
-        if session.status == 'completed':
-            return Response({'error': 'Test already submitted'}, status=status.HTTP_400_BAD_REQUEST)
-        if session.is_disqualified:
-            return Response({'error': 'You have been disqualified and cannot submit this test.'}, status=status.HTTP_403_FORBIDDEN)
+        if session.status != 'ongoing':
+            return Response({'error': 'Cannot save MCQ, session is not ongoing.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user_answers = request.data.get('answers', {}) 
         
@@ -222,47 +299,71 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                 score += 1
         
         session.score = score
-        session.status = 'completed'
+        session.save(update_fields=['score'])
+        
+        return Response({
+            'message': 'MCQ progress saved successfully',
+            'score': score,
+            'total': total_questions
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def submit_test(self, request, pk=None):
+        session = self.get_object()
+        if session.status == 'completed':
+            return Response({'error': 'Test already submitted'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user_answers = request.data.get('answers', {}) 
+        
+        score = 0
+        total_questions = len(session.question_set)
+        
+        for question in session.question_set:
+            q_id = question.get('id')
+            correct_answer = question.get('answer')
+            user_selected = user_answers.get(q_id)
+            if user_selected and user_selected == correct_answer:
+                score += 1
+        
+        session.score = score
+        # Only mark as completed if it wasn't already flagged
+        if session.status != 'flagged':
+            session.status = 'completed'
         session.end_time = timezone.now()
         session.save()
         
-        return Response({'status': 'Test submitted', 'score': score, 'total': total_questions}, status=status.HTTP_200_OK)
-
-    @action(detail=True, methods=['post'])
-    def get_video_upload_url(self, request, pk=None):
-        session = self.get_object()
-        question_id = request.data.get('question_id')
-        file_ext = request.data.get('file_ext', 'webm').strip('.')
-        content_type = request.data.get('content_type', f"video/{file_ext}")
-
-        if not question_id:
-            return Response({'error': 'question_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        import uuid
-        file_path = f"assessment_videos/{session.application.id}/{session.id}/{question_id}_{uuid.uuid4()}.{file_ext}"
-
-        from consultant_onboarding.utils.s3_utils import generate_presigned_upload_url
-        url_data = generate_presigned_upload_url(file_path, content_type=content_type)
-        
-        if not url_data:
-            return Response({'error': 'Could not generate upload URL'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        return Response(url_data, status=status.HTTP_200_OK)
+        proctoring_ai = compute_proctoring_risk_summary(session)
+        return Response(
+            {
+                'status': 'Test submitted',
+                'score': score,
+                'total': total_questions,
+                'proctoring_ai': proctoring_ai,
+            },
+            status=status.HTTP_200_OK
+        )
 
     @action(detail=True, methods=['post'])
     def submit_video(self, request, pk=None):
+        """Direct multipart video upload — saves to S3 via default_storage."""
         session = self.get_object()
-        s3_path = request.data.get('s3_path')
+        video_file = request.FILES.get('video')
         question_id = request.data.get('question_id')
 
-        if not s3_path or not question_id:
-            return Response({'error': 's3_path and question_id are required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not video_file or not question_id:
+            return Response({'error': 'Video file and question_id are required'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
+            file_ext = video_file.name.split('.')[-1] if '.' in video_file.name else 'webm'
+            file_path = f"assessment_videos/{session.application.id}/{session.id}/{question_id}_{uuid.uuid4()}.{file_ext}"
+
+            from django.core.files.storage import default_storage
+            saved_path = default_storage.save(file_path, video_file)
+
             video_response = VideoResponse.objects.create(
                 session=session,
                 question_identifier=str(question_id),
-                video_file=s3_path,
+                video_file=saved_path,
                 ai_status='pending'
             )
             
@@ -274,30 +375,29 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             # Trigger Celery Task asynchronously
             from ..tasks import evaluate_video_task
             evaluate_video_task.delay(video_response.id, question_text)
-
-            return Response({'status': 'Video evaluation started.', 'path': s3_path}, status=status.HTTP_201_CREATED)
+            
+            return Response({'status': 'Video uploaded. Evaluation processing in background.', 'path': saved_path}, status=status.HTTP_201_CREATED)
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['get'])
     def latest_result(self, request):
         past_sessions = UserSession.objects.filter(application=request.application).exclude(status='ongoing')
         failed_attempts = 0
+        is_disqualified = False
+        
         for s in past_sessions:
-            if s.status == 'flagged' or (s.status == 'completed' and s.score < 30):
+            if s.status == 'flagged':
+                is_disqualified = True
+                break
+            if s.status == 'completed' and s.score < 30:
                 failed_attempts += 1
         
-        total_attempts = UserSession.objects.filter(
-            application=request.application,
-            status__in=['completed', 'flagged']
-        ).count()
-        
-        # Disqualified if: violations OR used all 2 total attempts
-        violation_disqualified = UserSession.objects.filter(
-            application=request.application, is_disqualified=True
-        ).exists()
-        is_disqualified = violation_disqualified or total_attempts >= 2
+        if failed_attempts >= 2:
+            is_disqualified = True
 
         session = UserSession.objects.filter(application=request.application, status__in=['completed', 'flagged']).order_by('-end_time').first()
         
@@ -307,20 +407,6 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         }
 
         if session:
-            # If disqualified due to violations, hide the score
-            if session.is_disqualified:
-                response_data.update({
-                    'score': None,
-                    'total': len(session.question_set),
-                    'passed': False,
-                    'status': 'disqualified',
-                    'session_id': session.id,
-                    'disqualification_reason': 'tab_switch' if session.tab_switch_count >= 3 else 'cam_violation',
-                    'tab_switch_count': session.tab_switch_count,
-                    'cam_violation_count': session.cam_violation_count,
-                })
-                return Response(response_data, status=status.HTTP_200_OK)
-
             video_responses = VideoResponse.objects.filter(session=session)
             video_score = sum([vr.ai_score for vr in video_responses if vr.ai_score])
             video_total_possible = len(session.video_question_set) * 5 
@@ -330,14 +416,16 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             video_evaluation_complete = (completed_videos >= expected_videos)
 
             response_data.update({
-                'score': session.score,
+                'score': session.score if session.status != 'flagged' else None,
                 'total': len(session.question_set),
                 'passed': session.score >= 30 and session.status != 'flagged',
                 'status': session.status,
                 'session_id': session.id,
-                'video_score': video_score,
+                'video_score': video_score if session.status != 'flagged' else None,
                 'video_total_possible': video_total_possible,
-                'video_evaluation_complete': video_evaluation_complete
+                'video_evaluation_complete': video_evaluation_complete,
+                'hide_marks': session.status == 'flagged',
+                'proctoring_ai': compute_proctoring_risk_summary(session),
             })
             return Response(response_data, status=status.HTTP_200_OK)
         
@@ -346,36 +434,57 @@ class UserSessionViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def log_violation(self, request, pk=None):
         session = self.get_object()
-
-        # Guard: don't log violations for sessions that are already done
-        if session.status != 'ongoing':
-            return Response({'status': session.status, 'violation_count': session.violation_count}, status=status.HTTP_200_OK)
-
         serializer = ViolationSerializer(data=request.data)
         if serializer.is_valid():
+            violation_type = serializer.validated_data.get('violation_type', 'unknown')
             serializer.save(session=session)
-            session.violation_count += 1
-            
-            # Track tab-switch violations separately
-            violation_type = request.data.get('violation_type', '')
-            if violation_type == 'tab_switch':
-                session.tab_switch_count += 1
-            
-            # Disqualify at 3 tab switches
-            if session.tab_switch_count >= 3:
-                session.status = 'flagged'
-                session.is_disqualified = True
-                session.end_time = timezone.now()
-                session.save()
-                return Response({
-                    'status': 'disqualified',
-                    'reason': 'tab_switch_limit',
-                    'tab_switch_count': session.tab_switch_count,
-                    'violation_count': session.violation_count,
-                }, status=status.HTTP_200_OK)
-            
-            session.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            applied = self._apply_violation(session, violation_type)
+
+            if applied.get('ignored'):
+                return Response(
+                    proctoring_response(
+                        STATUS_OK,
+                        applied['violation_count'],
+                        violation=False,
+                        reason=applied['reason'],
+                        context={
+                            'violation_type': applied['violation_type'],
+                            'violation_type_count': applied['violation_type_count'],
+                            'violation_counters': applied['violation_counters'],
+                        },
+                    ),
+                    status=status.HTTP_200_OK
+                )
+
+            if applied['terminated']:
+                return Response(
+                    proctoring_response(
+                        STATUS_TERMINATED,
+                        applied['violation_count'],
+                        violation=True,
+                        reason=applied['reason'],
+                        context={
+                            'violation_type': applied['violation_type'],
+                            'violation_type_count': applied['violation_type_count'],
+                            'violation_counters': applied['violation_counters'],
+                        },
+                    ),
+                    status=status.HTTP_200_OK
+                )
+            return Response(
+                proctoring_response(
+                    STATUS_WARNING,
+                    applied['violation_count'],
+                    violation=True,
+                    reason=f"Violation logged: {applied['violation_type']}",
+                    context={
+                        'violation_type': applied['violation_type'],
+                        'violation_type_count': applied['violation_type_count'],
+                        'violation_counters': applied['violation_counters'],
+                    },
+                ),
+                status=status.HTTP_200_OK
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
@@ -387,15 +496,142 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         image_file = request.FILES.get('image')
         if not image_file:
             return Response({'error': 'Image required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        def parse_optional_float(value):
+            if value is None:
+                return None
+            value = str(value).strip()
+            if value == '':
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def parse_label_detection_results(value):
+            if value is None or value == '':
+                return []
+            if isinstance(value, (list, dict)):
+                return value
+            try:
+                return json.loads(value)
+            except (TypeError, ValueError):
+                return []
+
+        def parse_optional_bool(value):
+            if value is None:
+                return None
+            if isinstance(value, bool):
+                return value
+            normalized = str(value).strip().lower()
+            if normalized == '':
+                return None
+            if normalized in {'true', '1', 'yes', 'on'}:
+                return True
+            if normalized in {'false', '0', 'no', 'off'}:
+                return False
+            return None
+
+        def parse_optional_str(value, max_len=50):
+            if value is None:
+                return None
+            value = str(value).strip()
+            if value == '':
+                return None
+            return value[:max_len]
+
+        snapshot_id = request.data.get('snapshot_id')
+        if snapshot_id is not None:
+            snapshot_id = str(snapshot_id).strip()[:64] or None
+
+        # Optional client-side metadata (backward-compatible for old clients)
+        pose_yaw = parse_optional_float(request.data.get('pose_yaw'))
+        pose_pitch = parse_optional_float(request.data.get('pose_pitch'))
+        pose_roll = parse_optional_float(request.data.get('pose_roll'))
+        gaze_violation_input = parse_optional_bool(request.data.get('gaze_violation'))
+        audio_detected = parse_bool(request.data.get('audio_detected'), default=False)
+        mouth_state = request.data.get('mouth_state')
+        if mouth_state is not None:
+            mouth_state = str(mouth_state).strip()[:20] or None
+        label_detection_results = parse_label_detection_results(request.data.get('label_detection_results'))
+        client_detector_status = parse_optional_str(request.data.get('detector_status'))
+        client_webcam_status = parse_optional_str(request.data.get('webcam_status'))
+        client_mic_status = parse_optional_str(request.data.get('mic_status'))
+
+        snapshot_context = {
+            'snapshot_id': snapshot_id,
+            'audio_detected': audio_detected,
+            'gaze_violation': gaze_violation_input if gaze_violation_input is not None else False,
+            'pose_yaw': pose_yaw,
+            'pose_pitch': pose_pitch,
+            'pose_roll': pose_roll,
+            'mouth_state': mouth_state,
+            'label_detection_results': label_detection_results,
+            'fullscreen_state': request.data.get('fullscreen_state') or 'unknown',
+            'client_timestamp': request.data.get('client_timestamp'),
+            'client_detector_status': client_detector_status,
+            'client_webcam_status': client_webcam_status,
+            'client_mic_status': client_mic_status,
+        }
+
+        # Terminate if limit reached
+        if session.violation_count >= MAX_SESSION_VIOLATIONS:
+             session.status = 'flagged'
+             session.save()
+             return Response(proctoring_response(STATUS_TERMINATED, session.violation_count, violation=True), status=status.HTTP_200_OK)
 
         try:
+            from ..models import ProctoringSnapshot
+
+            # Idempotency: if this snapshot_id was already processed for this session,
+            # return deterministic response without creating duplicate violations.
+            if snapshot_id:
+                existing_snapshot = ProctoringSnapshot.objects.filter(
+                    session=session,
+                    snapshot_id=snapshot_id
+                ).first()
+                if existing_snapshot:
+                    duplicate_context = {
+                        **snapshot_context,
+                        'duplicate': True,
+                        'existing_snapshot_id': existing_snapshot.id,
+                        'face_count': existing_snapshot.face_count,
+                        'match_score': existing_snapshot.match_score,
+                        'pose_yaw': existing_snapshot.pose_yaw,
+                        'pose_pitch': existing_snapshot.pose_pitch,
+                        'pose_roll': existing_snapshot.pose_roll,
+                        'mouth_state': existing_snapshot.mouth_state,
+                        'audio_detected': existing_snapshot.audio_detected,
+                        'gaze_violation': existing_snapshot.gaze_violation,
+                        'label_detection_results': existing_snapshot.label_detection_results,
+                        'rule_outcomes': existing_snapshot.rule_outcomes,
+                        'detector_mode': 'duplicate_cached',
+                    }
+                    duplicate_status = STATUS_WARNING if existing_snapshot.is_violation else STATUS_OK
+                    duplicate_reason = existing_snapshot.violation_reason if existing_snapshot.is_violation else None
+                    if session.status == 'flagged' or session.violation_count >= MAX_SESSION_VIOLATIONS:
+                        duplicate_status = STATUS_TERMINATED
+                    return Response(
+                        proctoring_response(
+                            duplicate_status,
+                            session.violation_count,
+                            violation=existing_snapshot.is_violation,
+                            reason=duplicate_reason,
+                            context=duplicate_context,
+                        ),
+                        status=status.HTTP_200_OK
+                    )
+
+            # 1. Save Snapshot to S3
             from django.core.files.storage import default_storage
             from django.core.files.base import ContentFile
             
             image_content = image_file.read()
+            
             file_path = f"proctoring/{session.application.id}/{session.id}/{uuid.uuid4()}.jpg"
             saved_path = default_storage.save(file_path, ContentFile(image_content))
 
+            # 2. Rekognition Analysis
             from ..utils.rekognition_client import get_rekognition_client
             rekognition = get_rekognition_client()
 
@@ -403,19 +639,98 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             face_details = det_response.get('FaceDetails', [])
             face_count = len(face_details)
 
+            # Browser-agnostic telemetry fallback from Rekognition.
+            server_fallback_applied = False
+            primary_face = face_details[0] if face_count > 0 else None
+            if primary_face:
+                pose = primary_face.get('Pose', {})
+                derived_yaw = pose.get('Yaw')
+                derived_pitch = pose.get('Pitch')
+                derived_roll = pose.get('Roll')
+                print(f"--- PROCTORING DEBUG ---")
+                print(f"  Face {session.application.email} - Pose:")
+                print(f"  Yaw (left/right): {derived_yaw}")
+                print(f"  Pitch (up/down): {derived_pitch}")
+                print(f"  Roll (tilt): {derived_roll}")
+                print(f"------------------------")
+                if pose_yaw is None and derived_yaw is not None:
+                    pose_yaw = float(derived_yaw)
+                    server_fallback_applied = True
+                if pose_pitch is None and derived_pitch is not None:
+                    pose_pitch = float(derived_pitch)
+                    server_fallback_applied = True
+                if pose_roll is None and derived_roll is not None:
+                    pose_roll = float(derived_roll)
+                    server_fallback_applied = True
+
+                if mouth_state is None:
+                    mouth_info = primary_face.get('MouthOpen', {})
+                    mouth_val = mouth_info.get('Value')
+                    if isinstance(mouth_val, bool):
+                        mouth_state = 'open' if mouth_val else 'closed'
+                        server_fallback_applied = True
+
+            derived_gaze_violation = False
+            if pose_yaw is not None and abs(pose_yaw) > 20:
+                derived_gaze_violation = True
+            if pose_pitch is not None and abs(pose_pitch) > 15:
+                derived_gaze_violation = True
+            gaze_violation = gaze_violation_input if gaze_violation_input is not None else derived_gaze_violation
+            if gaze_violation_input is None:
+                server_fallback_applied = True
+
+            if not label_detection_results:
+                try:
+                    labels_response = rekognition.detect_labels(
+                        Image={'Bytes': image_content},
+                        MaxLabels=10,
+                        MinConfidence=80
+                    )
+                    label_detection_results = [
+                        {
+                            'name': label.get('Name'),
+                            'confidence': round(label.get('Confidence', 0.0), 2),
+                        }
+                        for label in labels_response.get('Labels', [])
+                    ]
+                    server_fallback_applied = True
+                except Exception:
+                    label_detection_results = []
+
+            snapshot_context.update({
+                'gaze_violation': gaze_violation,
+                'pose_yaw': pose_yaw,
+                'pose_pitch': pose_pitch,
+                'pose_roll': pose_roll,
+                'mouth_state': mouth_state,
+                'label_detection_results': label_detection_results,
+                'server_fallback_applied': server_fallback_applied,
+                'detector_mode': 'server_fallback' if server_fallback_applied else 'client',
+            })
+
             is_violation = False
             violation_reason = None
             match_score = 0.0
+            structured_reasons = []
+            rule_outcomes = {}
 
+            # Rule 1: Multiple Faces
             if face_count > 1:
                 is_violation = True
                 violation_reason = f"Multiple faces detected: {face_count}"
+                structured_reasons.append({
+                    'rule': 'face_count',
+                    'severity': 'high',
+                    'message': violation_reason,
+                    'enforce_violation': True,
+                })
             
+            # Rule 2: Face Match (if exactly 1 face)
             elif face_count == 1:
                 from ..models import FaceVerification
                 try:
                     verification = FaceVerification.objects.get(application=session.application)
-                    ref_image_path = verification.id_image_path
+                    ref_image_path = verification.live_image_path
                     
                     if ref_image_path:
                         with default_storage.open(ref_image_path, 'rb') as ref_f:
@@ -434,50 +749,255 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                             is_violation = True
                             violation_reason = "Face mismatch with reference photo"
                             match_score = 0.0
+                            structured_reasons.append({
+                                'rule': 'face_match',
+                                'severity': 'high',
+                                'message': violation_reason,
+                                'enforce_violation': True,
+                            })
                 except FaceVerification.DoesNotExist:
                      pass
 
             elif face_count == 0:
                  is_violation = True
                  violation_reason = "No face detected"
-    
-            if is_violation:
-                session.violation_count += 1
-                session.cam_violation_count += 1
-            
-            # Disqualify at 3 camera violations
-            if session.cam_violation_count >= 3:
-                session.status = 'flagged'
-                session.is_disqualified = True
-                session.end_time = timezone.now()
+                 structured_reasons.append({
+                    'rule': 'face_presence',
+                    'severity': 'high',
+                    'message': violation_reason,
+                    'enforce_violation': True,
+                })
 
-            session.save()
+            # Rule 3: Head pose check (sustained-window enforcement)
+            head_pose_triggered = False
+            if pose_yaw is not None and abs(pose_yaw) > HEAD_POSE_YAW_THRESHOLD:
+                head_pose_triggered = True
+            if pose_pitch is not None and abs(pose_pitch) > HEAD_POSE_PITCH_THRESHOLD:
+                head_pose_triggered = True
+            if pose_roll is not None and abs(pose_roll) > HEAD_POSE_ROLL_THRESHOLD:
+                head_pose_triggered = True
+
+            recent_snapshots = ProctoringSnapshot.objects.filter(session=session).order_by('-timestamp')[:HEAD_POSE_SUSTAINED_WINDOW - 1]
+            historical_hits = 0
+            historical_count = 0
+            for snap in recent_snapshots:
+                if snap.pose_yaw is None and snap.pose_pitch is None:
+                    continue
+                historical_count += 1
+                if (
+                    (snap.pose_yaw is not None and abs(snap.pose_yaw) > HEAD_POSE_YAW_THRESHOLD)
+                    or (snap.pose_pitch is not None and abs(snap.pose_pitch) > HEAD_POSE_PITCH_THRESHOLD)
+                    or (snap.pose_roll is not None and abs(snap.pose_roll) > HEAD_POSE_ROLL_THRESHOLD)
+                ):
+                    historical_hits += 1
+
+            sustained_hits = historical_hits + (1 if head_pose_triggered else 0)
+            sustained_window_count = historical_count + (1 if (pose_yaw is not None or pose_pitch is not None) else 0)
+            sustained_head_pose_triggered = (
+                sustained_hits >= HEAD_POSE_SUSTAINED_MIN_HITS
+                and sustained_window_count >= HEAD_POSE_SUSTAINED_MIN_HITS
+            )
+
+            if head_pose_triggered:
+                structured_reasons.append({
+                    'rule': 'head_pose',
+                    'severity': 'medium',
+                    'message': f"Suspicious head pose detected (yaw={pose_yaw}, pitch={pose_pitch}, sustained_hits={sustained_hits})",
+                    'enforce_violation': sustained_head_pose_triggered,
+                })
+            rule_outcomes['head_pose'] = {
+                'triggered': head_pose_triggered,
+                'sustained_triggered': sustained_head_pose_triggered,
+                'yaw': pose_yaw,
+                'pitch': pose_pitch,
+                'roll': pose_roll,
+                'thresholds': {
+                    'yaw_abs_gt': HEAD_POSE_YAW_THRESHOLD,
+                    'pitch_abs_gt': HEAD_POSE_PITCH_THRESHOLD,
+                    'roll_abs_gt': HEAD_POSE_ROLL_THRESHOLD,
+                },
+                'window': {
+                    'size': HEAD_POSE_SUSTAINED_WINDOW,
+                    'min_hits': HEAD_POSE_SUSTAINED_MIN_HITS,
+                    'hits': sustained_hits,
+                    'samples': sustained_window_count,
+                },
+            }
+            if sustained_head_pose_triggered and not is_violation:
+                is_violation = True
+                violation_reason = "Sustained head pose deviation detected"
+
+            # Rule 4: Gaze signal check (sustained-window)
+            recent_gaze_snapshots = ProctoringSnapshot.objects.filter(session=session).order_by('-timestamp')[:GAZE_SUSTAINED_WINDOW - 1]
+            gaze_historical_hits = 0
+            gaze_historical_samples = 0
+            for snap in recent_gaze_snapshots:
+                if snap.gaze_violation is None:
+                    continue
+                gaze_historical_samples += 1
+                if bool(snap.gaze_violation):
+                    gaze_historical_hits += 1
+            gaze_sustained_hits = gaze_historical_hits + (1 if bool(gaze_violation) else 0)
+            gaze_sustained_samples = gaze_historical_samples + 1
+            sustained_gaze_triggered = (
+                gaze_sustained_hits >= GAZE_SUSTAINED_MIN_HITS
+                and gaze_sustained_samples >= GAZE_SUSTAINED_MIN_HITS
+            )
+
+            if gaze_violation:
+                structured_reasons.append({
+                    'rule': 'gaze_signal',
+                    'severity': 'medium',
+                    'message': f"Gaze violation signal detected (sustained_hits={gaze_sustained_hits})",
+                    'enforce_violation': sustained_gaze_triggered,
+                })
+            rule_outcomes['gaze_signal'] = {
+                'triggered': bool(gaze_violation),
+                'value': bool(gaze_violation),
+                'sustained_triggered': sustained_gaze_triggered,
+                'window': {
+                    'size': GAZE_SUSTAINED_WINDOW,
+                    'min_hits': GAZE_SUSTAINED_MIN_HITS,
+                    'hits': gaze_sustained_hits,
+                    'samples': gaze_sustained_samples,
+                },
+            }
+            if sustained_gaze_triggered and not is_violation:
+                is_violation = True
+                violation_reason = "Sustained gaze deviation detected"
+
+            # Rule 5: Audio + mouth correlation
+            audio_mouth_triggered = bool(audio_detected) and (mouth_state == 'closed')
+            if audio_mouth_triggered:
+                structured_reasons.append({
+                    'rule': 'audio_mouth_correlation',
+                    'severity': 'low',
+                    'message': "Audio detected while mouth appears closed",
+                    'enforce_violation': True,
+                })
+            rule_outcomes['audio_mouth_correlation'] = {
+                'triggered': audio_mouth_triggered,
+                'audio_detected': bool(audio_detected),
+                'mouth_state': mouth_state,
+            }
+            if audio_mouth_triggered and not is_violation:
+                is_violation = True
+                violation_reason = "Suspicious voice activity detected"
+
+            # Rule 6: Earphone/headphone label detection
+            label_names = [
+                str(label.get('name', '')).strip().lower()
+                for label in label_detection_results
+                if isinstance(label, dict)
+            ]
+            earphone_keywords = {'headphone', 'headphones', 'earphone', 'earphones', 'airpod', 'earbud', 'earbuds'}
+            matched_earphone_labels = sorted({
+                name for name in label_names
+                if any(keyword in name for keyword in earphone_keywords)
+            })
+            earphone_triggered = len(matched_earphone_labels) > 0
+            if earphone_triggered:
+                structured_reasons.append({
+                    'rule': 'earphone_label',
+                    'severity': 'medium',
+                    'message': f"Earphone/headphone-like label detected: {', '.join(matched_earphone_labels)}",
+                    'enforce_violation': False,
+                })
+            rule_outcomes['earphone_label'] = {
+                'triggered': earphone_triggered,
+                'matched_labels': matched_earphone_labels,
+            }
+
+            # Face-related rules captured for consistency.
+            rule_outcomes['face_count'] = {
+                'triggered': face_count != 1,
+                'face_count': face_count,
+            }
+            rule_outcomes['face_match'] = {
+                'triggered': bool(face_count == 1 and match_score == 0.0 and is_violation and (violation_reason or '').startswith('Face mismatch')),
+                'match_score': match_score,
+                'threshold': 80,
+            }
+            rule_outcomes['client_capabilities'] = {
+                'webcam_status': client_webcam_status or 'unknown',
+                'mic_status': client_mic_status or 'unknown',
+                'detector_status': client_detector_status or 'unknown',
+            }
+            rule_outcomes['processing_meta'] = {
+                'server_fallback_applied': bool(server_fallback_applied),
+                'detector_mode': 'server_fallback' if server_fallback_applied else 'client',
+            }
+
+            snapshot_context.update({
+                'rule_outcomes': rule_outcomes,
+                'reasons': structured_reasons,
+            })
+
+            applied = None
+            if is_violation:
+                violation_type = 'webcam'
+                if violation_reason in {"No face detected", "Face mismatch with reference photo"} or str(violation_reason).startswith("Multiple faces detected"):
+                    violation_type = 'face'
+                elif violation_reason == "Sustained head pose deviation detected":
+                    violation_type = 'pose'
+                elif violation_reason == "Sustained gaze deviation detected":
+                    violation_type = 'gaze'
+                elif violation_reason == "Suspicious voice activity detected":
+                    violation_type = 'voice'
+
+                Violation.objects.create(session=session, violation_type=violation_type)
+                applied = self._apply_violation(session, violation_type)
+                snapshot_context.update({
+                    'violation_type': applied['violation_type'],
+                    'violation_type_count': applied['violation_type_count'],
+                    'violation_counters': applied['violation_counters'],
+                })
             
-            from ..models import ProctoringSnapshot
+            # Save Snapshot Record
             ProctoringSnapshot.objects.create(
                 session=session,
+                snapshot_id=snapshot_id,
                 image_url=saved_path,
                 is_violation=is_violation,
                 violation_reason=violation_reason,
                 face_count=face_count,
-                match_score=match_score
+                match_score=match_score,
+                pose_yaw=pose_yaw,
+                pose_pitch=pose_pitch,
+                pose_roll=pose_roll,
+                mouth_state=mouth_state,
+                audio_detected=audio_detected,
+                gaze_violation=gaze_violation,
+                label_detection_results=label_detection_results,
+                rule_outcomes=rule_outcomes,
             )
-            
-            response_data = {
-                'status': 'ok',
-                'violation': is_violation,
-                'violation_count': session.violation_count,
-                'cam_violation_count': session.cam_violation_count,
-            }
 
-            if session.is_disqualified:
-                 response_data['status'] = 'disqualified'
-                 response_data['reason'] = 'cam_violation_limit'
+            if applied and applied['terminated']:
+                 response_data = proctoring_response(
+                    STATUS_TERMINATED,
+                    applied['violation_count'],
+                    violation=is_violation,
+                    reason=applied['reason'] or violation_reason,
+                    context=snapshot_context,
+                )
             elif is_violation:
-                 response_data['status'] = 'warning'
-                 response_data['reason'] = violation_reason
+                 response_data = proctoring_response(
+                    STATUS_WARNING,
+                    session.violation_count,
+                    violation=True,
+                    reason=violation_reason,
+                    context=snapshot_context,
+                )
+            else:
+                response_data = proctoring_response(
+                    STATUS_OK,
+                    session.violation_count,
+                    violation=False,
+                    context=snapshot_context,
+                )
 
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
+            print(f"Proctoring Error: {e}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

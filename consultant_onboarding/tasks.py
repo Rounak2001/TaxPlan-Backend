@@ -1,12 +1,41 @@
+import os
+import random
+import re
 from celery import shared_task
+from celery.exceptions import MaxRetriesExceededError
 from .services import VideoEvaluator
 from .models import VideoResponse
 import logging
+from google.api_core.exceptions import ResourceExhausted
 
 logger = logging.getLogger(__name__)
 
-@shared_task
-def evaluate_video_task(video_response_id, question_text):
+def _parse_retry_delay_seconds(message):
+    text = str(message or '')
+    m = re.search(r'Please retry in ([0-9]+(?:\.[0-9]+)?)s', text)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    m = re.search(r'retry_delay\\s*\\{\\s*seconds:\\s*([0-9]+)', text)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _is_gemini_quota_error(exc):
+    if isinstance(exc, ResourceExhausted):
+        return True
+    msg = str(exc or '').lower()
+    return 'quota' in msg and 'exceeded' in msg and ('429' in msg or 'resourceexhausted' in msg)
+
+
+@shared_task(bind=True)
+def evaluate_video_task(self, video_response_id, question_text):
     """
     Background task to evaluate a video response.
     It transcribes the video using AWS Transcribe and evaluates the transcript via Gemini API.
@@ -19,19 +48,32 @@ def evaluate_video_task(video_response_id, question_text):
         logger.error(f"VideoResponse ID {video_response_id} not found.")
         return
 
-    # Update status to processing (should already be set by view, but good practice here too)
-    video_response.ai_status = 'processing'
-    video_response.save(update_fields=['ai_status'])
-
     evaluator = VideoEvaluator()
     try:
-        # Run transcription + Gemini evaluation
-        result = evaluator.process_video(video_response, question_text)
+        # Keep status as "processing" while we work (and through retries).
+        if video_response.ai_status != 'processing':
+            video_response.ai_status = 'processing'
+            video_response.save(update_fields=['ai_status'])
+
+        # Avoid re-running AWS Transcribe on Gemini 429 retries.
+        transcript = (video_response.ai_transcript or '').strip()
+        if not transcript:
+            transcript = evaluator.transcribe_video(video_response)
+            video_response.ai_transcript = transcript
+            video_response.save(update_fields=['ai_transcript'])
+
+        local_video_path = evaluator.download_video_to_temp(video_response)
+        try:
+            evaluation = evaluator.evaluate_transcript(transcript, question_text, local_video_path)
+        finally:
+            try:
+                os.remove(local_video_path)
+            except OSError:
+                pass
         
         # Save results
-        video_response.ai_transcript = result.get('transcript', '')
-        video_response.ai_score = result.get('score', 0)
-        video_response.ai_feedback = result.get('feedback', {})
+        video_response.ai_score = int(evaluation.get('score', 0) or 0)
+        video_response.ai_feedback = evaluation
         video_response.ai_status = 'completed'
         video_response.save()
         logger.info(f"Successfully evaluated VideoResponse ID {video_response_id}")
@@ -50,10 +92,42 @@ def evaluate_video_task(video_response_id, question_text):
             logger.warning(f"Auto-credential check failed (non-fatal): {cred_err}")
         
     except Exception as e:
+        if _is_gemini_quota_error(e):
+            retry_delay_s = _parse_retry_delay_seconds(e) or 8.0
+            max_retries = int(os.getenv('GEMINI_429_MAX_RETRIES', '6'))
+            # Respect server-provided delay, add small jitter, cap to 2 minutes.
+            countdown = max(3, min(120, int(round(retry_delay_s + random.uniform(0.5, 2.5)))))
+
+            # Keep status in processing and attach a machine-readable reason.
+            video_response.ai_status = 'processing'
+            video_response.ai_feedback = {
+                'error': 'Gemini quota/rate-limit exceeded. Retrying.',
+                'code': 'GEMINI_QUOTA_EXCEEDED',
+                'retries': int(getattr(self.request, 'retries', 0) or 0),
+                'next_retry_in_s': countdown,
+            }
+            video_response.save(update_fields=['ai_status', 'ai_feedback'])
+
+            try:
+                raise self.retry(exc=e, countdown=countdown, max_retries=max_retries)
+            except MaxRetriesExceededError:
+                logger.error(f"Gemini quota exceeded and max retries reached for VideoResponse ID {video_response_id}: {e}")
+                video_response.ai_status = 'failed'
+                video_response.ai_feedback = {
+                    'error': str(e),
+                    'code': 'GEMINI_QUOTA_EXCEEDED',
+                }
+                video_response.save(update_fields=['ai_status', 'ai_feedback'])
+                return
+
         logger.error(f"Failed to evaluate VideoResponse ID {video_response_id}: {e}")
         video_response.ai_status = 'failed'
-        video_response.save(update_fields=['ai_status'])
-        raise e
+        video_response.ai_feedback = {
+            'error': str(e),
+            'code': 'VIDEO_EVAL_FAILED',
+        }
+        video_response.save(update_fields=['ai_status', 'ai_feedback'])
+        return
 
 @shared_task
 def test_mail_task(recipient_email):
