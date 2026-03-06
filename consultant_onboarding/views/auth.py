@@ -445,6 +445,26 @@ def upload_identity_document(request):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         if verification_status != 'verified':
+            # If verification couldn't be performed (quota/outage), don't tell the user their ID is "invalid".
+            error_code = result.get('error_code')
+            if verification_status in ('error', 'failed') or error_code in ('GEMINI_QUOTA_EXCEEDED', 'IDENTITY_VERIFICATION_UNAVAILABLE'):
+                try:
+                    default_storage.delete(saved_path)
+                except Exception:
+                    pass
+                identity_doc.delete()
+                retry_in_s = result.get('retry_in_s')
+                return Response({
+                    "error": "Identity verification is temporarily unavailable. Please try again shortly.",
+                    "code": error_code or "IDENTITY_VERIFICATION_UNAVAILABLE",
+                    "verification": {
+                        "document_type": result.get('document_type'),
+                        "status": result.get('verification_status'),
+                        "privacy_notes": result.get('privacy_notes', ''),
+                        "retry_in_s": retry_in_s,
+                    }
+                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
             try:
                 default_storage.delete(saved_path)
             except Exception:

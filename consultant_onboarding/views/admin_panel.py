@@ -7,6 +7,7 @@ import jwt
 import random
 import string
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.core.mail import send_mail
@@ -31,6 +32,7 @@ from consultant_onboarding.models import (
     Violation,
     ProctoringSnapshot,
 )
+from core_auth.models import User
 
 # ------------------------------------------------------------------
 # Hardcoded admin credentials (matches backend1)
@@ -75,6 +77,34 @@ def get_storage_url(path):
     except Exception as e:
         print(f"Error generating URL for {path}: {e}")
         return None
+
+
+def _storage_path_from_url_or_path(value):
+    """Best-effort conversion of a storage URL/path to a key usable by default_storage.delete."""
+    if not value:
+        return None
+
+    text = str(value)
+    # Already looks like a storage-relative path.
+    if not text.startswith('http://') and not text.startswith('https://'):
+        return text.lstrip('/')
+
+    try:
+        parsed = urlparse(text)
+        return parsed.path.lstrip('/')
+    except Exception:
+        return None
+
+
+def _safe_delete_storage_file(value):
+    path = _storage_path_from_url_or_path(value)
+    if not path:
+        return
+    try:
+        default_storage.delete(path)
+    except Exception:
+        # Storage cleanup should not block deletion of database records.
+        pass
 
 
 # ------------------------------------------------------------------
@@ -498,3 +528,47 @@ def generate_credentials(request, app_id):
     else:
         status_code = status.HTTP_400_BAD_REQUEST if "already generated" in str(result) else status.HTTP_500_INTERNAL_SERVER_ERROR
         return Response({'error': result}, status=status_code)
+
+
+@api_view(['DELETE'])
+@authentication_classes([AdminJWTAuthentication])
+@permission_classes([AllowAny])
+def delete_consultant(request, app_id):
+    """Delete onboarding consultant application and linked consultant user (if any)."""
+    try:
+        app = ConsultantApplication.objects.get(id=app_id)
+    except ConsultantApplication.DoesNotExist:
+        return Response({'error': 'Consultant not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Delete stored onboarding files before deleting rows.
+    for d in AuthConsultantDocument.objects.filter(application=app):
+        if d.file:
+            _safe_delete_storage_file(str(d.file))
+
+    for d in IdentityDocument.objects.filter(application=app):
+        _safe_delete_storage_file(d.file_path)
+
+    for d in ConsultantDocument.objects.filter(application=app):
+        _safe_delete_storage_file(d.file_path)
+
+    for f in FaceVerification.objects.filter(application=app):
+        _safe_delete_storage_file(f.id_image_path)
+        _safe_delete_storage_file(f.live_image_path)
+
+    for s in UserSession.objects.filter(application=app):
+        for v in VideoResponse.objects.filter(session=s):
+            _safe_delete_storage_file(v.video_file)
+        for snap in ProctoringSnapshot.objects.filter(session=s):
+            _safe_delete_storage_file(snap.image_url)
+
+    # Remove the live consultant account only (never delete client accounts by email).
+    User.objects.filter(email=app.email, role=User.CONSULTANT).delete()
+
+    app_email = app.email
+    app_id_value = app.id
+    app.delete()
+
+    return Response(
+        {'message': 'Consultant deleted successfully', 'id': app_id_value, 'email': app_email},
+        status=status.HTTP_200_OK
+    )

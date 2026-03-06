@@ -41,5 +41,6 @@ urlpatterns = [
     path('admin-panel/consultants/', admin_panel.consultant_list, name='admin_panel_consultant_list'),
     path('admin-panel/consultants/<int:app_id>/', admin_panel.consultant_detail, name='admin_panel_consultant_detail'),
     path('admin-panel/consultants/<int:app_id>/generate-credentials/', admin_panel.generate_credentials, name='admin_panel_generate_credentials'),
+    path('admin-panel/consultants/<int:app_id>/delete/', admin_panel.delete_consultant, name='admin_panel_delete_consultant'),
 ]
 

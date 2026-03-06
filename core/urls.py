@@ -2,9 +2,13 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+import os
+
+# Strong Admin URL from environment, default to 'admin/' if not set in dev
+admin_url = os.getenv('ADMIN_URL', 'admin/')
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path(f'{admin_url}', admin.site.urls),
     path('api/', include('core_auth.urls')),
     path('api/consultations/', include('consultations.urls')),
     path('api/vault/', include('document_vault.urls')),

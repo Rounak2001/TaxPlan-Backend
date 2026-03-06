@@ -88,6 +88,7 @@ class AuthConsultantDocument(models.Model):
     DOCUMENT_TYPES = [
         ('Qualification', 'Qualification Degree'),
         ('Certificate', 'Certificate'),
+        ('experience_letter', 'Experience Letter'),
         ('bachelors_degree', "Bachelor's Degree"),
         ('masters_degree', "Master's Degree"),
         ('certificate', 'Certificate (Additional)'),
