@@ -35,12 +35,13 @@ class ConsultationBookingSerializer(serializers.ModelSerializer):
             'notes', 'attachments', 'uploaded_attachments', 
             'status', 'payment_status', 'razorpay_order_id', 
             'razorpay_payment_id', 'amount', 'meeting_link', 'created_at',
-            'reschedule_count'
+            'reschedule_count', 'reschedule_history'
         ]
         # Security: Prevent client from setting status, payment_status, or meeting_link
         read_only_fields = [
             'client', 'created_at', 'status', 'payment_status', 
-            'razorpay_order_id', 'razorpay_payment_id', 'amount', 'meeting_link'
+            'razorpay_order_id', 'razorpay_payment_id', 'amount', 'meeting_link',
+            'reschedule_history'
         ]
     
     def get_consultant_name(self, obj):
