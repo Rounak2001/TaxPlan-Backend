@@ -9,6 +9,7 @@ class UserAdmin(BaseUserAdmin):
     list_filter = ('role', 'is_phone_verified', 'is_onboarded', 'is_staff', 'is_active')
     search_fields = ('username', 'email', 'phone_number', 'first_name', 'last_name')
     ordering = ('-date_joined',)
+    show_facets = admin.ShowFacets.NEVER
     
     fieldsets = BaseUserAdmin.fieldsets + (
         ('Custom Fields', {

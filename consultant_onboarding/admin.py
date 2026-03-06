@@ -79,6 +79,7 @@ class ConsultantApplicationAdmin(admin.ModelAdmin):
     list_filter = ('status', 'practice_type')
     search_fields = ('email', 'first_name', 'last_name')
     actions = [approve_applications]
+    show_facets = admin.ShowFacets.NEVER
 
 admin.site.register(ConsultantApplication, ConsultantApplicationAdmin)
 

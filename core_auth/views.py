@@ -292,7 +292,7 @@ class GoogleAuthView(APIView):
                 if user.role == User.CONSULTANT:
                     return Response(
                         {
-                            'error': 'Consultants must use their provided email and password to log in.',
+                            'error': 'Consultants must use their provided username   and password to log in.',
                             'code': 'EMAIL_CONFLICT'
                         }, 
                         status=status.HTTP_403_FORBIDDEN
