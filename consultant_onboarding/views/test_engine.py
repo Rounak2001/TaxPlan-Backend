@@ -101,6 +101,22 @@ class UserSessionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return UserSession.objects.filter(application=self.request.application)
 
+    def _compute_mcq_score(self, question_set, user_answers):
+        answers = user_answers if isinstance(user_answers, dict) else {}
+        score = 0
+        total_questions = len(question_set or [])
+
+        for question in (question_set or []):
+            q_id = question.get('id')
+            correct_answer = question.get('answer')
+            user_selected = answers.get(q_id)
+            if user_selected is None and q_id is not None:
+                user_selected = answers.get(str(q_id))
+            if user_selected is not None and user_selected == correct_answer:
+                score += 1
+
+        return score, total_questions
+
     def _apply_violation(self, session, violation_type):
         """Centralized violation tracking using violation_counters JSONField."""
         violation_type = (violation_type or 'unknown').strip().lower()
@@ -132,6 +148,12 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             reason = f"Maximum total violations reached ({session.violation_count})"
 
         if terminated:
+            try:
+                score, _total = self._compute_mcq_score(session.question_set, session.mcq_answers)
+                session.score = score
+            except Exception:
+                # Best-effort scoring; do not block termination.
+                pass
             session.status = 'flagged'
             session.end_time = timezone.now()
         session.save()
@@ -283,28 +305,28 @@ class UserSessionViewSet(viewsets.ModelViewSet):
     def save_mcq(self, request, pk=None):
         """Save MCQ answers mid-test without marking it as completed."""
         session = self.get_object()
-        if session.status != 'ongoing':
-            return Response({'error': 'Cannot save MCQ, session is not ongoing.'}, status=status.HTTP_400_BAD_REQUEST)
+        if session.status not in {'ongoing', 'flagged'}:
+            return Response({'error': 'Cannot save MCQ, session is not active.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user_answers = request.data.get('answers', {}) 
-        
-        score = 0
-        total_questions = len(session.question_set)
-        
-        for question in session.question_set:
-            q_id = question.get('id')
-            correct_answer = question.get('answer')
-            user_selected = user_answers.get(q_id)
-            if user_selected and user_selected == correct_answer:
-                score += 1
-        
+        if not isinstance(user_answers, dict):
+            user_answers = {}
+
+        existing_answers = session.mcq_answers if isinstance(session.mcq_answers, dict) else {}
+        merged_answers = {**existing_answers, **user_answers}
+        score, total_questions = self._compute_mcq_score(session.question_set, merged_answers)
+
+        session.mcq_answers = merged_answers
         session.score = score
-        session.save(update_fields=['score'])
+        session.save(update_fields=['mcq_answers', 'score'])
+
+        answered_count = sum(1 for _k, v in merged_answers.items() if v not in {None, ''})
         
         return Response({
             'message': 'MCQ progress saved successfully',
             'score': score,
-            'total': total_questions
+            'total': total_questions,
+            'answered': answered_count,
         }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
@@ -314,17 +336,14 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Test already submitted'}, status=status.HTTP_400_BAD_REQUEST)
 
         user_answers = request.data.get('answers', {}) 
-        
-        score = 0
-        total_questions = len(session.question_set)
-        
-        for question in session.question_set:
-            q_id = question.get('id')
-            correct_answer = question.get('answer')
-            user_selected = user_answers.get(q_id)
-            if user_selected and user_selected == correct_answer:
-                score += 1
-        
+        if not isinstance(user_answers, dict):
+            user_answers = {}
+
+        existing_answers = session.mcq_answers if isinstance(session.mcq_answers, dict) else {}
+        merged_answers = {**existing_answers, **user_answers}
+        score, total_questions = self._compute_mcq_score(session.question_set, merged_answers)
+
+        session.mcq_answers = merged_answers
         session.score = score
         # Only mark as completed if it wasn't already flagged
         if session.status != 'flagged':

@@ -214,6 +214,7 @@ class UserSession(models.Model):
     selected_domains = models.JSONField(default=list) 
     question_set = models.JSONField(default=list)
     video_question_set = models.JSONField(default=list) 
+    mcq_answers = models.JSONField(default=dict, blank=True)
     score = models.FloatField(default=0.0)
 
     start_time = models.DateTimeField(auto_now_add=True)
