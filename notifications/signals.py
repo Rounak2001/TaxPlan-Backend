@@ -13,7 +13,8 @@ from chat.models import Message
 
 from .models import Notification
 from .serializers import NotificationSerializer
-from .whatsapp_service import send_whatsapp_template
+from .serializers import NotificationSerializer
+from .tasks import send_whatsapp_template_task
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,7 @@ def notify_document_activity(sender, instance, created, **kwargs):
             )
             # Send WhatsApp Template
             if getattr(instance.client, 'phone_number', None):
-                send_whatsapp_template(
+                send_whatsapp_template_task.delay(
                     phone_number=instance.client.phone_number,
                     template_name="doc_rejected_action_needed",
                     variables=[
@@ -163,7 +164,7 @@ def notify_shared_report_activity(sender, instance, created, **kwargs):
             )
             # Send WhatsApp Template
             if getattr(instance.client, 'phone_number', None):
-                send_whatsapp_template(
+                send_whatsapp_template_task.delay(
                     phone_number=instance.client.phone_number,
                     template_name="new_document_shared",
                     variables=[
@@ -194,7 +195,7 @@ def notify_legal_notice_activity(sender, instance, created, **kwargs):
             )
             # Send WhatsApp Template
             if getattr(instance.client, 'phone_number', None):
-                send_whatsapp_template(
+                send_whatsapp_template_task.delay(
                     phone_number=instance.client.phone_number,
                     template_name="new_document_shared",
                     variables=[
@@ -243,7 +244,7 @@ def notify_service_activity(sender, instance, created, **kwargs):
             )
             # Send WhatsApp Template
             if getattr(instance.client, 'phone_number', None):
-                send_whatsapp_template(
+                send_whatsapp_template_task.delay(
                     phone_number=instance.client.phone_number,
                     template_name="service_status_update",
                     variables=[
@@ -319,7 +320,7 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                 )
                 # Send WhatsApp Template
                 if getattr(instance.client, 'phone_number', None):
-                    send_whatsapp_template(
+                    send_whatsapp_template_task.delay(
                         phone_number=instance.client.phone_number,
                         template_name="consultation_status_update",
                         variables=[
@@ -341,7 +342,7 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                 )
                 # Send WhatsApp Template
                 if getattr(instance.client, 'phone_number', None):
-                    send_whatsapp_template(
+                    send_whatsapp_template_task.delay(
                         phone_number=instance.client.phone_number,
                         template_name="consultation_status_update",
                         variables=[
@@ -391,7 +392,7 @@ def notify_payment_activity(sender, instance, created, **kwargs):
             )
             # Send WhatsApp Template
             if getattr(instance.user, 'phone_number', None):
-                send_whatsapp_template(
+                send_whatsapp_template_task.delay(
                     phone_number=instance.user.phone_number,
                     template_name="payment_receipt_success",
                     variables=[
@@ -440,17 +441,6 @@ def notify_chat_message(sender, instance, created, **kwargs):
             link="/messages" if recipient.role == 'CONSULTANT' else "/client/messages",
         )
         
-        # Send WhatsApp Template for clients ONLY (consultants usually live in the dashboard)
-        if recipient.role == 'CLIENT' and getattr(recipient, 'phone_number', None):
-            send_whatsapp_template(
-                phone_number=recipient.phone_number,
-                template_name="unread_secure_message",
-                variables=[
-                    recipient.first_name or recipient.username,
-                    sender_name,
-                    preview
-                ]
-            )
     except Exception as exc:
         import traceback
         import sys

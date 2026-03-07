@@ -300,7 +300,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 
                 # Update conversation timestamp
                 conversation.save(update_fields=['updated_at'])
-                
+                # --- WhatsApp Outbound Sync ---
+                if self.user.role == 'CONSULTANT' and conversation.client.phone_number:
+                    # Send message to client's WhatsApp securely via Meta API using Celery
+                    from notifications.tasks import send_whatsapp_text_task
+                    
+                    # Ensure phone number is formatted correctly (e.g. removing '+')
+                    client_phone = conversation.client.phone_number.replace('+', '').replace(' ', '')
+                    
+                    # Prefix message with Consultant's name to avoid confusion
+                    consultant_name = self.user.first_name or self.user.username
+                    wa_message = f"[{consultant_name}]: {content}"
+                    
+                    # Offload to Celery background task for immediate React dashboard response
+                    send_whatsapp_text_task.delay(
+                        phone_number=client_phone,
+                        text=wa_message
+                    )
+                    logger.info(f"Queued outbound WhatsApp message to {client_phone[-4:]} via Celery")
+                # ------------------------------
+
                 return {
                     'id': message.id,
                     'sender_id': self.user.id,
