@@ -11,6 +11,8 @@ urlpatterns = [
     # Auth & Profile Endpoints
     path('onboarding/auth/google/', auth.google_auth, name='onboarding_google_auth'),
     path('auth/onboarding/complete/', auth.complete_onboarding, name='onboarding_complete'),
+    path('auth/onboarding/send-otp/', auth.send_phone_otp, name='onboarding_send_phone_otp'),
+    path('auth/onboarding/verify-otp/', auth.verify_phone_otp, name='onboarding_verify_phone_otp'),
     path('auth/profile/', auth.get_user_profile, name='onboarding_profile'),
     path('auth/accept-declaration/', auth.accept_declaration, name='onboarding_accept_declaration'),
     path('auth/logout/', auth.logout, name='onboarding_logout'),

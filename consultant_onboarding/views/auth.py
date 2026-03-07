@@ -1,6 +1,7 @@
 import uuid
 import re
 import json
+import logging
 from datetime import datetime
 from difflib import SequenceMatcher
 from django.conf import settings
@@ -15,8 +16,38 @@ from google.auth.transport import requests as google_requests
 from ..models import ConsultantApplication, IdentityDocument, ConsultantDocument as RealConsultantDocument
 from ..serializers import ApplicationSerializer, GoogleAuthSerializer, OnboardingSerializer, AuthConsultantDocumentSerializer
 from ..authentication import generate_applicant_token, IsApplicant
+from core_auth.services.whatsapp_otp import (
+    generate_otp,
+    store_otp,
+    send_whatsapp_otp,
+    verify_otp as verify_otp_service,
+    can_resend_otp,
+    RESEND_COOLDOWN_SECONDS,
+    OTP_EXPIRY_SECONDS,
+)
+
+logger = logging.getLogger(__name__)
 
 NAME_MATCH_THRESHOLD = 50
+
+
+def _normalize_indian_mobile(raw_phone):
+    digits_only = re.sub(r"\D", "", str(raw_phone or ""))
+
+    # +91XXXXXXXXXX / 91XXXXXXXXXX / XXXXXXXXXX
+    if len(digits_only) == 12 and digits_only.startswith("91"):
+        digits_only = digits_only[2:]
+
+    if len(digits_only) != 10:
+        return None, None, None, None, "Please enter a valid 10-digit Indian mobile number."
+
+    if not re.match(r"^[6-9]\d{9}$", digits_only):
+        return None, None, None, None, "Please enter a valid Indian mobile number starting with 6-9."
+
+    full_phone = f"+91{digits_only}"
+    wa_phone = f"91{digits_only}"
+    display = f"+91 {digits_only[:5]} {digits_only[5:]}"
+    return digits_only, full_phone, wa_phone, display, None
 
 
 def _normalize_name(value):
@@ -283,6 +314,138 @@ def accept_declaration(request):
     application.has_accepted_declaration = True
     application.save(update_fields=['has_accepted_declaration'])
     return Response(get_profile_response_data(application), status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsApplicant])
+def send_phone_otp(request):
+    """
+    Send OTP to a phone number via WhatsApp for onboarding applicants.
+
+    In DEBUG (dev) mode, if WhatsApp credentials are not configured, the OTP is returned
+    as `debug_otp` so you can test the flow locally without Meta setup.
+    """
+    application = request.application
+    phone_number = request.data.get("phone_number", "").strip()
+
+    digits_only, full_phone, wa_phone, display, error = _normalize_indian_mobile(phone_number)
+    if error:
+        return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+
+    existing_app = ConsultantApplication.objects.filter(
+        phone_number=full_phone, is_phone_verified=True
+    ).exclude(id=application.id).first()
+    if existing_app:
+        return Response(
+            {"error": "This phone number is already registered with another account."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    can_send, reason, wait_seconds = can_resend_otp(full_phone)
+    if not can_send:
+        return Response(
+            {"error": reason, "cooldown": wait_seconds},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    otp = generate_otp()
+    store_otp(full_phone, otp)
+
+    if (application.phone_number or "").strip() != full_phone or application.is_phone_verified:
+        application.phone_number = full_phone
+        application.is_phone_verified = False
+        application.save(update_fields=["phone_number", "is_phone_verified"])
+
+    meta_configured = bool(
+        getattr(settings, "META_PHONE_NUMBER_ID", None)
+        and getattr(settings, "META_ACCESS_TOKEN", None)
+    )
+
+    if not meta_configured:
+        if settings.DEBUG:
+            logger.info("DEV OTP for %s: %s", full_phone[-4:], otp)
+            return Response(
+                {
+                    "success": True,
+                    "message": "DEV mode: OTP generated (WhatsApp not configured).",
+                    "cooldown": RESEND_COOLDOWN_SECONDS,
+                    "expiry": OTP_EXPIRY_SECONDS,
+                    "phone_display": display,
+                    "debug_otp": otp,
+                },
+                status=status.HTTP_200_OK,
+            )
+        return Response(
+            {"error": "WhatsApp service not configured. Please contact support."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    success, message = send_whatsapp_otp(wa_phone, otp)
+    if not success:
+        return Response({"error": message}, status=status.HTTP_502_BAD_GATEWAY)
+
+    logger.info("OTP sent to %s for application %s", full_phone[-4:], application.id)
+    return Response(
+        {
+            "success": True,
+            "message": "OTP sent to your WhatsApp number.",
+            "cooldown": RESEND_COOLDOWN_SECONDS,
+            "expiry": OTP_EXPIRY_SECONDS,
+            "phone_display": display,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsApplicant])
+def verify_phone_otp(request):
+    """Verify OTP and mark applicant phone number as verified."""
+    application = request.application
+    phone_number = request.data.get("phone_number", "").strip()
+    otp = request.data.get("otp", "").strip()
+
+    if not phone_number or not otp:
+        return Response(
+            {"error": "Phone number and OTP are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if len(otp) != 6 or not otp.isdigit():
+        return Response(
+            {"error": "OTP must be a 6-digit number."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    _, full_phone, _, _, error = _normalize_indian_mobile(phone_number)
+    if error:
+        return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+
+    success, message, remaining_attempts = verify_otp_service(full_phone, otp)
+    if not success:
+        return Response(
+            {
+                "success": False,
+                "verified": False,
+                "message": message,
+                "remaining_attempts": remaining_attempts,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    application.phone_number = full_phone
+    application.is_phone_verified = True
+    application.save(update_fields=["phone_number", "is_phone_verified"])
+
+    return Response(
+        {
+            **get_profile_response_data(application),
+            "success": True,
+            "verified": True,
+            "message": message,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @csrf_exempt

@@ -1,3 +1,4 @@
+import re
 from rest_framework import serializers
 from .models import (
     ConsultantApplication, 
@@ -17,12 +18,12 @@ class ApplicationSerializer(serializers.ModelSerializer):
         model = ConsultantApplication
         fields = [
             'id', 'email', 'first_name', 'middle_name', 'last_name', 
-            'age', 'dob', 'phone_number', 
+            'age', 'dob', 'phone_number', 'is_phone_verified',
             'address_line1', 'address_line2', 'city', 'state', 'pincode', 
             'practice_type', 'qualification', 'experience_years', 'certifications', 'bio',
             'is_verified', 'has_accepted_declaration', 'is_onboarded', 'status', 'created_at'
         ]
-        read_only_fields = ['id', 'email', 'is_verified', 'has_accepted_declaration', 'status', 'created_at']
+        read_only_fields = ['id', 'email', 'is_verified', 'has_accepted_declaration', 'status', 'created_at', 'is_phone_verified']
 
 
 class GoogleAuthSerializer(serializers.Serializer):
@@ -58,9 +59,17 @@ class OnboardingSerializer(serializers.ModelSerializer):
         return value
     
     def validate_phone_number(self, value):
-        if not value or len(value.strip()) < 10:
+        raw = str(value or '').strip()
+        if not raw:
             raise serializers.ValidationError('Valid phone number is required')
-        return value.strip()
+
+        digits_only = re.sub(r'\D', '', raw)
+        if len(digits_only) == 12 and digits_only.startswith('91'):
+            digits_only = digits_only[2:]
+        if len(digits_only) != 10 or not re.match(r'^[6-9]\d{9}$', digits_only):
+            raise serializers.ValidationError('Valid phone number is required')
+
+        return f'+91{digits_only}'
     
     def validate_address_line1(self, value):
         if not value or len(value.strip()) < 5:
@@ -83,6 +92,24 @@ class OnboardingSerializer(serializers.ModelSerializer):
         return value.strip()
 
     def update(self, instance, validated_data):
+        incoming_phone = validated_data.get('phone_number', None)
+        if incoming_phone is not None:
+            old_raw = str(instance.phone_number or '').strip()
+            new_raw = str(incoming_phone or '').strip()
+
+            old_digits = re.sub(r'\D', '', old_raw)
+            if len(old_digits) == 12 and old_digits.startswith('91'):
+                old_digits = old_digits[2:]
+            old_e164 = f'+91{old_digits}' if len(old_digits) == 10 else old_raw
+
+            new_digits = re.sub(r'\D', '', new_raw)
+            if len(new_digits) == 12 and new_digits.startswith('91'):
+                new_digits = new_digits[2:]
+            new_e164 = f'+91{new_digits}' if len(new_digits) == 10 else new_raw
+
+            if old_e164 and new_e164 and old_e164 != new_e164:
+                instance.is_phone_verified = False
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         # Update user profile completeness indicator equivalent logic if necessary
