@@ -398,6 +398,27 @@ def consultants_by_date(request):
 
         if has_availability:
             profile = getattr(consultant, 'consultant_service_profile', None)
+            
+            # Include recent reviews if requested/available
+            recent_reviews = []
+            average_rating = 0
+            total_reviews = 0
+            
+            if profile:
+                # Since average_rating and total_reviews exist on the profile:
+                average_rating = profile.average_rating if hasattr(profile, 'average_rating') else 0
+                total_reviews = profile.total_reviews if hasattr(profile, 'total_reviews') else 0
+                
+                # Fetch recent reviews (limit to 3 for summary view)
+                from consultants.models import ConsultantReview
+                reviews = ConsultantReview.objects.filter(consultant=profile).select_related('client').order_by('-created_at')[:3]
+                
+                recent_reviews = [{
+                    'client_name': review.client.get_full_name() or review.client.username,
+                    'rating': review.rating,
+                    'review_text': review.review_text
+                } for review in reviews]
+
             available_consultants.append({
                 'id': consultant.id,
                 'username': consultant.username,
@@ -408,6 +429,9 @@ def consultants_by_date(request):
                 'qualification': profile.qualification if profile else '',
                 'experience_years': profile.experience_years if profile else 0,
                 'consultation_fee': str(profile.consultation_fee) if profile else '200.00',
+                'average_rating': average_rating,
+                'total_reviews': total_reviews,
+                'recent_reviews': recent_reviews
             })
 
     return Response({'consultants': available_consultants})

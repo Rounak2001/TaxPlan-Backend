@@ -44,6 +44,22 @@ class OrderItem(models.Model):
         related_name='order_items'
     )
     
+    # Consultant selection
+    SELECTION_MODE_CHOICES = [
+        ('auto', 'Auto-Assigned'),
+        ('manual', 'Manually Chosen'),
+    ]
+    selected_consultant = models.ForeignKey(
+        'consultants.ConsultantServiceProfile',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='order_items_selected',
+        help_text="Consultant chosen by client (manual) or system (auto)"
+    )
+    selection_mode = models.CharField(
+        max_length=10, choices=SELECTION_MODE_CHOICES, default='auto'
+    )
+
     # Keep existing fields for backward compatibility
     category = models.CharField(max_length=100)
     service_title = models.CharField(max_length=255)

@@ -73,6 +73,88 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             
         return Response(result)
 
+    @action(detail=True, methods=['get'], url_path='available-consultants')
+    def available_consultants(self, request, pk=None):
+        """
+        Get consultants who offer this service, sorted by workload (least busy first).
+        Also detects returning clients and suggests their previous consultant.
+        Includes recent reviews per consultant for the "More Info" panel.
+        """
+        service = self.get_object()
+        
+        # Reuse existing matching logic
+        from .services import find_matching_consultants, find_familiar_consultant
+        from .models import ConsultantReview
+        
+        consultants = find_matching_consultants(service.id)
+        
+        # Detect returning client — find a consultant they've worked with before
+        familiar = None
+        familiar_data = None
+        if request.user.is_authenticated:
+            familiar = find_familiar_consultant(request.user, service.id)
+        
+        # Build consultant data with reviews
+        result = []
+        for consultant in consultants:
+            live_client_count = ClientServiceRequest.objects.filter(
+                assigned_consultant=consultant
+            ).exclude(status__in=['completed', 'cancelled']).count()
+            
+            available_slots = consultant.max_concurrent_clients - live_client_count
+            utilization = (live_client_count / consultant.max_concurrent_clients * 100) if consultant.max_concurrent_clients > 0 else 0
+            
+            # Fetch recent reviews (up to 3)
+            recent_reviews = ConsultantReview.objects.filter(
+                consultant=consultant
+            ).select_related('client', 'service_request__service').order_by('-created_at')[:3]
+            
+            reviews_data = []
+            for review in recent_reviews:
+                reviews_data.append({
+                    'id': review.id,
+                    'rating': review.rating,
+                    'review_text': review.review_text,
+                    'client_name': review.client.get_full_name() or 'Anonymous',
+                    'service_title': review.service_request.service.title if review.service_request and review.service_request.service else '',
+                    'created_at': review.created_at.isoformat(),
+                })
+            
+            consultant_data = {
+                'id': consultant.id,
+                'full_name': consultant.full_name,
+                'qualification': consultant.qualification,
+                'experience_years': consultant.experience_years,
+                'bio': consultant.bio or '',
+                'average_rating': float(consultant.average_rating),
+                'total_reviews': consultant.total_reviews,
+                'recent_reviews': reviews_data,
+                'workload': {
+                    'current_tasks': live_client_count,
+                    'max_capacity': consultant.max_concurrent_clients,
+                    'available_slots': available_slots,
+                    'utilization': round(utilization, 1)
+                }
+            }
+            
+            result.append(consultant_data)
+            
+            # If this is the familiar consultant, build the suggestion
+            if familiar and consultant.id == familiar.id:
+                familiar_data = {
+                    **consultant_data,
+                    'message': f"{consultant.full_name} has worked with you before and already understands your requirements. Continuing with the same consultant ensures faster processing and smoother communication."
+                }
+        
+        auto_recommended = result[0] if result else None
+        
+        return Response({
+            'consultants': result,
+            'auto_recommended': auto_recommended,
+            'familiar_consultant': familiar_data,
+            'total': len(result)
+        })
+
 
 class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
     """

@@ -6,7 +6,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from .models import ServiceOrder, OrderItem
-from consultants.models import Service, ClientServiceRequest
+from consultants.models import Service, ClientServiceRequest, ConsultantServiceProfile
 from .utils import create_service_requests_from_order
 
 import logging
@@ -71,13 +71,26 @@ def create_order(request):
             item_total = float(service.price) * qty
             total_amount += item_total
             
+            # Extract consultant selection data
+            consultant_id = item.get('consultant_id')
+            selection_mode = item.get('selection_mode', 'auto')
+            selected_consultant = None
+            
+            if consultant_id and selection_mode == 'manual':
+                try:
+                    selected_consultant = ConsultantServiceProfile.objects.get(id=consultant_id)
+                except ConsultantServiceProfile.DoesNotExist:
+                    pass  # Fall back to auto-assignment
+            
             valid_items.append({
                 'service': service,
                 'quantity': qty,
                 'price': service.price, # Record the price at time of booking
                 'category': service.category.name if service.category else 'General',
                 'title': service.title,
-                'variant': item.get('variantName', '')
+                'variant': item.get('variantName', ''),
+                'selected_consultant': selected_consultant,
+                'selection_mode': selection_mode,
             })
 
         if total_amount <= 0:
@@ -100,7 +113,9 @@ def create_order(request):
                     service_title=valid_item['title'],
                     variant_name=valid_item['variant'],
                     price=valid_item['price'],
-                    quantity=valid_item['quantity']
+                    quantity=valid_item['quantity'],
+                    selected_consultant=valid_item['selected_consultant'],
+                    selection_mode=valid_item['selection_mode'],
                 )
 
             # 4. Razorpay Order
