@@ -21,6 +21,7 @@ class ConsultantApplication(models.Model):
     middle_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
     phone_number = models.CharField(max_length=15, blank=True, null=True)
+    is_phone_verified = models.BooleanField(default=False)
     
     age = models.PositiveIntegerField(null=True, blank=True)
     dob = models.DateField(null=True, blank=True)
@@ -62,6 +63,7 @@ class ConsultantApplication(models.Model):
             self.first_name,
             self.last_name,
             self.phone_number,
+            self.is_phone_verified,
             self.city,
             self.state,
             self.pincode

@@ -306,12 +306,23 @@ META_ACCESS_TOKEN = os.getenv('META_ACCESS_TOKEN')
 META_API_VERSION = os.getenv('META_API_VERSION', 'v21.0')
 
 # Django Cache (for OTP storage with TTL)
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
-        'LOCATION': 'django_cache_table',
+# NOTE: DatabaseCache requires `python manage.py createcachetable` which isn't always run in dev.
+# Use Redis when explicitly configured; otherwise fall back to in-process memory cache.
+_CACHE_REDIS_URL = os.getenv('REDIS_URL')
+if _CACHE_REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': _CACHE_REDIS_URL,
+        }
     }
-}
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'taxplan_otp_cache',
+        }
+    }
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
