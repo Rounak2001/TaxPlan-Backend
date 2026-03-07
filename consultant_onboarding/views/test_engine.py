@@ -777,7 +777,18 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             if pose_roll is not None and abs(pose_roll) > HEAD_POSE_ROLL_THRESHOLD:
                 head_pose_triggered = True
 
-            recent_snapshots = ProctoringSnapshot.objects.filter(session=session).order_by('-timestamp')[:HEAD_POSE_SUSTAINED_WINDOW - 1]
+            # Reset sustained-window counting after a pose violation is raised, so older samples don't keep re-triggering.
+            last_pose_violation_at = (
+                Violation.objects
+                .filter(session=session, violation_type='pose')
+                .order_by('-timestamp')
+                .values_list('timestamp', flat=True)
+                .first()
+            )
+            recent_snapshots_qs = ProctoringSnapshot.objects.filter(session=session)
+            if last_pose_violation_at:
+                recent_snapshots_qs = recent_snapshots_qs.filter(timestamp__gt=last_pose_violation_at)
+            recent_snapshots = recent_snapshots_qs.order_by('-timestamp')[:HEAD_POSE_SUSTAINED_WINDOW - 1]
             historical_hits = 0
             historical_count = 0
             for snap in recent_snapshots:
@@ -828,7 +839,18 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                 violation_reason = "Sustained head pose deviation detected"
 
             # Rule 4: Gaze signal check (sustained-window)
-            recent_gaze_snapshots = ProctoringSnapshot.objects.filter(session=session).order_by('-timestamp')[:GAZE_SUSTAINED_WINDOW - 1]
+            # Reset sustained-window counting after a gaze violation is raised, so older samples don't keep re-triggering.
+            last_gaze_violation_at = (
+                Violation.objects
+                .filter(session=session, violation_type='gaze')
+                .order_by('-timestamp')
+                .values_list('timestamp', flat=True)
+                .first()
+            )
+            recent_gaze_qs = ProctoringSnapshot.objects.filter(session=session)
+            if last_gaze_violation_at:
+                recent_gaze_qs = recent_gaze_qs.filter(timestamp__gt=last_gaze_violation_at)
+            recent_gaze_snapshots = recent_gaze_qs.order_by('-timestamp')[:GAZE_SUSTAINED_WINDOW - 1]
             gaze_historical_hits = 0
             gaze_historical_samples = 0
             for snap in recent_gaze_snapshots:

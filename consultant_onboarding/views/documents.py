@@ -2,6 +2,7 @@ import time
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
+from django.core.files.storage import default_storage
 
 from ..models import ConsultantDocument
 from ..serializers import ConsultantDocumentSerializer
@@ -46,6 +47,20 @@ class UploadDocumentView(APIView):
             return Response({'error': 'Missing required fields: qualification_type, document_type, s3_path'}, status=400)
 
         try:
+            claimed_doc_type = str(document_type or "").strip().lower()
+
+            # If the user re-uploads a bachelor/master degree, replace the previous one to avoid
+            # leaving stale/unverified docs that would block credential generation.
+            if claimed_doc_type in {"bachelors_degree", "masters_degree"}:
+                previous = ConsultantDocument.objects.filter(application=application, document_type=document_type)
+                for old_doc in previous:
+                    try:
+                        if old_doc.file_path:
+                            default_storage.delete(str(old_doc.file_path).lstrip('/'))
+                    except Exception:
+                        pass
+                previous.delete()
+
             document = ConsultantDocument.objects.create(
                 application=application,
                 qualification_type=qualification_type,
@@ -53,7 +68,7 @@ class UploadDocumentView(APIView):
                 file_path=s3_path
             )
 
-            # Verify with Gemini asynchronously
+            # Verify with Gemini (best-effort, but enforce validity for bachelor's submissions)
             try:
                 from ..services import QualificationDocumentVerifier
                 verifier = QualificationDocumentVerifier()
@@ -62,7 +77,33 @@ class UploadDocumentView(APIView):
                 document.gemini_raw_response = result.get('raw_response')
                 document.save()
             except Exception as e:
-                print(f"Gemini verification failed (non-critical): {e}")
+                result = {"verification_status": "Error", "rejection_reason": "Verification service error", "raw_response": str(e)}
+                document.verification_status = "Error"
+                document.gemini_raw_response = str(e)
+                document.save()
+
+            verification_status = str(document.verification_status or "").strip().lower()
+            if claimed_doc_type == "bachelors_degree" and verification_status != "verified":
+                rejection_reason = (
+                    (result or {}).get("rejection_reason")
+                    or (result or {}).get("notes")
+                    or "Bachelor's degree verification failed. Please upload the correct Bachelor's degree certificate."
+                )
+                try:
+                    if document.file_path:
+                        default_storage.delete(str(document.file_path).lstrip('/'))
+                except Exception:
+                    pass
+                document.delete()
+                return Response(
+                    {
+                        "error": rejection_reason,
+                        "document_type": document_type,
+                        "verification_status": document.verification_status,
+                        "details": result,
+                    },
+                    status=400,
+                )
 
             serializer = ConsultantDocumentSerializer(document)
             response_data = serializer.data
