@@ -340,6 +340,13 @@ def consultant_detail(request, app_id):
             'test_type': s.test_type.name if s.test_type else None,
             'selected_domains': s.selected_domains,
             'score': s.score,
+            'mcq_score': s.score,
+            'mcq_total': len(s.question_set or []),
+            'mcq_answered': (
+                sum(1 for _k, v in (s.mcq_answers or {}).items() if v not in {None, ''})
+                if isinstance(s.mcq_answers, dict) else 0
+            ),
+            'mcq_answers': s.mcq_answers if isinstance(s.mcq_answers, dict) else {},
             'status': s.status,
             'violation_count': s.violation_count,
             'start_time': s.start_time.isoformat() if s.start_time else None,
