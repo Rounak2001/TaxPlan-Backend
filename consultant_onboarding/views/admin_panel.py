@@ -6,6 +6,7 @@ to use ConsultantApplication instead of a custom User model.
 import jwt
 import random
 import string
+import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
@@ -63,6 +64,16 @@ class AdminJWTAuthentication(BaseAuthentication):
             raise AuthenticationFailed('Token expired')
         except jwt.InvalidTokenError:
             raise AuthenticationFailed('Invalid token')
+
+
+# ------------------------------------------------------------------
+# Optional dev-only bypass (for local testing)
+# ------------------------------------------------------------------
+_ALLOW_INSECURE_ADMIN = (
+    bool(getattr(settings, "DEBUG", False))
+    and str(os.getenv("ALLOW_INSECURE_ADMIN", "")).strip().lower() in {"1", "true", "yes", "y"}
+)
+ADMIN_AUTH_CLASSES = [] if _ALLOW_INSECURE_ADMIN else [AdminJWTAuthentication]
 
 
 # ------------------------------------------------------------------
@@ -133,7 +144,7 @@ def admin_login(request):
 
 
 @api_view(['GET'])
-@authentication_classes([AdminJWTAuthentication])
+@authentication_classes(ADMIN_AUTH_CLASSES)
 @permission_classes([AllowAny])
 def consultant_list(request):
     """List all consultant applications with summary info."""
@@ -218,7 +229,7 @@ def consultant_list(request):
 
 
 @api_view(['GET'])
-@authentication_classes([AdminJWTAuthentication])
+@authentication_classes(ADMIN_AUTH_CLASSES)
 @permission_classes([AllowAny])
 def consultant_detail(request, app_id):
     """Get full detail for a single consultant application."""
@@ -292,12 +303,22 @@ def consultant_detail(request, app_id):
         for snap in ProctoringSnapshot.objects.filter(session=s).order_by('timestamp'):
             snapshots.append({
                 'id': snap.id,
+                'snapshot_id': snap.snapshot_id,
+                'image_path': snap.image_url,
                 'image_url': get_storage_url(snap.image_url),
-                'timestamp': snap.timestamp,
+                'timestamp': snap.timestamp.isoformat() if snap.timestamp else None,
                 'is_violation': snap.is_violation,
                 'violation_reason': snap.violation_reason,
                 'face_count': snap.face_count,
                 'match_score': snap.match_score,
+                'pose_yaw': snap.pose_yaw,
+                'pose_pitch': snap.pose_pitch,
+                'pose_roll': snap.pose_roll,
+                'mouth_state': snap.mouth_state,
+                'audio_detected': snap.audio_detected,
+                'gaze_violation': snap.gaze_violation,
+                'label_detection_results': snap.label_detection_results,
+                'rule_outcomes': snap.rule_outcomes,
             })
 
         videos = []
@@ -512,7 +533,7 @@ def _generate_and_send_credentials(app):
 
 
 @api_view(['POST'])
-@authentication_classes([AdminJWTAuthentication])
+@authentication_classes(ADMIN_AUTH_CLASSES)
 @permission_classes([AllowAny])
 def generate_credentials(request, app_id):
     """Generate credentials for a consultant and email them."""
@@ -531,7 +552,7 @@ def generate_credentials(request, app_id):
 
 
 @api_view(['DELETE'])
-@authentication_classes([AdminJWTAuthentication])
+@authentication_classes(ADMIN_AUTH_CLASSES)
 @permission_classes([AllowAny])
 def delete_consultant(request, app_id):
     """Delete onboarding consultant application and linked consultant user (if any)."""
