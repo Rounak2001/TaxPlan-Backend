@@ -46,3 +46,33 @@ class ClientProfile(models.Model):
 
     def __str__(self):
         return f"Client: {self.user.username}"
+
+
+class ContactSubmission(models.Model):
+    STATUS_CHOICES = (
+        ('NEW', 'New'),
+        ('IN_PROGRESS', 'In Progress'),
+        ('RESOLVED', 'Resolved'),
+    )
+
+    INQUIRY_CHOICES = (
+        ('Feedback', 'Feedback'),
+        ('Sales', 'Sales'),
+        ('Support', 'Support'),
+        ('Partnership', 'Partnership'),
+        ('Other', 'Other')
+    )
+
+    full_name = models.CharField(max_length=255)
+    email = models.EmailField()
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    inquiry_type = models.CharField(max_length=50, choices=INQUIRY_CHOICES, default='Other')
+    message = models.TextField(max_length=2000)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NEW')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.full_name} ({self.inquiry_type}) - {self.status}"
+    
+    class Meta:
+        ordering = ['-created_at']
