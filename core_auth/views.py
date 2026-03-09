@@ -679,3 +679,17 @@ class ConsultantClientsView(APIView):
             })
         
         return Response(clients_data)
+
+
+from rest_framework.generics import CreateAPIView
+from .models import ContactSubmission
+from .serializers import ContactSubmissionSerializer
+
+class ContactSubmissionView(CreateAPIView):
+    """
+    Public endpoint to submit contact/inquiry forms from the landing page.
+    """
+    queryset = ContactSubmission.objects.all()
+    serializer_class = ContactSubmissionSerializer
+    permission_classes = [AllowAny]
+    authentication_classes = []

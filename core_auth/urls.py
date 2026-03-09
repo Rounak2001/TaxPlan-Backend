@@ -3,7 +3,7 @@ from core_auth.views import (
     SendOTPView, VerifyOTPView,
     CustomTokenObtainPairView, UserDashboardView, GoogleAuthView,
     ClientProfileView, LogoutView, ConsultantClientsView,
-    CustomTokenRefreshView, WebSocketTokenView
+    CustomTokenRefreshView, WebSocketTokenView, ContactSubmissionView
 )
 from consultant_onboarding.views import auth as onboarding_auth
 from consultant_onboarding.views import face_matching as onboarding_face
@@ -31,5 +31,5 @@ urlpatterns = [
     path('auth/logout/', LogoutView.as_view(), name='logout'),
     path('client/profile/', ClientProfileView.as_view(), name='client-profile'),
     path('consultant/clients/', ConsultantClientsView.as_view(), name='consultant-clients'),
-
+    path('contact/', ContactSubmissionView.as_view(), name='contact-submission'),
 ]

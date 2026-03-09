@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, ConsultantProfile, ClientProfile
+from .models import User, ConsultantProfile, ClientProfile, ContactSubmission
 
 
 @admin.register(User)
@@ -45,3 +45,10 @@ class ClientProfileAdmin(admin.ModelAdmin):
     list_filter = ('assigned_consultant',)
     search_fields = ('user__username', 'user__email', 'pan_number')
     autocomplete_fields = ['assigned_consultant']
+
+@admin.register(ContactSubmission)
+class ContactSubmissionAdmin(admin.ModelAdmin):
+    list_display = ('full_name', 'email', 'inquiry_type', 'status', 'created_at')
+    list_filter = ('status', 'inquiry_type', 'created_at')
+    search_fields = ('full_name', 'email', 'message')
+    readonly_fields = ('created_at',)

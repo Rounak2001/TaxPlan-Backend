@@ -20,3 +20,12 @@ class IsConsultantUser(permissions.BasePermission):
 class IsClientUser(permissions.BasePermission):
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and request.user.role == 'CLIENT')
+
+
+from rest_framework import serializers
+from .models import ContactSubmission
+
+class ContactSubmissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactSubmission
+        fields = ['full_name', 'email', 'phone', 'inquiry_type', 'message']

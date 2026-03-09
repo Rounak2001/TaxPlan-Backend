@@ -139,13 +139,28 @@ class WhatsAppWebhookView(APIView):
             active_conversations = Conversation.objects.filter(client=client)
             
             if active_conversations.count() == 0:
-                self.send_whatsapp_text(phone_number, "You currently have no active consultant chats.")
-                return
+                # Fallback: Route to an Admin if the client has no consultants assigned
+                from core_auth.models import User
+                first_admin = User.objects.filter(role=User.ADMIN, is_active=True).first()
+                if first_admin:
+                    # Create a default conversation with the admin
+                    conv, created = Conversation.objects.get_or_create(
+                        client=client,
+                        consultant=first_admin
+                    )
+                    cache.set(session_key, conv.id, 86400)
+                    active_conv_id = conv.id
+                    logger.info(f"Auto-routed unassigned client {phone_number} to Admin {first_admin.username}")
+                else:
+                    logger.warning(f"No active consultants or admins found for client {phone_number}")
+                    self.send_whatsapp_text(phone_number, "We are currently unavailable. Please try again later.")
+                    return
             elif active_conversations.count() == 1:
                 # Auto-select the only conversation
                 conv = active_conversations.first()
                 cache.set(session_key, conv.id, 86400)
                 active_conv_id = conv.id
+                logger.info(f"Auto-routed message from {phone_number} to sole consultant {conv.consultant.username}")
             else:
                 # Multiple consultants, require selection
                 self.send_consultant_menu(client, phone_number)
