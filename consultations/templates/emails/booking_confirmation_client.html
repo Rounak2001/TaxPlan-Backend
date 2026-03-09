@@ -24,6 +24,19 @@
 </div>
 {% endif %}
 
+{% if booking.attachments.all %}
+<div class="notes-box" style="margin-top: 12px; background-color: #f0fff4; border-left: 4px solid #28a745;">
+    <strong>📎 Documents You Shared ({{ booking.attachments.count }}):</strong>
+    <ul style="margin: 6px 0 0; padding-left: 18px;">
+        {% for att in booking.attachments.all %}
+        <li style="font-size: 13px; color: #333;">{{ att.file.name|cut:"consultation_attachments/" }}</li>
+        {% endfor %}
+    </ul>
+    <p style="font-size: 12px; color: #666; margin: 6px 0 0;">These documents have been shared with your consultant.</p>
+</div>
+{% endif %}
+
+
 <div style="text-align: center; margin: 30px 0;">
     {% if meeting_link %}
     <a href="{{ meeting_link }}" class="button">Join Meeting</a>

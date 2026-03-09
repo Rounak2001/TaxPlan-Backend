@@ -56,6 +56,9 @@ def process_booking_confirmation(booking):
     Background task to generate Google Meet link and send confirmation email.
     """
     try:
+        # Refresh from DB to ensure we have the latest data (including attachments)
+        booking.refresh_from_db()
+        
         # Generate Google Meet link
         if not booking.meeting_link:
             try:
@@ -64,15 +67,18 @@ def process_booking_confirmation(booking):
                 if meet_link:
                     booking.meeting_link = meet_link
                     booking.save(update_fields=['meeting_link'])
+                    # After saving, refresh again so signal-triggered email is skipped below
+                    booking.refresh_from_db()
             except Exception as meet_err:
                 logger.error(f"Failed to generate Google Meet link: {meet_err}")
 
-        # Send confirmation email
+        # Send confirmation email (signal may have already sent it when meeting_link was saved)
         if not booking.confirmation_sent:
             send_booking_confirmation(booking)
             
     except Exception as e:
         logger.error(f"Error in background booking processing: {e}")
+
 
 class ConsultationBookingViewSet(viewsets.GenericViewSet, 
                                  viewsets.mixins.CreateModelMixin,

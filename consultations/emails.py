@@ -14,12 +14,12 @@ def generate_ics_calendar(booking):
     Generate iCalendar (.ics) file for the booking.
     """
     cal = Calendar()
-    cal.add('prodid', '-//TaxPlanAdv//Consultation//EN')
+    cal.add('prodid', '-//TaxPlan Advisor//Consultation//EN')
     cal.add('version', '2.0')
     cal.add('method', 'REQUEST')
     
     event = Event()
-    event.add('uid', f'booking-{booking.id}@taxplanadv.com')
+    event.add('uid', f'booking-{booking.id}@taxplanadvisor.in')
     
     # Combine date and time for the event
     start_datetime = datetime.combine(booking.booking_date, booking.start_time)
@@ -32,6 +32,7 @@ def generate_ics_calendar(booking):
     
     event.add('dtstart', start_datetime)
     event.add('dtend', end_datetime)
+    event.add('dtstamp', datetime.now(pytz.utc))
     event.add('summary', f'{booking.topic.name} with {booking.consultant.get_full_name() or booking.consultant.username}')
     
     description = f'Topic: {booking.topic.name}\n'
@@ -41,7 +42,8 @@ def generate_ics_calendar(booking):
     event.add('description', description)
     
     event.add('location', 'Online Video Consultation')
-    event.add('organizer', f'mailto:{booking.consultant.email}')
+    event.add('organizer', f'mailto:{settings.DEFAULT_FROM_EMAIL}')
+    event.add('attendee', f'mailto:{booking.consultant.email}')
     event.add('attendee', f'mailto:{booking.client.email}')
     event.add('status', 'CONFIRMED')
     

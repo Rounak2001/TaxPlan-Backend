@@ -1,4 +1,7 @@
 from rest_framework import serializers
+from django.utils import timezone
+from django.db.models import Q
+from datetime import timedelta
 from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking, ConsultationAttachment
 from django.contrib.auth import get_user_model
 
@@ -62,12 +65,15 @@ class ConsultationBookingSerializer(serializers.ModelSerializer):
 
         # Check for overlaps with confirmed or pending bookings
         # We explicitly check for collisions
+        expiration_time = timezone.now() - timedelta(minutes=10)
         overlapping_bookings = ConsultationBooking.objects.filter(
             consultant=consultant,
             booking_date=booking_date,
             start_time__lt=end_time,
-            end_time__gt=start_time,
-            status__in=['pending', 'confirmed']
+            end_time__gt=start_time
+        ).filter(
+            Q(status='confirmed') | 
+            Q(status='pending', created_at__gt=expiration_time)
         )
         
         if overlapping_bookings.exists():

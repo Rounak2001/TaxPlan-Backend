@@ -23,3 +23,10 @@ class ConsultationBookingAdmin(admin.ModelAdmin):
     list_filter = ('status', 'payment_status', 'booking_date')
     search_fields = ('client__email', 'consultant__email', 'razorpay_order_id')
     readonly_fields = ('razorpay_order_id', 'razorpay_payment_id', 'razorpay_signature')
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        # Exclude completely pending (abandoned checkout) bookings from admin view by default
+        # If an admin specifically looks for them (e.g., via filters), they can still be seen if you want,
+        # but the simplest way to hide them is:
+        return qs.exclude(status='pending', payment_status='pending')
