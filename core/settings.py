@@ -54,6 +54,10 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'fallback-insecure-key-change-me')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
+# Optional (recommended DEV-only): OpenAI STT for proctoring audio clips
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+OPENAI_TRANSCRIBE_MODEL = os.getenv('OPENAI_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe')
+
 ALLOWED_HOSTS = ['*']
 
 

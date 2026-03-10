@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
+from django.conf import settings
 import random
 import json
 import uuid
@@ -402,6 +403,299 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             traceback.print_exc()
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=['post'])
+    def upload_audio_clip(self, request, pk=None):
+        """Optional dev/debug endpoint: upload a short proctoring audio clip."""
+        session = self.get_object()
+        audio_file = request.FILES.get('audio')
+        if not audio_file:
+            return Response({'error': 'Audio file is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        snapshot_id = request.data.get('snapshot_id')
+        if snapshot_id is not None:
+            snapshot_id = str(snapshot_id).strip()[:64] or None
+
+        duration_ms = request.data.get('duration_ms')
+        try:
+            duration_ms = int(duration_ms) if duration_ms not in {None, ''} else None
+        except (TypeError, ValueError):
+            duration_ms = None
+
+        audio_level = request.data.get('audio_level')
+        try:
+            audio_level = float(audio_level) if audio_level not in {None, ''} else None
+        except (TypeError, ValueError):
+            audio_level = None
+
+        mime_type = request.data.get('mime_type') or getattr(audio_file, 'content_type', '') or ''
+        mime_type = str(mime_type)[:80]
+
+        file_ext = None
+        if getattr(audio_file, 'name', None) and '.' in audio_file.name:
+            file_ext = audio_file.name.split('.')[-1]
+        if not file_ext:
+            if 'webm' in mime_type:
+                file_ext = 'webm'
+            elif 'ogg' in mime_type:
+                file_ext = 'ogg'
+            elif 'mp4' in mime_type or 'aac' in mime_type:
+                file_ext = 'm4a'
+            elif 'wav' in mime_type:
+                file_ext = 'wav'
+            else:
+                file_ext = 'bin'
+
+        clip_name = f"{snapshot_id or 'clip'}_{uuid.uuid4()}.{file_ext}"
+        file_path = f"assessment_audio/{session.application.id}/{session.id}/{clip_name}"
+
+        try:
+            from django.core.files.storage import default_storage
+            from ..models import ProctoringAudioClip, ProctoringSnapshot
+
+            saved_path = default_storage.save(file_path, audio_file)
+            clip = ProctoringAudioClip.objects.create(
+                session=session,
+                snapshot_id=snapshot_id,
+                file_path=saved_path,
+                mime_type=mime_type,
+                duration_ms=duration_ms,
+                audio_level=audio_level,
+            )
+
+            if snapshot_id:
+                snap = ProctoringSnapshot.objects.filter(session=session, snapshot_id=snapshot_id).first()
+                if snap:
+                    outcomes = snap.rule_outcomes if isinstance(snap.rule_outcomes, dict) else {}
+                    outcomes['audio_clip'] = {
+                        'id': clip.id,
+                        'file_path': saved_path,
+                        'mime_type': mime_type,
+                        'duration_ms': duration_ms,
+                        'audio_level': audio_level,
+                    }
+                    snap.rule_outcomes = outcomes
+                    snap.save(update_fields=['rule_outcomes'])
+
+            # DEV-only: transcribe the clip and detect "answer prompting" phrases (English/Hindi).
+            if settings.DEBUG and getattr(settings, 'OPENAI_API_KEY', ''):
+                import re
+                try:
+                    import requests
+
+                    with default_storage.open(saved_path, 'rb') as f:
+                        headers = {
+                            'Authorization': f"Bearer {settings.OPENAI_API_KEY}",
+                        }
+                        files = {
+                            'file': (f"clip.{file_ext}", f, mime_type or 'application/octet-stream'),
+                        }
+                        data = {
+                            'model': getattr(settings, 'OPENAI_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe'),
+                            'response_format': 'verbose_json',
+                        }
+                        resp = requests.post(
+                            'https://api.openai.com/v1/audio/transcriptions',
+                            headers=headers,
+                            files=files,
+                            data=data,
+                            timeout=45,
+                        )
+                    raw = {}
+                    try:
+                        raw = resp.json()
+                    except Exception:
+                        raw = {'error': 'non_json_response', 'status_code': resp.status_code, 'text': resp.text[:4000]}
+
+                    if resp.status_code >= 400:
+                        clip.stt_status = 'failed'
+                        clip.stt_provider = 'openai'
+                        clip.stt_raw = raw
+                        clip.save(update_fields=['stt_status', 'stt_provider', 'stt_raw'])
+                    else:
+                        transcript = str(raw.get('text') or '').strip()
+                        language = str(raw.get('language') or '').strip()[:10]
+
+                        def normalize(s):
+                            s = s.lower()
+                            s = re.sub(r'[\r\n\t]', ' ', s)
+                            s = re.sub(r'[^0-9a-z\u0900-\u097f\s]', ' ', s)
+                            s = re.sub(r'\s+', ' ', s).strip()
+                            # Devanagari digits -> arabic
+                            s = s.translate(str.maketrans({'०': '0', '१': '1', '२': '2', '३': '3', '४': '4', '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'}))
+                            # Common number words -> digits (EN + HI)
+                            s = re.sub(r'\b(one)\b', '1', s)
+                            s = re.sub(r'\b(two)\b', '2', s)
+                            s = re.sub(r'\b(three)\b', '3', s)
+                            s = re.sub(r'\b(four)\b', '4', s)
+                            s = re.sub(r'\b(ek|एक)\b', '1', s)
+                            s = re.sub(r'\b(do|दो)\b', '2', s)
+                            s = re.sub(r'\b(teen|तीन)\b', '3', s)
+                            s = re.sub(r'\b(chaar|चार)\b', '4', s)
+                            # Common letter names -> letters (EN + HI)
+                            s = re.sub(r'\b(ay|a)\b', 'a', s)
+                            s = re.sub(r'\b(bee|b)\b', 'b', s)
+                            s = re.sub(r'\b(see|c)\b', 'c', s)
+                            s = re.sub(r'\b(dee|d)\b', 'd', s)
+                            s = re.sub(r'\b(ए)\b', 'a', s)
+                            s = re.sub(r'\b(बी)\b', 'b', s)
+                            s = re.sub(r'\b(सी)\b', 'c', s)
+                            s = re.sub(r'\b(डी)\b', 'd', s)
+                            return s
+
+                        n = normalize(transcript)
+                        # Stricter / more aggressive matching: we look for imperative prompting + option/answer tokens,
+                        # and we support common English/Hindi + romanized Hindi.
+                        patterns = [
+                            # Explicit prompts (EN)
+                            (r'\b(mark|choose|select|tick|pick|press|write|put)\s*(the\s*)?(option|answer|choice)?\s*(is|:)?\s*(a|b|c|d|1|2|3|4)\b', 'en_prompt_value'),
+                            (r'\b(option|answer|choice)\s*(is|:)?\s*(a|b|c|d|1|2|3|4)\b', 'en_value'),
+                            (r'\b(the\s+)?(correct|right)\s*(answer|option)?\s*(is|:)?\s*(a|b|c|d|1|2|3|4)\b', 'en_correct_is'),
+                            (r'\b(go\s+with|put|mark)\s*(a|b|c|d|1|2|3|4)\b', 'en_go_with'),
+                            (r'\b(b|c|d|a)\s*(option|choice|answer)\b', 'en_letter_option'),
+                            # Ordinal prompting (EN)
+                            (r'\b(second|third|fourth|first)\s+(option|choice)\b', 'en_ordinal_option'),
+                            (r'\b(option)\s*(number)?\s*(1|2|3|4)\b', 'en_option_number'),
+
+                            # Hindi / Hinglish (Devanagari + romanized)
+                            (r'\b(ऑप्शन|विकल्प|option|vikalp|choice)\s*(number)?\s*(a|b|c|d|1|2|3|4)\b', 'hi_option_value'),
+                            (r'\b(मार्क|चुनो|चुन|चयन|टिक|लगा|select|choose|mark|tick)\s*(करो|karo)?\s*(a|b|c|d|1|2|3|4)\b', 'hi_prompt_value'),
+                            (r'\b(उत्तर|जवाब|answer|uttar|jawab)\s*(है|hai|is|:)?\s*(a|b|c|d|1|2|3|4)\b', 'hi_answer_is'),
+                            (r'\b(सही|correct|right)\s*(उत्तर|जवाब|answer|uttar|jawab)\s*(है|hai|is|:)?\s*(a|b|c|d|1|2|3|4)\b', 'hi_correct_is'),
+                            (r'\b(दूसरा|तीसरा|चौथा|पहला|second|third|fourth|first)\s*(विकल्प|ऑप्शन|option|choice)\b', 'hi_ordinal_option'),
+                            (r'\b(b)\s*(वाला|wala)?\s*(ऑप्शन|विकल्प|option|choice)\b', 'hi_b_option'),
+                        ]
+                        matches = []
+                        for pat, label in patterns:
+                            if re.search(pat, n, flags=re.IGNORECASE):
+                                matches.append(label)
+
+                        cheat_flag = len(matches) > 0
+                        clip.transcript = transcript
+                        clip.stt_status = 'completed'
+                        clip.stt_provider = 'openai'
+                        clip.stt_language = language
+                        clip.stt_raw = raw
+                        clip.cheat_flag = cheat_flag
+                        clip.cheat_matches = matches
+                        clip.save(update_fields=[
+                            'transcript',
+                            'stt_status',
+                            'stt_provider',
+                            'stt_language',
+                            'stt_raw',
+                            'cheat_flag',
+                            'cheat_matches',
+                        ])
+
+                        # Consistency rule (reset after a voice violation):
+                        # If we see "answer prompting" in 3 out of last 5 clips, raise a voice violation.
+                        if cheat_flag:
+                            last_voice_violation_at = (
+                                Violation.objects
+                                .filter(session=session, violation_type='voice')
+                                .order_by('-timestamp')
+                                .values_list('timestamp', flat=True)
+                                .first()
+                            )
+                            clips_qs = ProctoringAudioClip.objects.filter(
+                                session=session,
+                                stt_status='completed',
+                            )
+                            if last_voice_violation_at:
+                                clips_qs = clips_qs.filter(created_at__gt=last_voice_violation_at)
+                            recent = list(clips_qs.order_by('-created_at')[:5].values_list('cheat_flag', flat=True))
+                            hits = sum(1 for v in recent if bool(v))
+                            if hits >= 3:
+                                Violation.objects.create(session=session, violation_type='voice')
+                                applied = self._apply_violation(session, 'voice')
+                                # If it terminated, the next snapshot response will surface it to the client.
+                                _ = applied
+                except Exception as e:
+                    clip.stt_status = 'failed'
+                    clip.stt_provider = 'openai'
+                    clip.stt_raw = {'error': str(e)}
+                    clip.save(update_fields=['stt_status', 'stt_provider', 'stt_raw'])
+
+            return Response(
+                {
+                    'id': clip.id,
+                    'snapshot_id': snapshot_id,
+                    'file_path': saved_path,
+                },
+                status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'])
+    def log_audio_telemetry(self, request, pk=None):
+        """Store continuous audio telemetry as rolling window stats (best-effort; non-blocking)."""
+        session = self.get_object()
+        if session.status not in {'ongoing', 'flagged'}:
+            return Response({'error': 'Session not active'}, status=status.HTTP_400_BAD_REQUEST)
+
+        def parse_optional_float(value):
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            value = str(value).strip()
+            if value == '':
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def parse_optional_int(value):
+            if value is None:
+                return None
+            if isinstance(value, int):
+                return value
+            value = str(value).strip()
+            if value == '':
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        window_start = request.data.get('window_start')
+        window_end = request.data.get('window_end')
+        mic_status = str(request.data.get('mic_status') or '')[:30]
+
+        speech_ms = parse_optional_int(request.data.get('speech_ms')) or 0
+        bursts = parse_optional_int(request.data.get('bursts')) or 0
+        sample_count = parse_optional_int(request.data.get('sample_count')) or 0
+        avg_level = parse_optional_float(request.data.get('avg_level'))
+        max_level = parse_optional_float(request.data.get('max_level'))
+        threshold = parse_optional_float(request.data.get('threshold'))
+
+        # Parse timestamps (ISO-8601) if provided; keep null on parse failures.
+        from django.utils.dateparse import parse_datetime
+        dt_start = parse_datetime(window_start) if window_start else None
+        dt_end = parse_datetime(window_end) if window_end else None
+
+        try:
+            from ..models import ProctoringAudioTelemetry
+            row = ProctoringAudioTelemetry.objects.create(
+                session=session,
+                window_start=dt_start,
+                window_end=dt_end,
+                speech_ms=max(0, int(speech_ms)),
+                bursts=max(0, int(bursts)),
+                sample_count=max(0, int(sample_count)),
+                avg_level=avg_level,
+                max_level=max_level,
+                threshold=threshold,
+                mic_status=mic_status,
+            )
+            return Response({'ok': True, 'id': row.id}, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'ok': False, 'error': str(e)}, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=['get'])
     def latest_result(self, request):
         past_sessions = UserSession.objects.filter(application=request.application).exclude(status='ongoing')
@@ -569,6 +863,8 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         pose_roll = parse_optional_float(request.data.get('pose_roll'))
         gaze_violation_input = parse_optional_bool(request.data.get('gaze_violation'))
         audio_detected = parse_bool(request.data.get('audio_detected'), default=False)
+        audio_level = parse_optional_float(request.data.get('audio_level'))
+        audio_threshold = parse_optional_float(request.data.get('audio_threshold'))
         mouth_state = request.data.get('mouth_state')
         if mouth_state is not None:
             mouth_state = str(mouth_state).strip()[:20] or None
@@ -580,6 +876,8 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         snapshot_context = {
             'snapshot_id': snapshot_id,
             'audio_detected': audio_detected,
+            'audio_level': audio_level,
+            'audio_threshold': audio_threshold,
             'gaze_violation': gaze_violation_input if gaze_violation_input is not None else False,
             'pose_yaw': pose_yaw,
             'pose_pitch': pose_pitch,
@@ -906,6 +1204,21 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             if sustained_gaze_triggered and not is_violation:
                 is_violation = True
                 violation_reason = "Sustained gaze deviation detected"
+
+            # Rule 5a: Audio signal metadata (client-side)
+            if audio_detected:
+                structured_reasons.append({
+                    'rule': 'audio_signal',
+                    'severity': 'low',
+                    'message': f"Audio detected (level={audio_level})",
+                    'enforce_violation': False,
+                })
+            rule_outcomes['audio_signal'] = {
+                'triggered': bool(audio_detected),
+                'audio_detected': bool(audio_detected),
+                'audio_level': audio_level,
+                'audio_threshold': audio_threshold,
+            }
 
             # Rule 5: Audio + mouth correlation
             audio_mouth_triggered = bool(audio_detected) and (mouth_state == 'closed')

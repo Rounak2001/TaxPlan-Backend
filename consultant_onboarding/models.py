@@ -288,6 +288,59 @@ class ProctoringSnapshot(models.Model):
         return f"Snapshot {self.id} - Session {self.session.id}"
 
 
+class ProctoringAudioClip(models.Model):
+    session = models.ForeignKey(UserSession, on_delete=models.CASCADE, related_name='proctoring_audio_clips')
+    snapshot_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    file_path = models.TextField()
+    mime_type = models.CharField(max_length=80, blank=True, default='')
+    duration_ms = models.IntegerField(null=True, blank=True)
+    audio_level = models.FloatField(null=True, blank=True)
+    transcript = models.TextField(blank=True, default='')
+    stt_status = models.CharField(
+        max_length=20,
+        default='pending',
+        choices=[
+            ('pending', 'Pending'),
+            ('completed', 'Completed'),
+            ('failed', 'Failed'),
+        ],
+    )
+    stt_provider = models.CharField(max_length=40, blank=True, default='')
+    stt_language = models.CharField(max_length=10, blank=True, default='')
+    stt_raw = models.JSONField(default=dict, blank=True)
+    cheat_flag = models.BooleanField(default=False)
+    cheat_matches = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'application_assessment_proctoringaudioclip'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"AudioClip {self.id} - Session {self.session.id}"
+
+
+class ProctoringAudioTelemetry(models.Model):
+    session = models.ForeignKey(UserSession, on_delete=models.CASCADE, related_name='proctoring_audio_telemetry')
+    window_start = models.DateTimeField(null=True, blank=True)
+    window_end = models.DateTimeField(null=True, blank=True)
+    speech_ms = models.IntegerField(default=0)
+    bursts = models.IntegerField(default=0)
+    sample_count = models.IntegerField(default=0)
+    avg_level = models.FloatField(null=True, blank=True)
+    max_level = models.FloatField(null=True, blank=True)
+    threshold = models.FloatField(null=True, blank=True)
+    mic_status = models.CharField(max_length=30, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'application_assessment_proctoringaudiotelemetry'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"AudioTelemetry {self.id} - Session {self.session.id}"
+
+
 # ----------------------------------------------------
 # FACE_VERIFICATION MODELS
 # ----------------------------------------------------

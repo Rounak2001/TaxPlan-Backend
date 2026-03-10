@@ -7,6 +7,7 @@ import jwt
 import random
 import string
 import os
+import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
@@ -32,8 +33,12 @@ from consultant_onboarding.models import (
     VideoResponse,
     Violation,
     ProctoringSnapshot,
+    ProctoringAudioClip,
+    ProctoringAudioTelemetry,
 )
 from core_auth.models import User
+
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------
 # Hardcoded admin credentials (matches backend1)
@@ -337,6 +342,58 @@ def consultant_detail(request, app_id):
                 'ai_status': v.ai_status,
             })
 
+        audio_clips = []
+        for clip in ProctoringAudioClip.objects.filter(session=s).order_by('-created_at'):
+            audio_clips.append({
+                'id': clip.id,
+                'snapshot_id': clip.snapshot_id,
+                'file_path': clip.file_path,
+                'file_url': get_storage_url(clip.file_path),
+                'mime_type': clip.mime_type,
+                'duration_ms': clip.duration_ms,
+                'audio_level': clip.audio_level,
+                'transcript': clip.transcript,
+                'stt_status': clip.stt_status,
+                'stt_provider': clip.stt_provider,
+                'stt_language': clip.stt_language,
+                'cheat_flag': clip.cheat_flag,
+                'cheat_matches': clip.cheat_matches,
+                'created_at': clip.created_at.isoformat() if clip.created_at else None,
+            })
+
+        audio_telemetry_rows = list(
+            ProctoringAudioTelemetry.objects
+            .filter(session=s)
+            .order_by('-created_at')
+            .values(
+                'id',
+                'window_start',
+                'window_end',
+                'speech_ms',
+                'bursts',
+                'sample_count',
+                'avg_level',
+                'max_level',
+                'threshold',
+                'mic_status',
+                'created_at',
+            )[:80]
+        )
+        audio_telemetry = []
+        total_speech_ms = 0
+        telemetry_max_level = None
+        for row in audio_telemetry_rows:
+            total_speech_ms += int(row.get('speech_ms') or 0)
+            ml = row.get('max_level')
+            if ml is not None:
+                telemetry_max_level = ml if telemetry_max_level is None else max(float(telemetry_max_level), float(ml))
+            audio_telemetry.append({
+                **row,
+                'window_start': row['window_start'].isoformat() if row.get('window_start') else None,
+                'window_end': row['window_end'].isoformat() if row.get('window_end') else None,
+                'created_at': row['created_at'].isoformat() if row.get('created_at') else None,
+            })
+
         assessment_data.append({
             'id': s.id,
             'test_type': s.test_type.name if s.test_type else None,
@@ -357,6 +414,13 @@ def consultant_detail(request, app_id):
             'video_question_set': s.video_question_set,
             'violations': violations,
             'proctoring_snapshots': snapshots,
+            'proctoring_audio_clips': audio_clips,
+            'proctoring_audio_telemetry': audio_telemetry,
+            'proctoring_audio_telemetry_summary': {
+                'events': len(audio_telemetry_rows),
+                'total_speech_ms': total_speech_ms,
+                'max_level': telemetry_max_level,
+            },
             'video_responses': videos,
         })
 
@@ -442,13 +506,6 @@ def _generate_and_send_credentials(app):
         chars = string.ascii_letters + string.digits + "!@#$%^&*"
         password = ''.join(random.choices(chars, k=10))
 
-        # Save credential record
-        ConsultantCredential.objects.create(
-            application=app,
-            username=username,
-            password=password,
-        )
-
         # Create the live User and ConsultantServiceProfile
         from core_auth.models import User
         from consultants.models import ConsultantServiceProfile
@@ -472,7 +529,6 @@ def _generate_and_send_credentials(app):
                 'role': User.CONSULTANT,
                 'is_onboarded': True,
                 'is_phone_verified': True,
-                'google_id': app.google_id,
             }
         )
 
@@ -486,7 +542,12 @@ def _generate_and_send_credentials(app):
             user.phone_number = app.phone_number or user.phone_number
 
         user.set_password(password)
-        user.save()
+        try:
+            user.save()
+        except Exception as save_err:
+            # Most common: phone_number unique constraint collision
+            logger.error(f"Credential generation failed while saving User({app.email}): {save_err}")
+            return False, f"Failed to create consultant account: {save_err}"
 
         # Create consultant service profile
         ConsultantServiceProfile.objects.get_or_create(
@@ -503,6 +564,13 @@ def _generate_and_send_credentials(app):
         # Mark application as approved
         app.status = 'APPROVED'
         app.save()
+
+        # Save credential record (only after user/profile/app are updated successfully)
+        ConsultantCredential.objects.create(
+            application=app,
+            username=username,
+            password=password,
+        )
 
         # Email credentials
         subject = "Your TaxPlan Advisor Consultant Credentials"
@@ -538,6 +606,7 @@ def _generate_and_send_credentials(app):
         return True, {"username": username, "password": password, "message": "Credentials generated and sent successfully"}
 
     except Exception as e:
+        logger.exception(f"Credential generation crashed for application_id={app.id} email={app.email}")
         return False, str(e)
 
 
@@ -556,7 +625,9 @@ def generate_credentials(request, app_id):
     if success:
         return Response(result, status=status.HTTP_201_CREATED)
     else:
-        status_code = status.HTTP_400_BAD_REQUEST if "already generated" in str(result) else status.HTTP_500_INTERNAL_SERVER_ERROR
+        message = str(result or '')
+        is_client_conflict = message.startswith("Cannot generate credentials:")
+        status_code = status.HTTP_400_BAD_REQUEST if ("already generated" in message or is_client_conflict) else status.HTTP_500_INTERNAL_SERVER_ERROR
         return Response({'error': result}, status=status_code)
 
 
