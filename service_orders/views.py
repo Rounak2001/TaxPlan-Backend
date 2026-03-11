@@ -55,20 +55,25 @@ def create_order(request):
             if not service and item.get('title'):
                 service = Service.objects.filter(title=item.get('title')).first()
 
-            if not service:
-                return Response(
-                    {'error': f"Service not found: {item.get('title', 'Unknown')}"}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            if not service.price:
-                 return Response(
-                    {'error': f"Service {service.title} has no price configured"}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # Security: Use DB price if service exists, otherwise trust frontend (for custom landing page bundles)
+            # Ensure price exists either from DB or frontend
+            frontend_price = float(item.get('price', 0))
+            if service:
+                if not service.price:
+                     return Response(
+                        {'error': f"Service {service.title} has no price configured"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                item_price = float(service.price)
+            else:
+                if frontend_price <= 0:
+                    return Response(
+                        {'error': f"Invalid price for custom item: {item.get('title', 'Unknown')}"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                item_price = frontend_price
 
-            # Security: Use DB price, ignore frontend price
-            item_total = float(service.price) * qty
+            item_total = item_price * qty
             total_amount += item_total
             
             # Extract consultant selection data
@@ -83,11 +88,11 @@ def create_order(request):
                     pass  # Fall back to auto-assignment
             
             valid_items.append({
-                'service': service,
+                'service': service, # May be None for custom bundles
                 'quantity': qty,
-                'price': service.price, # Record the price at time of booking
-                'category': service.category.name if service.category else 'General',
-                'title': service.title,
+                'price': item_price, 
+                'category': item.get('category') or (service.category.name if service and service.category else 'General'),
+                'title': service.title if service else item.get('title', 'Custom Service'),
                 'variant': item.get('variantName', ''),
                 'selected_consultant': selected_consultant,
                 'selection_mode': selection_mode,

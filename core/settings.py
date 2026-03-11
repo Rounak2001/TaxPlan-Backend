@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     'storages',
     'channels',
     'django_extensions',
+    'django_lumen',
     
     # Internal Apps
     'core_auth',

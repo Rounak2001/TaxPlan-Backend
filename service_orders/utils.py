@@ -33,16 +33,14 @@ def create_service_requests_from_order(order):
         return [] # Already processed
     
     for item in order.items.all():
-        if not item.service:
-            # Skip if no service linked
-            continue
+        # Create service request using the actual DB service if available, else use custom title
+        service_title_for_notes = item.service.title if item.service else getattr(item, 'service_title', 'Custom Service')
         
-        # Create service request
         request = ClientServiceRequest.objects.create(
             client=order.user,
-            service=item.service,
+            service=item.service, # Can be null for custom landing page items
             status='pending',
-            notes=f'Payment completed for order #{order.id}',
+            notes=f'Payment completed for order #{order.id}: {service_title_for_notes}',
             priority=5  # High priority for paid services
         )
         
@@ -70,15 +68,15 @@ def create_service_requests_from_order(order):
         
         created_requests.append({
             'request_id': request.id,
-            'service': item.service.title,
+            'service': getattr(item.service, 'title', getattr(item, 'service_title', 'Custom Service')),
             'status': request.status,
-            'selection_mode': item.selection_mode,
+            'selection_mode': getattr(item, 'selection_mode', 'auto'),
             'consultant': {
                 'id': consultant.id if consultant else None,
                 'name': consultant.full_name if consultant else None,
                 'email': consultant.email if consultant else None,
                 'phone': consultant.phone if consultant else None
-            } if consultant else None
+            } if getattr(locals(), 'consultant', None) else None
         })
     
     return created_requests
