@@ -1,0 +1,70 @@
+Celery Production Deployment Guide (Ubuntu + systemd)
+In a production environment like Ubuntu 24.04, you shouldn't run Celery manually. Instead, you should use systemd to manage your processes. This ensures that if your worker or beat scheduler crashes (or the server restarts), they will automatically start back up.
+
+1. Components
+To run the 1-hour automated calls correctly, you need three processes running:
+
+Redis (or RabbitMQ): The message broker.
+Celery Worker: The process that actually executes the code to hit the Exotel API.
+Celery Beat: The scheduler that checks the database every 5 minutes and tells the worker what to do.
+2. Configuration Files
+You should create two service files in /etc/systemd/system/.
+
+Celery Worker Service
+Create /etc/systemd/system/celery-worker.service:
+
+ini
+[Unit]
+Description=Celery Worker for TaxPlanAdvisor
+After=network.target redis-server.service
+[Service]
+Type=forking
+User=rounak-patel
+Group=rounak-patel
+EnvironmentFile=/home/rounak-patel/Desktop/web_coding/saas/backend/.env
+WorkingDirectory=/home/rounak-patel/Desktop/web_coding/saas/backend
+ExecStart=/bin/sh -c '${BASE_DIR}/venv/bin/celery -A core worker -l info --detach --pidfile=${BASE_DIR}/celery-worker.pid'
+ExecStop=/bin/sh -c '${BASE_DIR}/venv/bin/celery -A core multi stopwait worker --pidfile=${BASE_DIR}/celery-worker.pid'
+Restart=always
+[Install]
+WantedBy=multi-user.target
+Celery Beat Service
+Create /etc/systemd/system/celery-beat.service:
+
+ini
+[Unit]
+Description=Celery Beat for TaxPlanAdvisor
+After=network.target redis-server.service celery-worker.service
+[Service]
+Type=simple
+User=rounak-patel
+Group=rounak-patel
+EnvironmentFile=/home/rounak-patel/Desktop/web_coding/saas/backend/.env
+WorkingDirectory=/home/rounak-patel/Desktop/web_coding/saas/backend
+ExecStart=/home/rounak-patel/Desktop/web_coding/saas/backend/venv/bin/celery -A core beat -l info --pidfile=/home/rounak-patel/Desktop/web_coding/saas/backend/celerybeat.pid --scheduler django_celery_beat.schedulers:DatabaseScheduler
+Restart=always
+[Install]
+WantedBy=multi-user.target
+NOTE
+
+We recommend using django-celery-beat (Database Scheduler) in production if you want to be able to manage schedules directly from the Django Admin. If you prefer keeping it in code (as we configured in celery.py), remove the --scheduler flag.
+
+3. Activation
+Once you have created the files, run these commands:
+
+bash
+# Reload systemd to recognize new files
+sudo systemctl daemon-reload
+# Enable the services so they start on boot
+sudo systemctl enable celery-worker
+sudo systemctl enable celery-beat
+# Start the services
+sudo systemctl start celery-worker
+sudo systemctl start celery-beat
+# Check status
+sudo systemctl status celery-worker
+sudo systemctl status celery-beat
+4. Why this matters for your Exotel calls
+Single Instance: celery-beat must only run on ONE server at a time (otherwise you might call the customer twice). systemd helps ensure only one service instance is active.
+Logs: You can view the logs using journalctl -u celery-beat -f.
+Monitoring: If the Exotel API triggers a failure, the worker will log it, and you can see it in your CallLog model.

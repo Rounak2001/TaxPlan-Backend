@@ -82,3 +82,37 @@ class CallLog(models.Model):
         secs = self.duration % 60
         return f"{mins:02d}:{secs:02d}"
 
+class ScheduledCall(models.Model):
+    """
+    Schedules an automated Exotel call 1 hour prior to a consultation booking.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('canceled', 'Canceled'),
+    ]
+    
+    booking = models.ForeignKey(
+        'consultations.ConsultationBooking', 
+        on_delete=models.CASCADE, 
+        related_name='scheduled_calls'
+    )
+    run_at = models.DateTimeField(db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    
+    # Track the Exotel response
+    exotel_sid = models.CharField(max_length=100, blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['run_at']
+        indexes = [
+            models.Index(fields=['status', 'run_at']),
+        ]
+        
+    def __str__(self):
+        return f"Scheduled Call for Booking {self.booking.id} at {self.run_at} ({self.status})"

@@ -34,3 +34,37 @@ def handle_booking_emails(sender, instance, created, **kwargs):
                 send_booking_cancellation(instance)
         except ConsultationBooking.DoesNotExist:
             pass
+
+
+@receiver(post_save, sender=ConsultationBooking)
+def handle_booking_scheduled_call(sender, instance, created, **kwargs):
+    """
+    Create or update a ScheduledCall for Exotel exactly 1 hour before the consultation.
+    """
+    from exotel_calls.models import ScheduledCall
+    from django.utils import timezone
+    from datetime import timedelta
+    
+    # If the booking is cancelled, cancel any pending scheduled calls
+    if instance.status == 'cancelled':
+        ScheduledCall.objects.filter(booking=instance, status='pending').update(status='canceled')
+        return
+
+    # If it's pending/confirmed and has a valid date and time, schedule/reschedule
+    if instance.status in ['pending', 'confirmed'] and instance.booking_date and instance.start_time:
+        # Calculate exactly 1 hour before
+        booking_datetime = timezone.make_aware(
+            timezone.datetime.combine(instance.booking_date, instance.start_time)
+        )
+        run_time = booking_datetime - timedelta(hours=1)
+        
+        # Only schedule if it's in the future
+        if run_time > timezone.now():
+            call, _ = ScheduledCall.objects.update_or_create(
+                booking=instance,
+                status='pending',
+                defaults={'run_at': run_time}
+            )
+        else:
+            # If rescheduled to a past time, cancel pending ones so we don't accidentally call immediately
+            ScheduledCall.objects.filter(booking=instance, status='pending').update(status='canceled')
