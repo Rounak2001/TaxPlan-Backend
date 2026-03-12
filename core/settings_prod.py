@@ -23,10 +23,11 @@ SECRET_KEY = os.environ['DJANGO_SECRET_KEY']  # Required - will error if not set
 
 # Add your domain(s) here - includes frontend for WebSocket origin validation
 ALLOWED_HOSTS = [
-    os.getenv('ALLOWED_HOST', 'main.taxplanadvisor.co'),
+    os.getenv('ALLOWED_HOST', 'api.taxplanadvisor.in'),
     'taxplanadvisor.in',  # Frontend for WebSocket origin validation
     'localhost',
     '127.0.0.1',
+    'api.taxplanadvisor.in',
 ]
 
 # HTTPS/SSL Settings
@@ -39,6 +40,10 @@ CSRF_COOKIE_SECURE = True
 SECURE_HSTS_SECONDS = 31536000  # 1 year
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 # SECURE_HSTS_PRELOAD = True
+
+# Shared Session/CSRF Cookies across subdomains (taxplanadvisor.in)
+SESSION_COOKIE_DOMAIN = '.taxplanadvisor.in'
+CSRF_COOKIE_DOMAIN = '.taxplanadvisor.in'
 
 # Cookie Settings for Cross-Origin (Vercel frontend + EC2 backend)
 SESSION_COOKIE_SAMESITE = 'None'
@@ -138,7 +143,7 @@ SIMPLE_JWT = {
     'AUTH_COOKIE': 'access_token',
     'AUTH_COOKIE_SECURE': True,
     'AUTH_COOKIE_HTTP_ONLY': True,
-    'AUTH_COOKIE_SAMESITE': 'None',
+    'AUTH_COOKIE_SAMESITE': 'Lax',  # Changed to Lax since we're on the same base domain
 }
 
 # =============================================================================

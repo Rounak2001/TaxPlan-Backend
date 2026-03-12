@@ -103,7 +103,7 @@ EXOTEL_CALLER_ID = os.getenv('EXOTEL_CALLER_ID')
 EXOTEL_SUBDOMAIN = os.getenv('EXOTEL_SUBDOMAIN', 'api.exotel.com')
 
 # Backend URL for callbacks
-BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')
+BACKEND_URL = os.getenv('BACKEND_URL', 'https://api.taxplanadvisor.in')
 
 AUTH_USER_MODEL = 'core_auth.User'
 
@@ -266,6 +266,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://apply.taxplanadvisor.co",
     "https://taxplanadvisor.co",
     "https://taxplanadvisor.in",
+    "https://www.taxplanadvisor.in",
     # Onboarding portal — Vercel deployment
     "https://partner-onboard.taxplanadvisor.in",
 ]
@@ -275,9 +276,11 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",
     "http://localhost:5174",
     "https://main.taxplanadvisor.co",
+    "https://api.taxplanadvisor.in",
     "https://apply.taxplanadvisor.co",
     "https://taxplanadvisor.co",
     "https://taxplanadvisor.in",
+    "https://www.taxplanadvisor.in",
     # Onboarding portal — Vercel deployment
     "https://partner-onboard.taxplanadvisor.in",
 ]
