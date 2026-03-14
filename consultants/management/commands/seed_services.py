@@ -24,17 +24,25 @@ class Command(BaseCommand):
         
         self.stdout.write('Seeding service categories and services...')
         
+        # Helper to create services and their corresponding topics
+        def seed_category(cat_name, cat_desc, services_list):
+            cat = ServiceCategory.objects.create(name=cat_name, description=cat_desc)
+            # Create a "General" topic for the category
+            Topic.objects.create(name=f"General {cat_name} Advice", category=cat, description=f"General consultation for {cat_name}")
+            
+            for title, price, tat, docs in services_list:
+                service = Service.objects.create(category=cat, title=title, price=price, tat=tat, documents_required=docs)
+                # Create a specific topic for this service
+                Topic.objects.create(
+                    name=title,
+                    service=service,
+                    category=cat,
+                    description=f"Specific consultation for {title}"
+                )
+            return cat
+
         # 1. Returns Category
-        returns_cat = ServiceCategory.objects.create(
-            name="Returns",
-            description="ITR, GSTR, and TDS filing services"
-        )
-        
-        topic_itr = Topic.objects.create(name="ITR", category=returns_cat, description="Income Tax Return Filing topics")
-        topic_gstr = Topic.objects.create(name="GSTR", category=returns_cat, description="GST Return Filing topics")
-        topic_tds = Topic.objects.create(name="TDS", category=returns_cat, description="TDS Return Filing topics")
-        
-        itr_services = [
+        seed_category("Returns", "ITR, GSTR, and TDS filing services", [
             ("ITR Salary Filing", 999, "1-2 days", "Form 16, Bank Statements, PAN, Aadhaar"),
             ("ITR Individual Business Filing", 2499, "2-3 days", "Books/Receipts, Bank Statements"),
             ("ITR LLP Filing", 3999, "3-5 days", "Financials, Partner Details, Tax Challans"),
@@ -42,11 +50,6 @@ class Command(BaseCommand):
             ("ITR Partnership Filing", 3499, "3-5 days", "Financials, Partner Details"),
             ("ITR Company Filing", 4999, "5-7 days", "Audited Financials, Tax Audit forms"),
             ("ITR Trust Filing", 5999, "5-7 days", "Trust Financials, Donation Records"),
-        ]
-        for title, price, tat, docs in itr_services:
-            Service.objects.create(category=returns_cat, title=title, price=price, tat=tat, documents_required=docs)
-            
-        gstr_services = [
             ("GSTR-1 & GSTR-3B (Monthly)", 1999, "1-2 days", "Sales/Purchase registers"),
             ("GSTR-1 & GSTR-3B (Quarterly)", 1499, "2-3 days", "Sales/Purchase registers"),
             ("GSTR CMP-08", 999, "1-2 days", "Composition turnover details"),
@@ -54,28 +57,14 @@ class Command(BaseCommand):
             ("GSTR-9C", 3999, "3-7 days", "Audited financials, Reconciliation sheets"),
             ("GSTR-4 (Annual Return)", 1299, "2-3 days", "Annual turnover summary"),
             ("GSTR-10 (Final Return)", 1499, "1-3 days", "Closing stock, cancellation order"),
-        ]
-        for title, price, tat, docs in gstr_services:
-            Service.objects.create(category=returns_cat, title=title, price=price, tat=tat, documents_required=docs)
-
-        tds_services = [
             ("TDS Monthly Payment", 499, "1 day", "Deduction summary, PAN details"),
             ("TDS Quarterly Filing", 999, "2-3 days", "Quarter deduction register, Challans"),
             ("TDS Revised Quarterly Filing", 1499, "2-4 days", "Original statement, Correction requirements"),
             ("Sale of Property (26QB)", 1999, "1-2 days", "Buyer/seller PAN, Agreement details"),
-        ]
-        for title, price, tat, docs in tds_services:
-            Service.objects.create(category=returns_cat, title=title, price=price, tat=tat, documents_required=docs)
+        ])
 
         # 2. Registrations Category
-        reg_cat = ServiceCategory.objects.create(
-            name="Registrations",
-            description="Business and compliance registrations"
-        )
-        
-        topic_reg = Topic.objects.create(name="Registration Services", category=reg_cat, description="Registration and licensing topics")
-        
-        reg_services = [
+        seed_category("Registrations", "Business and compliance registrations", [
             ("PAN Application", 499, "1-2 days", "ID/Address proof"),
             ("TAN Registration", 999, "1-2 days", "Entity PAN, Address proof"),
             ("Aadhaar Validation", 299, "1 day", "Aadhaar info"),
@@ -92,20 +81,10 @@ class Command(BaseCommand):
             ("HUF PAN", 699, "1-2 days", "HUF Deed/Declaration, Karta ID"),
             ("NRI PAN", 999, "1-2 days", "Passport, Overseas address proof"),
             ("Foreign Entity Registration", 6999, "15-20 days", "Parent entity docs, Board resolution"),
-        ]
-        for title, price, tat, docs in reg_services:
-            Service.objects.create(category=reg_cat, title=title, price=price, tat=tat, documents_required=docs)
-
+        ])
 
         # 3. Notices Category
-        notices_cat = ServiceCategory.objects.create(
-            name="Notices",
-            description="Notice response and appeal handling"
-        )
-        
-        topic_notices = Topic.objects.create(name="Notice and Appeal Services", category=notices_cat, description="Handling department notices and appeals")
-
-        notices_services = [
+        seed_category("Notices", "Notice response and appeal handling", [
             ("ITR Appeal", 4999, "3-5 days", "Order copy, computations"),
             ("ITR Regular Assessment", 3999, "Duration of cycle", "Assessment notices, books"),
             ("ITR Tribunal", 9999, "Pre-hearing docs", "Prior orders, evidence"),
@@ -115,26 +94,14 @@ class Command(BaseCommand):
             ("TDS Appeal", 4499, "3-5 days", "TDS demand, deductee details"),
             ("TDS Regular Assessment", 3499, "Duration of cycle", "Quarterly statements, challans"),
             ("TDS Tribunal", 8999, "Pre-hearing docs", "Appellate orders, challans"),
-        ]
-        for title, price, tat, docs in notices_services:
-            Service.objects.create(category=notices_cat, title=title, price=price, tat=tat, documents_required=docs)
-
+        ])
 
         # 4. Consultation Category
-        consultation_cat = ServiceCategory.objects.create(
-            name="Consultation",
-            description="General advisory and strategy sessions"
-        )
-        
-        topic_consultation = Topic.objects.create(name="Consultation Topics", category=consultation_cat, description="General advisory topics")
-
-        consultation_services = [
+        seed_category("Consultation", "General advisory and strategy sessions", [
             ("Tax Consultation", 299, "Session based", "Relevant income/details"),
             ("Compliance Advice", 299, "Session based", "Entity details"),
             ("Business Structuring", 499, "Session based", "Business goals/plans"),
-        ]
-        for title, price, tat, docs in consultation_services:
-            Service.objects.create(category=consultation_cat, title=title, price=price, tat=tat, documents_required=docs)
+        ])
         
         total_categories = ServiceCategory.objects.count()
         total_services = Service.objects.count()
