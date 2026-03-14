@@ -13,6 +13,14 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Load task modules from all registered Django apps automatically.
 app.autodiscover_tasks()
 
+from celery.schedules import crontab
+app.conf.beat_schedule = {
+    'process-exotel-scheduled-calls': {
+        'task': 'exotel_calls.tasks.process_scheduled_calls',
+        'schedule': crontab(minute='*/5'),
+    },
+}
+
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
     print(f'Request: {self.request!r}')

@@ -8,39 +8,54 @@ from core_auth.models import ClientProfile
 @receiver(post_save, sender=ConsultantServiceExpertise)
 def auto_add_consultant_to_topic(sender, instance, created, **kwargs):
     """
-    When a consultant selects a service (e.g. 'Income Tax Filing'),
-    auto-add them to all Topics linked to that service's category (e.g. 'Income Tax').
-    This eliminates manual admin work for consultation topic assignment.
+    When a consultant selects a service, auto-add them to:
+    1. The specific Topic linked to that Service (Precise Sync)
+    2. Broad Topics linked to the Category (Broad Sync)
     """
     if created:
         from consultations.models import Topic
-        category = instance.service.category
-        topics = Topic.objects.filter(category=category)
-        for topic in topics:
+        service = instance.service
+        category = service.category
+        
+        # 1. Broad Category Sync
+        broad_topics = Topic.objects.filter(category=category, service__isnull=True)
+        for topic in broad_topics:
             topic.consultants.add(instance.consultant.user)
-            print(f"✅ [Auto-Sync] Added {instance.consultant.full_name} to topic '{topic.name}'")
+            print(f"✅ [Auto-Sync] Added {instance.consultant.full_name} to broad topic '{topic.name}'")
+            
+        # 2. Precise Service Sync
+        precise_topic = Topic.objects.filter(service=service).first()
+        if precise_topic:
+            precise_topic.consultants.add(instance.consultant.user)
+            print(f"✅ [Auto-Sync] Added {instance.consultant.full_name} to precise topic '{precise_topic.name}'")
 
 
 @receiver(post_delete, sender=ConsultantServiceExpertise)
 def auto_remove_consultant_from_topic(sender, instance, **kwargs):
     """
-    When a consultant loses their last service in a category,
-    remove them from the matching Topic.
+    When a consultant loses a service expertise, remove them from topics.
     """
     from consultations.models import Topic
-    category = instance.service.category
+    service = instance.service
+    category = service.category
     
-    # Check if consultant still has any other services in this category
-    still_has_services = ConsultantServiceExpertise.objects.filter(
+    # 1. Precise Sync Removal
+    precise_topic = Topic.objects.filter(service=service).first()
+    if precise_topic:
+        precise_topic.consultants.remove(instance.consultant.user)
+        print(f"🔄 [Auto-Sync] Removed {instance.consultant.full_name} from precise topic '{precise_topic.name}'")
+
+    # 2. Broad Sync Removal (only if no other category expertise remains)
+    still_has_category_services = ConsultantServiceExpertise.objects.filter(
         consultant=instance.consultant,
         service__category=category
     ).exists()
     
-    if not still_has_services:
-        topics = Topic.objects.filter(category=category)
-        for topic in topics:
+    if not still_has_category_services:
+        broad_topics = Topic.objects.filter(category=category, service__isnull=True)
+        for topic in broad_topics:
             topic.consultants.remove(instance.consultant.user)
-            print(f"🔄 [Auto-Sync] Removed {instance.consultant.full_name} from topic '{topic.name}' (no more services in category)")
+            print(f"🔄 [Auto-Sync] Removed {instance.consultant.full_name} from broad topic '{topic.name}' (no more services in category)")
 
 
 

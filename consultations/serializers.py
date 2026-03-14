@@ -52,8 +52,20 @@ class ConsultationBookingSerializer(serializers.ModelSerializer):
     
     def get_client_name(self, obj):
         return f"{obj.client.first_name} {obj.client.last_name}".strip() or obj.client.username
+    
+    def to_internal_value(self, data):
+        # Allow topic to be looked up by name if a string is provided
+        topic_data = data.get('topic')
+        if topic_data and isinstance(topic_data, str) and not topic_data.isdigit():
+            from .models import Topic
+            topic = Topic.objects.filter(Q(name__iexact=topic_data) | Q(name__icontains=topic_data)).first()
+            if topic:
+                data['topic'] = topic.id
+                
+        return super().to_internal_value(data)
 
     def validate(self, data):
+
         """
         Validate that the requested time slot is not already booked.
         This prevents race conditions where two users book the same slot simultaneously.

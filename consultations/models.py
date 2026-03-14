@@ -12,6 +12,14 @@ class Topic(models.Model):
         related_name='topics',
         help_text='Link to ServiceCategory for auto-sync of consultants'
     )
+    service = models.OneToOneField(
+        'consultants.Service',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='consultation_topic',
+        help_text='Direct link to a service for auto-sync of expertise'
+    )
     consultants = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         related_name='topics',

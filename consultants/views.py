@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.db import models
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 from .models import (
@@ -72,6 +73,114 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             })
             
         return Response(result)
+
+    @action(detail=False, methods=['post'], url_path='match-cart')
+    def match_cart(self, request):
+        """
+        Accept a list of service titles from the cart, match them to DB services,
+        and return consultants who have expertise in ANY of those services.
+        Body: { "titles": ["PAN Application", "Aadhaar Validation", ...] }
+        """
+        from .models import ConsultantReview
+
+        titles = request.data.get('titles', [])
+        if not titles:
+            return Response({
+                'consultants': [],
+                'auto_recommended': None,
+                'familiar_consultant': None,
+                'total': 0
+            })
+
+        # Find matching Service records by title (case-insensitive)
+        from django.db.models import Q, Count
+        title_q = Q()
+        for title in titles:
+            title_q |= Q(title__iexact=title.strip())
+        
+        matched_services = Service.objects.filter(title_q, is_active=True)
+        # Get unique IDs to ensure we count correctly even if duplicate titles were sent
+        required_service_ids = list(matched_services.values_list('id', flat=True).distinct())
+        total_required = len(required_service_ids)
+
+        if total_required == 0:
+            return Response({
+                'consultants': [],
+                'auto_recommended': None,
+                'familiar_consultant': None,
+                'total': 0,
+                'matched_services': 0
+            })
+
+        # Find consultants who have expertise in ALL of the matched services
+        # We group by consultant and count how many of the required service IDs they have
+        consultant_ids = ConsultantServiceExpertise.objects.filter(
+            service_id__in=required_service_ids,
+            consultant__is_active=True,
+        ).values('consultant_id').annotate(
+            expertise_count=Count('service_id', distinct=True)
+        ).filter(
+            expertise_count=total_required
+        ).values_list('consultant_id', flat=True)
+
+        consultants = ConsultantServiceProfile.objects.filter(
+            id__in=consultant_ids
+        ).order_by('current_client_count', 'last_assigned_at')
+
+        result = []
+        for consultant in consultants:
+            live_client_count = ClientServiceRequest.objects.filter(
+                assigned_consultant=consultant
+            ).exclude(status__in=['completed', 'cancelled']).count()
+
+            available_slots = consultant.max_concurrent_clients - live_client_count
+            utilization = (live_client_count / consultant.max_concurrent_clients * 100) if consultant.max_concurrent_clients > 0 else 0
+
+            recent_reviews = ConsultantReview.objects.filter(
+                consultant=consultant
+            ).select_related('client', 'service_request__service').order_by('-created_at')[:3]
+
+            reviews_data = []
+            for review in recent_reviews:
+                reviews_data.append({
+                    'id': review.id,
+                    'rating': review.rating,
+                    'review_text': review.review_text,
+                    'client_name': review.client.get_full_name() or 'Anonymous',
+                    'service_title': review.service_request.service.title if review.service_request and review.service_request.service else '',
+                    'created_at': review.created_at.isoformat(),
+                })
+
+            # Since these are full-coverage consultants, they cover all titles
+            covered_titles = list(matched_services.values_list('title', flat=True))
+
+            result.append({
+                'id': consultant.id,
+                'full_name': consultant.full_name,
+                'qualification': consultant.qualification,
+                'experience_years': consultant.experience_years,
+                'bio': consultant.bio or '',
+                'average_rating': float(consultant.average_rating),
+                'total_reviews': consultant.total_reviews,
+                'recent_reviews': reviews_data,
+                'covered_services': covered_titles,
+                'workload': {
+                    'current_tasks': live_client_count,
+                    'max_capacity': consultant.max_concurrent_clients,
+                    'available_slots': available_slots,
+                    'utilization': round(utilization, 1)
+                }
+            })
+
+        auto_recommended = result[0] if result else None
+
+        return Response({
+            'consultants': result,
+            'auto_recommended': auto_recommended,
+            'familiar_consultant': None,
+            'total': len(result),
+            'matched_services': total_required
+        })
 
     @action(detail=True, methods=['get'], url_path='available-consultants')
     def available_consultants(self, request, pk=None):

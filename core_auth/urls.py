@@ -3,7 +3,10 @@ from core_auth.views import (
     SendOTPView, VerifyOTPView,
     CustomTokenObtainPairView, UserDashboardView, GoogleAuthView,
     ClientProfileView, LogoutView, ConsultantClientsView,
-    CustomTokenRefreshView, WebSocketTokenView, ContactSubmissionView
+    CustomTokenRefreshView, WebSocketTokenView, ContactSubmissionView,
+    ClientRegisterView, ClientEmailLoginView,
+    SendMagicLinkView, VerifyMagicLinkView,
+    ForgotPasswordView, ResetPasswordView
 )
 from consultant_onboarding.views import auth as onboarding_auth
 from consultant_onboarding.views import face_matching as onboarding_face
@@ -19,6 +22,19 @@ urlpatterns = [
     path('auth/dashboard/', UserDashboardView.as_view(), name='user-dashboard'),
     path('auth/profile/', onboarding_auth.get_user_profile, name='user-profile'),  # onboarding profile with step flags
     path('auth/google/', GoogleAuthView.as_view(), name='google-auth'),
+
+    # Client Email/Password Auth
+    path('auth/client/register/', ClientRegisterView.as_view(), name='client-register'),
+    path('auth/client/login/', ClientEmailLoginView.as_view(), name='client-email-login'),
+
+    # Magic Link Auth
+    path('auth/magic-link/send/', SendMagicLinkView.as_view(), name='magic-link-send'),
+    path('auth/magic-link/verify/', VerifyMagicLinkView.as_view(), name='magic-link-verify'),
+
+    # Forgot / Reset Password
+    path('auth/forgot-password/', ForgotPasswordView.as_view(), name='forgot-password'),
+    path('auth/reset-password/', ResetPasswordView.as_view(), name='reset-password'),
+
     path('auth/onboarding/', onboarding_auth.complete_onboarding, name='onboarding-complete-alias'),
     path('auth/onboarding/send-otp/', onboarding_auth.send_phone_otp, name='onboarding-send-otp'),
     path('auth/onboarding/verify-otp/', onboarding_auth.verify_phone_otp, name='onboarding-verify-otp'),

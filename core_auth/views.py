@@ -14,9 +14,10 @@ from core_auth.services.whatsapp_otp import (
     verify_otp as verify_otp_service, can_resend_otp,
     RESEND_COOLDOWN_SECONDS, OTP_EXPIRY_SECONDS
 )
+
 from django.conf import settings
 import requests
-
+MAGIC_LINK_EXPIRY_MINUTES=15
 logger = logging.getLogger(__name__)
 
 def set_auth_cookies(response, user):
@@ -693,3 +694,552 @@ class ContactSubmissionView(CreateAPIView):
     serializer_class = ContactSubmissionSerializer
     permission_classes = [AllowAny]
     authentication_classes = []
+
+
+# =============================================================================
+# Client Email/Password + Magic Link + Forgot Password Views
+# =============================================================================
+
+import uuid
+from django.utils import timezone
+from datetime import timedelta
+from django.contrib.auth import authenticate
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
+from django.utils.html import strip_tags
+from core_auth.models import MagicLinkToken
+
+# ===========================================================================
+# Custom email sender — bypasses Django's MIME building entirely to guarantee
+# base64 encoding. Django's SafeMIMEText uses body_encoding=None for utf-8,
+# causing SMTP servers to apply QP (wraps at 76 chars, corrupts URLs).
+# ===========================================================================
+import base64
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText as StdMIMEText
+from django.core.mail import get_connection
+
+
+def _send_base64_html_email(subject, html_body, plain_body, from_email, to_email):
+    """Send email with base64-encoded HTML to prevent QP URL corruption."""
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From'] = from_email
+    msg['To'] = to_email
+
+    # Plain text part (QP is fine here — no clickable URLs)
+    msg.attach(StdMIMEText(plain_body, 'plain', 'utf-8'))
+
+    # HTML part — force base64 encoding so no line-wrapping can corrupt URLs
+    html_b64 = base64.b64encode(html_body.encode('utf-8')).decode('ascii')
+    html_part = StdMIMEText('', 'html', 'utf-8')
+    del html_part['Content-Transfer-Encoding']
+    html_part['Content-Transfer-Encoding'] = 'base64'
+    html_part.set_payload(html_b64)
+    msg.attach(html_part)
+
+    # Send via Django's SMTP connection (uses EMAIL_HOST, EMAIL_USE_TLS, etc.)
+    connection = get_connection()
+    connection.open()
+    try:
+        connection.connection.sendmail(from_email, [to_email], msg.as_string())
+    finally:
+        connection.close()
+
+
+
+
+def _generate_magic_token(user, purpose='LOGIN'):
+    """Generate a secure, single-use token for magic links or password resets."""
+    # Invalidate any existing unused tokens for same user + purpose
+    MagicLinkToken.objects.filter(
+        user=user, purpose=purpose, used=False
+    ).update(used=True)
+
+    token = uuid.uuid4().hex  # 32-char hex string — short enough to avoid email QP wrapping
+    magic_token = MagicLinkToken.objects.create(
+        user=user,
+        token=token,
+        purpose=purpose,
+        expires_at=timezone.now() + timedelta(minutes=MAGIC_LINK_EXPIRY_MINUTES),
+    )
+    return magic_token
+
+
+class ClientRegisterView(APIView):
+    """
+    Register a new Client with email + password.
+    POST /auth/client/register/
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email', '').strip().lower()
+        password = request.data.get('password', '')
+        first_name = request.data.get('first_name', '').strip()
+        last_name = request.data.get('last_name', '').strip()
+
+        # Validate required fields
+        if not email or not password:
+            return Response(
+                {'error': 'Email and password are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if len(password) < 8:
+            return Response(
+                {'error': 'Password must be at least 8 characters long.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if email already exists
+        if User.objects.filter(email=email).exists():
+            existing_user = User.objects.get(email=email)
+            if existing_user.role == User.CONSULTANT:
+                return Response(
+                    {
+                        'error': 'This email is registered as a Consultant. Please use the consultant login.',
+                        'code': 'EMAIL_CONFLICT'
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            # If user exists as client but has no password (created via magic link or Google)
+            if not existing_user.has_usable_password():
+                existing_user.set_password(password)
+                if first_name:
+                    existing_user.first_name = first_name
+                if last_name:
+                    existing_user.last_name = last_name
+                existing_user.save()
+
+                response = Response({
+                    'success': True,
+                    'created': False,
+                    'message': 'Password set for existing account.',
+                    'role': existing_user.role,
+                })
+                return set_auth_cookies(response, existing_user)
+
+            return Response(
+                {'error': 'An account with this email already exists. Please login instead.'},
+                status=status.HTTP_409_CONFLICT
+            )
+
+        # Check consultant onboarding conflict
+        try:
+            from consultant_onboarding.models import ConsultantApplication
+            if ConsultantApplication.objects.filter(
+                email=email
+            ).exclude(status='REJECTED').exists():
+                return Response(
+                    {
+                        'error': 'This email is registered in our Consultant Onboarding portal. Please use a different email.',
+                        'code': 'EMAIL_CONFLICT'
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except Exception:
+            pass
+
+        # Create the user
+        username = email.split('@')[0]
+        # Ensure unique username
+        base_username = username
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            first_name=first_name,
+            last_name=last_name,
+            role=User.CLIENT,
+            is_phone_verified=False,
+        )
+
+        # Create ClientProfile
+        ClientProfile.objects.create(user=user)
+
+        logger.info(f"New client registered via email: {user.id} ({email})")
+
+        response = Response({
+            'success': True,
+            'created': True,
+            'role': user.role,
+            'full_name': f"{user.first_name} {user.last_name}".strip() or user.username,
+        }, status=status.HTTP_201_CREATED)
+        return set_auth_cookies(response, user)
+
+
+class ClientEmailLoginView(APIView):
+    """
+    Login a Client with email + password.
+    POST /auth/client/login/
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email', '').strip().lower()
+        password = request.data.get('password', '')
+
+        if not email or not password:
+            return Response(
+                {'error': 'Email and password are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Find user by email first
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'No account found with this email. Please sign up first.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if user.role == User.CONSULTANT:
+            return Response(
+                {
+                    'error': 'Consultants must use the consultant login section.',
+                    'code': 'EMAIL_CONFLICT'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if not user.has_usable_password():
+            return Response(
+                {'error': 'This account was created via Google or Magic Link. Please use those methods to login, or set a password via "Forgot Password".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Authenticate
+        authenticated_user = authenticate(username=user.username, password=password)
+        if authenticated_user is None:
+            return Response(
+                {'error': 'Invalid password. Please try again.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        logger.info(f"Client email login: {user.id} ({email})")
+
+        response = Response({
+            'success': True,
+            'role': user.role,
+            'full_name': f"{user.first_name} {user.last_name}".strip() or user.username,
+            'is_phone_verified': user.is_phone_verified,
+        })
+        return set_auth_cookies(response, authenticated_user)
+
+
+class SendMagicLinkView(APIView):
+    """
+    Send a magic link login email.
+    POST /auth/magic-link/send/
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email', '').strip().lower()
+
+        if not email:
+            return Response(
+                {'error': 'Email is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Rate limit: max 1 magic link per email per 60 seconds
+        recent_token = MagicLinkToken.objects.filter(
+            user__email=email,
+            purpose=MagicLinkToken.LOGIN,
+            created_at__gte=timezone.now() - timedelta(seconds=60),
+        ).first()
+        if recent_token:
+            return Response(
+                {'error': 'A magic link was recently sent. Please wait a minute before requesting another.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        # Find or create user
+        try:
+            user = User.objects.get(email=email)
+            if user.role == User.CONSULTANT:
+                return Response(
+                    {'error': 'Consultants must use username and password to login.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except User.DoesNotExist:
+            # Check consultant onboarding conflict
+            try:
+                from consultant_onboarding.models import ConsultantApplication
+                if ConsultantApplication.objects.filter(
+                    email=email
+                ).exclude(status='REJECTED').exists():
+                    return Response(
+                        {
+                            'error': 'This email is registered in our Consultant Onboarding portal. Please use a different email.',
+                            'code': 'EMAIL_CONFLICT'
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except Exception:
+                pass
+
+            # Auto-create client account (no password)
+            username = email.split('@')[0]
+            base_username = username
+            counter = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            user = User.objects.create(
+                username=username,
+                email=email,
+                role=User.CLIENT,
+                is_phone_verified=False,
+            )
+            ClientProfile.objects.create(user=user)
+            logger.info(f"Auto-created client via magic link: {user.id} ({email})")
+
+        # Generate token
+        magic_token = _generate_magic_token(user, purpose='LOGIN')
+
+        # Build magic link URL — use path param to avoid QP encoding corrupting '=' in ?token=
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:8080')
+        magic_link = f"{frontend_url}/auth/magic-link/verify/{magic_token.token}"
+
+        # Send email
+        try:
+            subject = 'Your TaxPlan Advisor Login Link'
+            html_message = render_to_string('core_auth/magic_link_email.html', {
+                'user': user,
+                'magic_link': magic_link,
+                'expiry_minutes': MAGIC_LINK_EXPIRY_MINUTES,
+            })
+            plain_message = strip_tags(html_message)
+
+            _send_base64_html_email(
+                subject=subject,
+                html_body=html_message,
+                plain_body=plain_message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to_email=email,
+            )
+
+            logger.info(f"Magic link sent to {email}")
+        except Exception as e:
+            logger.error(f"Failed to send magic link to {email}: {e}")
+            return Response(
+                {'error': 'Failed to send email. Please try again later.'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        return Response({
+            'success': True,
+            'message': 'Magic link sent! Check your email inbox.',
+        })
+
+
+class VerifyMagicLinkView(APIView):
+    """
+    Verify a magic link token and log the user in.
+    POST /auth/magic-link/verify/
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = request.data.get('token', '').strip()
+
+        if not token:
+            return Response(
+                {'error': 'Token is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            magic_token = MagicLinkToken.objects.select_related('user').get(
+                token=token, purpose=MagicLinkToken.LOGIN
+            )
+        except MagicLinkToken.DoesNotExist:
+            return Response(
+                {'error': 'Invalid or expired link. Please request a new one.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not magic_token.is_valid:
+            return Response(
+                {'error': 'This link has expired or already been used. Please request a new one.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Mark as used
+        magic_token.used = True
+        magic_token.save(update_fields=['used'])
+
+        user = magic_token.user
+        logger.info(f"Magic link verified for user {user.id} ({user.email})")
+
+        response = Response({
+            'success': True,
+            'role': user.role,
+            'full_name': f"{user.first_name} {user.last_name}".strip() or user.username,
+            'is_phone_verified': user.is_phone_verified,
+        })
+        return set_auth_cookies(response, user)
+
+
+class ForgotPasswordView(APIView):
+    """
+    Send a password reset email.
+    POST /auth/forgot-password/
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        login_id = request.data.get('email', '').strip().lower()
+
+        if not login_id:
+            return Response(
+                {'error': 'Email or username is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Always return success to prevent enumeration
+        success_response = Response({
+            'success': True,
+            'message': 'If an account exists with this email, a password reset link has been sent.',
+        })
+
+        from django.db.models import Q
+        try:
+            # Check by email or username
+            user = User.objects.get(Q(email=login_id) | Q(username=login_id))
+        except User.DoesNotExist:
+            return success_response
+
+        # Allow consultants and clients, don't block consultants anymore
+        # but ensure they have an email address to send to.
+        if not user.email:
+            # Cannot send reset link if no email is configured
+            return success_response
+
+        # Rate limit: max 1 reset per email per 60 seconds
+        recent_token = MagicLinkToken.objects.filter(
+            user=user,
+            purpose=MagicLinkToken.PASSWORD_RESET,
+            created_at__gte=timezone.now() - timedelta(seconds=60),
+        ).first()
+        if recent_token:
+            return Response(
+                {'error': 'A reset link was recently sent. Please wait a minute before requesting another.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        # Generate token
+        magic_token = _generate_magic_token(user, purpose='PASSWORD_RESET')
+
+        # Build reset URL — use path param to avoid QP encoding corrupting '=' in ?token=
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:8080')
+        reset_link = f"{frontend_url}/auth/reset-password/{magic_token.token}"
+
+        # Send email
+        try:
+            subject = 'Reset Your TaxPlan Advisor Password'
+            html_message = render_to_string('core_auth/password_reset_email.html', {
+                'user': user,
+                'reset_link': reset_link,
+                'expiry_minutes':MAGIC_LINK_EXPIRY_MINUTES ,
+            })
+            plain_message = strip_tags(html_message)
+
+            _send_base64_html_email(
+                subject=subject,
+                html_body=html_message,
+                plain_body=plain_message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to_email=user.email,
+            )
+            logger.info(f"Password reset email sent to {user.email} (User {user.id})")
+        except Exception as e:
+            logger.error(f"Failed to send password reset email to {user.email}: {e}")
+            return Response(
+                {'error': 'Failed to send email. Please try again later.'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        return success_response
+
+
+class ResetPasswordView(APIView):
+    """
+    Reset password using a token from the reset email.
+    POST /auth/reset-password/
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = request.data.get('token', '').strip()
+        new_password = request.data.get('new_password', '')
+
+        logger.debug(f"[ResetPassword] token received: '{token}' (len={len(token)})")
+        logger.debug(f"[ResetPassword] new_password present: {bool(new_password)}")
+
+        if not token or not new_password:
+            logger.warning(f"[ResetPassword] Missing token or password. token={bool(token)}, pw={bool(new_password)}")
+            return Response(
+                {'error': 'Token and new password are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if len(new_password) < 8:
+            return Response(
+                {'error': 'Password must be at least 8 characters long.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            magic_token = MagicLinkToken.objects.select_related('user').get(
+                token=token, purpose=MagicLinkToken.PASSWORD_RESET
+            )
+        except MagicLinkToken.DoesNotExist:
+            # Log what tokens DO exist for debugging
+            existing = list(MagicLinkToken.objects.filter(
+                purpose=MagicLinkToken.PASSWORD_RESET, used=False
+            ).values_list('token', flat=True))
+            logger.error(f"[ResetPassword] Token not found in DB. Received='{token}'. Existing tokens: {existing}")
+            return Response(
+                {'error': 'Invalid or expired reset link. Please request a new one.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+        if not magic_token.is_valid:
+            return Response(
+                {'error': 'This reset link has expired or already been used. Please request a new one.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Mark as used
+        magic_token.used = True
+        magic_token.save(update_fields=['used'])
+
+        # Set new password
+        user = magic_token.user
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+
+        logger.info(f"Password reset completed for user {user.id} ({user.email})")
+
+        return Response({
+            'success': True,
+            'message': 'Password has been reset successfully. You can now login with your new password.',
+        })

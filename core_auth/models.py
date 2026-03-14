@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
@@ -76,3 +78,37 @@ class ContactSubmission(models.Model):
     
     class Meta:
         ordering = ['-created_at']
+
+
+class MagicLinkToken(models.Model):
+    """
+    Short-lived, single-use tokens for magic link login and password reset.
+    """
+    LOGIN = 'LOGIN'
+    PASSWORD_RESET = 'PASSWORD_RESET'
+    PURPOSE_CHOICES = [
+        (LOGIN, 'Magic Link Login'),
+        (PASSWORD_RESET, 'Password Reset'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='magic_link_tokens')
+    token = models.CharField(max_length=64, unique=True, db_index=True)  # 32-char hex UUID
+    purpose = models.CharField(max_length=20, choices=PURPOSE_CHOICES, default=LOGIN)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used = models.BooleanField(default=False)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"MagicLinkToken({self.purpose}) for {self.user.email} - {'used' if self.used else 'active'}"
+
+    @property
+    def is_expired(self):
+        from django.utils import timezone
+        return timezone.now() > self.expires_at
+
+    @property
+    def is_valid(self):
+        return not self.used and not self.is_expired

@@ -374,9 +374,20 @@ def consultants_by_date(request):
 
     # Get all consultants
     if topic_id:
-        consultants = User.objects.filter(role='CONSULTANT', topics__id=topic_id)
+        if str(topic_id).isdigit():
+            consultants = User.objects.filter(role='CONSULTANT', topics__id=int(topic_id))
+        else:
+            # Fallback to name search if ID is not a number (handles frontend slugs)
+            from django.db import models
+            from consultations.models import Topic
+            topic = Topic.objects.filter(models.Q(name__iexact=topic_id) | models.Q(name__icontains=topic_id)).first()
+            if topic:
+                consultants = User.objects.filter(role='CONSULTANT', topics=topic)
+            else:
+                consultants = User.objects.none()
     else:
         consultants = User.objects.filter(role='CONSULTANT')
+
     available_consultants = []
 
     for consultant in consultants:

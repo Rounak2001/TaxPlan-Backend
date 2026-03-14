@@ -1,5 +1,5 @@
 """
-Management command to seed service categories and services from ClientServices.jsx
+Management command to seed service categories and services from frontend catalogs
 Run with: python manage.py seed_services
 """
 
@@ -9,203 +9,99 @@ from consultations.models import Topic
 
 
 class Command(BaseCommand):
-    help = 'Seed service categories and services from frontend catalog'
+    help = 'Wipe and seed service categories, topics, and services from frontend catalog'
 
     def handle(self, *args, **kwargs):
+        self.stdout.write('Wiping existing services data...')
+        
+        # Need to delete ConsultationBooking first because Topic is protected by it
+        from consultations.models import ConsultationBooking
+        ConsultationBooking.objects.all().delete()
+        
+        Service.objects.all().delete()
+        Topic.objects.all().delete()
+        ServiceCategory.objects.all().delete()
+        
         self.stdout.write('Seeding service categories and services...')
         
-        # Income Tax Category
-        income_tax, _ = ServiceCategory.objects.get_or_create(
-            name="Income Tax",
-            defaults={'description': 'Income tax filing and related services'}
-        )
-        Topic.objects.get_or_create(name="Income Tax", defaults={'category': income_tax, 'description': 'Income tax related consultations'})
-        
-        income_tax_services = [
-            ("Capital Gains Tax Planning", 1, "5-10 days", "PAN Card\nAadhaar\nTransaction documents"),
-            ("Income Tax E-Filing", 1, "1-2 days", "PAN\nAadhaar\nForm 16/16A\nBank Statements"),
-            ("Business Tax Filing", 1, "3-5 days", "PAN Card\nAadhaar Card\nIncome Tax Returns (last 2–3 years)\nForm 16 / Salary Slips\nBank Statements (last 6 months)\nInvestment Proofs\nBusiness Income/Profit & Loss Account\nBalance Sheet"),
-            ("Partnership Firm / LLP ITR", 1, "5-7 days", "Partnership Deed/LLP Agreement\nPAN of Firm/LLP\nAudited Financials\nPartner Details\nDigital Signature"),
-            ("Company ITR Filing", 1, "7-10 days", "Certificate of Incorporation\nAudited Balance Sheet & P&L\nDirector Details & KYC\nDigital Signature (Class 3)\nForm 26AS"),
-            ("Trust / NGO Tax Filing", 1, "7-10 days", "Trust Deed/Registration Certificate\nPAN of Trust/NGO\nAudit Report (Form 10B/10BB)\nDonor List\nUtilization Certificate"),
-            ("15CA - 15CB Filing", 1, "1-2 days", "Invoice\nRemittee details\nTax Residency Certificate (TRC)\nForm 15CA/CB Engagement Letter"),
-            ("TAN Registration", 1, "1-2 days", "PAN of Entity\nID Proof of Authorized Signatory\nAddress Proof"),
-            ("TDS Return Filing", 1, "2-3 days", "TAN\nTDS Challans\nDeductee List\nSalary/Payment Register"),
-            ("Revised ITR Return (ITR-U)", 1, "2-4 days", "Original ITR\nAdditional income details\nProof of additional tax paid"),
-        ]
-        
-        for title, price, tat, docs in income_tax_services:
-            Service.objects.update_or_create(
-                category=income_tax,
-                title=title,
-                defaults={'price': price, 'tat': tat, 'documents_required': docs}
-            )
-        
-        # GST Category
-        gst, _ = ServiceCategory.objects.get_or_create(
-            name="GST",
-            defaults={'description': 'GST registration, filing, and compliance services'}
-        )
-        Topic.objects.get_or_create(name="GST", defaults={'category': gst, 'description': 'GST related consultations'})
-        
-        gst_services = [
-            ("GST Registration", 1, "7-10 days", "PAN, Aadhaar, Address Proof, Bank Proof"),
-            ("GST Registration for Foreigners", 1, "10-15 days", "Passport, Address Proof, Nominee Details"),
-            ("GST Return Filing by Accountant", 1, "Monthly/Quarterly", "Sales/Purchase Invoices, Bank Statement"),
-            ("GST NIL Return Filing", 1, "1 day", "Login Credentials, OTP"),
-            ("GST Amendment", 1, "3-5 days", "New Address Proof, Supporting documents"),
-            ("GST Revocation", 1, "15-30 days", "Cancellation Order, Pending Returns"),
-            ("GST LUT Form", 1, "1-2 days", "GSTIN, Digital Signature"),
-            ("GSTR-10 (Final Return)", 1, "5-7 days", "Cancellation Order, Closing Stock"),
-            ("GST Annual Return Filing (GSTR-9)", 1, "10-15 days", "Annual Financials, GSTR data"),
-        ]
-        
-        for title, price, tat, docs in gst_services:
-            Service.objects.update_or_create(
-                category=gst,
-                title=title,
-                defaults={'price': price, 'tat': tat, 'documents_required': docs}
-            )
-        
-        # Registration Category
-        registration, _ = ServiceCategory.objects.get_or_create(
-            name="Registration",
-            defaults={'description': 'Business and professional registrations'}
-        )
-        Topic.objects.get_or_create(name="Registration", defaults={'category': registration, 'description': 'Registration related consultations'})
-        
-        registration_services = [
-            ("PAN Registration (Individual/Company)", 1, "1-2 days", "ID Proof, Address Proof, Photo"),
-            ("IEC Certificate", 1, "2-3 days", "PAN, Aadhaar, Bank Proof, DSC"),
-            ("DSC Signature", 1, "1-2 days", "Photo, PAN, Aadhaar, Email, Mobile"),
-            ("Startup India Registration", 1, "7-10 days", "COI, Funding Proof, Business Description"),
-            ("FSSAI Registration", 1, "5-7 days", "Photo, ID, Address Proof, Product List"),
-            ("Trade License", 1, "15-20 days", "Address Proof, ID, Property Tax Receipt"),
-            ("Udyam Registration", 1, "1-2 days", "Aadhaar, PAN, Bank Details"),
-        ]
-        
-        for title, price, tat, docs in registration_services:
-            Service.objects.update_or_create(
-                category=registration,
-                title=title,
-                defaults={'price': price, 'tat': tat, 'documents_required': docs}
-            )
-        
-        # Startup & Advisory Category
-        startup, _ = ServiceCategory.objects.get_or_create(
-            name="Startup & Advisory",
-            defaults={'description': 'Startup and business advisory services'}
-        )
-        Topic.objects.get_or_create(name="Startup & Advisory", defaults={'category': startup, 'description': 'Startup and advisory consultations'})
-        
-        startup_services = [
-            ("Business Structure Selection", 1, "1-2 days", "Founders PAN, Business Model"),
-            ("Startup Certificate", 1, "5-10 days", "COI, PAN, Directors Details"),
-            ("Proprietorship", 1, "3-5 days", "PAN, Aadhaar, Address Proof"),
-            ("Partnership", 1, "5-7 days", "PAN & Aadhaar of Partners, Partnership Deed"),
-            ("One Person Company", 1, "10-15 days", "PAN, Aadhaar, DSC, MOA & AOA"),
-            ("Limited Liability Partnership", 1, "10-15 days", "PAN, Aadhaar, DSC, LLP Agreement"),
-            ("Private Limited Company", 1, "10-15 days", "PAN, Aadhaar, DSC, MOA & AOA"),
-            ("Section 8 Company", 1, "15-20 days", "PAN, Aadhaar, DSC, Non-profit MOA"),
-            ("Trust Registration", 1, "10-15 days", "PAN, Trust Deed, Trustees List"),
-            ("Public Limited Company", 1, "20-30 days", "PAN, DSC, MOA & AOA, Prospectus"),
-            ("Producer Company", 1, "15-20 days", "PAN, DSC, MOA & AOA, Members List"),
-            ("Indian Subsidiary", 1, "20-25 days", "Parent Co Documents, Board Resolution"),
-        ]
-        
-        for title, price, tat, docs in startup_services:
-            Service.objects.update_or_create(
-                category=startup,
-                title=title,
-                defaults={'price': price, 'tat': tat, 'documents_required': docs}
-            )
-        
-        # Compliance Category
-        compliance, _ = ServiceCategory.objects.get_or_create(
-            name="Compliance",
-            defaults={'description': 'Ongoing compliance and filing services'}
-        )
-        Topic.objects.get_or_create(name="Compliance", defaults={'category': compliance, 'description': 'Compliance related consultations'})
-        
-        compliance_services = [
-            ("PF Return Filing", 1, "Monthly", "Employee ECR, Contribution data"),
-            ("ESI Return Filing", 1, "Monthly", "Employee-wise ESI contribution data"),
-            ("Professional Tax Return Filing", 1, "Monthly/Annual", "Salary details, PT Deduction"),
-            ("FDI Filing with RBI", 1, "15-20 days", "FC-GPR Form, Valuation Certificate"),
-            ("FLA Return Filing", 1, "5-7 days", "Audited Financials, Foreign assets details"),
-            ("FSSAI Renewal", 1, "7-10 days", "Original License, Declaration Form"),
-            ("FSSAI Return Filing", 1, "3-5 days", "Sales/Purchase details, Product categories"),
-            ("Partnership Compliance", 1, "5-7 days", "Partnership Deed, Financials"),
-            ("Proprietorship Compliance", 1, "3-5 days", "PAN, Bank Statement, Sales details"),
-            ("Business Plan", 1, "10-15 days", "Project Description, Market analysis"),
-            ("PF Registration", 1, "7-10 days", "PAN, DSC, Address Proof"),
-            ("ESI Registration", 1, "7-10 days", "Registration Certificate, Employee List"),
-            ("Professional Tax Registration", 1, "3-5 days", "PAN, Address Proof, Employee Details"),
-        ]
-        
-        for title, price, tat, docs in compliance_services:
-            Service.objects.update_or_create(
-                category=compliance,
-                title=title,
-                defaults={'price': price, 'tat': tat, 'documents_required': docs}
-            )
-        
-        # Capital Gains & Tax Planning Category
-        tax_planning, _ = ServiceCategory.objects.get_or_create(
-            name="Capital Gains & Tax Planning",
-            defaults={'description': 'Tax planning and capital gains services'}
-        )
-        Topic.objects.get_or_create(name="Capital Gains & Tax Planning", defaults={'category': tax_planning, 'description': 'Capital gains and tax planning consultations'})
-        
-        tax_planning_services = [
-            ("Filing 26QB", 1, "1-2 days", "PAN of Buyer/Seller, Sale Agreement"),
-            ("Tax Planning Consultation", 1, "1-3 days", "PAN, ITR, Bank Statements, Investment Proofs"),
-        ]
-        
-        for title, price, tat, docs in tax_planning_services:
-            Service.objects.update_or_create(
-                category=tax_planning,
-                title=title,
-                defaults={'price': price, 'tat': tat, 'documents_required': docs}
-            )
-        
-        # Certification Services Category
-        certification, _ = ServiceCategory.objects.get_or_create(
-            name="Certification Services",
-            defaults={'description': 'Professional certification services'}
-        )
-        Topic.objects.get_or_create(name="Certification Services", defaults={'category': certification, 'description': 'Certification service consultations'})
-        
-        certification_services = [
-            ("Net Worth Certificate", 1, "1-3 days", "PAN, ITR, Bank Statements, Property Docs"),
-            ("Turnover Certificate", 1, "1-3 days", "PAN, GST Certificate, Audited Financials"),
-            ("15CA/15CB (FEMA Remittance)", 1, "7 days", "PAN, Invoice, TRC, Agreement"),
-            ("Capital Contribution Certificate", 1, "1-3 days", "PAN, Partnership Deed, Bank Statements"),
-        ]
-        
-        for title, price, tat, docs in certification_services:
-            Service.objects.update_or_create(
-                category=certification,
-                title=title,
-                defaults={'price': price, 'tat': tat, 'documents_required': docs}
-            )
+        # Helper to create services and their corresponding topics
+        def seed_category(cat_name, cat_desc, services_list):
+            cat = ServiceCategory.objects.create(name=cat_name, description=cat_desc)
+            # Create a "General" topic for the category
+            Topic.objects.create(name=f"General {cat_name} Advice", category=cat, description=f"General consultation for {cat_name}")
+            
+            for title, price, tat, docs in services_list:
+                service = Service.objects.create(category=cat, title=title, price=price, tat=tat, documents_required=docs)
+                # Create a specific topic for this service
+                Topic.objects.create(
+                    name=title,
+                    service=service,
+                    category=cat,
+                    description=f"Specific consultation for {title}"
+                )
+            return cat
 
-        # Consultations Category
-        consultations, _ = ServiceCategory.objects.get_or_create(
-            name="Consultations",
-            defaults={'description': 'Expert consultation services'}
-        )
-        
-        consultation_services = [
-            ("Video Consultancy", 1, "30 mins", "Relevant documents for discussion"),
-        ]
-        
-        for title, price, tat, docs in consultation_services:
-            Service.objects.update_or_create(
-                category=consultations,
-                title=title,
-                defaults={'price': price, 'tat': tat, 'documents_required': docs}
-            )
+        # 1. Returns Category
+        seed_category("Returns", "ITR, GSTR, and TDS filing services", [
+            ("ITR Salary Filing", 999, "1-2 days", "Form 16, Bank Statements, PAN, Aadhaar"),
+            ("ITR Individual Business Filing", 2499, "2-3 days", "Books/Receipts, Bank Statements"),
+            ("ITR LLP Filing", 3999, "3-5 days", "Financials, Partner Details, Tax Challans"),
+            ("ITR NRI Filing", 2999, "2-4 days", "Passport, India Income Statements"),
+            ("ITR Partnership Filing", 3499, "3-5 days", "Financials, Partner Details"),
+            ("ITR Company Filing", 4999, "5-7 days", "Audited Financials, Tax Audit forms"),
+            ("ITR Trust Filing", 5999, "5-7 days", "Trust Financials, Donation Records"),
+            ("GSTR-1 & GSTR-3B (Monthly)", 1999, "1-2 days", "Sales/Purchase registers"),
+            ("GSTR-1 & GSTR-3B (Quarterly)", 1499, "2-3 days", "Sales/Purchase registers"),
+            ("GSTR CMP-08", 999, "1-2 days", "Composition turnover details"),
+            ("GSTR-9", 2499, "3-5 days", "Yearly GST return data"),
+            ("GSTR-9C", 3999, "3-7 days", "Audited financials, Reconciliation sheets"),
+            ("GSTR-4 (Annual Return)", 1299, "2-3 days", "Annual turnover summary"),
+            ("GSTR-10 (Final Return)", 1499, "1-3 days", "Closing stock, cancellation order"),
+            ("TDS Monthly Payment", 499, "1 day", "Deduction summary, PAN details"),
+            ("TDS Quarterly Filing", 999, "2-3 days", "Quarter deduction register, Challans"),
+            ("TDS Revised Quarterly Filing", 1499, "2-4 days", "Original statement, Correction requirements"),
+            ("Sale of Property (26QB)", 1999, "1-2 days", "Buyer/seller PAN, Agreement details"),
+        ])
+
+        # 2. Registrations Category
+        seed_category("Registrations", "Business and compliance registrations", [
+            ("PAN Application", 499, "1-2 days", "ID/Address proof"),
+            ("TAN Registration", 999, "1-2 days", "Entity PAN, Address proof"),
+            ("Aadhaar Validation", 299, "1 day", "Aadhaar info"),
+            ("MSME Registration", 999, "1-2 days", "Aadhaar, PAN, Bank details"),
+            ("Import Export Code (IEC)", 1999, "2-3 days", "PAN, Bank Proof, DSC"),
+            ("Partnership Firm Registration", 3999, "5-7 days", "Deed, Partner IDs"),
+            ("LLP Registration", 6999, "10-15 days", "Name approval, Partner KYC"),
+            ("Private Limited Company Registration", 9999, "10-15 days", "Director KYC, Address Proof"),
+            ("Startup India Registration", 2499, "7-10 days", "COI, Business Model"),
+            ("Trust Formation", 5999, "10-15 days", "Trust Deed, Trustees IDs"),
+            ("12A Registration", 4999, "Varies", "Trust Deed, Activity Proofs"),
+            ("80G Registration", 4999, "Varies", "Trust Deed, Financials"),
+            ("DSC (Digital Signature Certificate)", 1999, "1-2 days", "PAN, Aadhaar, Photo"),
+            ("HUF PAN", 699, "1-2 days", "HUF Deed/Declaration, Karta ID"),
+            ("NRI PAN", 999, "1-2 days", "Passport, Overseas address proof"),
+            ("Foreign Entity Registration", 6999, "15-20 days", "Parent entity docs, Board resolution"),
+        ])
+
+        # 3. Notices Category
+        seed_category("Notices", "Notice response and appeal handling", [
+            ("ITR Appeal", 4999, "3-5 days", "Order copy, computations"),
+            ("ITR Regular Assessment", 3999, "Duration of cycle", "Assessment notices, books"),
+            ("ITR Tribunal", 9999, "Pre-hearing docs", "Prior orders, evidence"),
+            ("GST Appeal", 4999, "3-6 days", "Order copy, reconciliations"),
+            ("GST Regular Assessment", 3999, "Duration of cycle", "Officer queries, registers"),
+            ("GST Tribunal", 9999, "Pre-hearing docs", "Lower orders, evidence"),
+            ("TDS Appeal", 4499, "3-5 days", "TDS demand, deductee details"),
+            ("TDS Regular Assessment", 3499, "Duration of cycle", "Quarterly statements, challans"),
+            ("TDS Tribunal", 8999, "Pre-hearing docs", "Appellate orders, challans"),
+        ])
+
+        # 4. Consultation Category
+        seed_category("Consultation", "General advisory and strategy sessions", [
+            ("Tax Consultation", 299, "Session based", "Relevant income/details"),
+            ("Compliance Advice", 299, "Session based", "Entity details"),
+            ("Business Structuring", 499, "Session based", "Business goals/plans"),
+        ])
         
         total_categories = ServiceCategory.objects.count()
         total_services = Service.objects.count()
