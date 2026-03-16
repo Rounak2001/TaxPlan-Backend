@@ -468,13 +468,13 @@ No text before or after JSON.
             answer = parsed.get("answer", "")
             follow_ups = parsed.get("follow_up_questions", [])
 
-            # Add citations if google search used
-            try:
-                candidate = response.candidates[0]
-                if candidate.grounding_metadata and tool_used == "google_search":
-                    answer = format_citations(answer, candidate.grounding_metadata)
-            except:
-                pass
+            # Add citations disabled for public chat as per user request to avoid resource links
+            # try:
+            #     candidate = response.candidates[0]
+            #     if candidate.grounding_metadata and tool_used == "google_search":
+            #         answer = format_citations(answer, candidate.grounding_metadata)
+            # except:
+            #     pass
 
             return Response({
                 "response": answer,
