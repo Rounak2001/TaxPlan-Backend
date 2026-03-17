@@ -294,7 +294,7 @@ EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
-DEFAULT_FROM_EMAIL = f'TaxPlanAdv <{os.getenv("EMAIL_HOST_USER", "noreply@taxplanadv.com")}>'
+DEFAULT_FROM_EMAIL = f'TaxPlanAdvisor <{os.getenv("EMAIL_HOST_USER", "noreply@taxplanadv.com")}>'
 SERVER_EMAIL = os.getenv('EMAIL_HOST_USER')
 
 # For development, uncomment this to print emails to console instead of sending

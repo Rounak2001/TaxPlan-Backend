@@ -13,8 +13,48 @@ from chat.models import Message
 
 from .models import Notification
 from .serializers import NotificationSerializer
-from .serializers import NotificationSerializer
 from .tasks import send_whatsapp_template_task
+import datetime
+from django.utils import timezone
+
+@receiver(pre_save, sender=Document)
+def cache_old_document_status(sender, instance, **kwargs):
+    """Cache the old status before saving to detect actual changes in post_save."""
+    if instance.pk:
+        try:
+            old_instance = Document.objects.get(pk=instance.pk)
+            instance._old_status = old_instance.status
+        except Document.DoesNotExist:
+            instance._old_status = None
+    else:
+        instance._old_status = None
+
+
+@receiver(pre_save, sender=ServiceOrder)
+def cache_old_order_status(sender, instance, **kwargs):
+    """Cache the old status before saving to detect payment notifications."""
+    if instance.pk:
+        try:
+            old_instance = ServiceOrder.objects.get(pk=instance.pk)
+            instance._old_status = old_instance.status
+        except ServiceOrder.DoesNotExist:
+            instance._old_status = None
+    else:
+        instance._old_status = None
+
+
+@receiver(pre_save, sender=ClientServiceRequest)
+def cache_old_service_request_status(sender, instance, **kwargs):
+    """Cache the old status before saving to detect service update notifications."""
+    if instance.pk:
+        try:
+            old_instance = ClientServiceRequest.objects.get(pk=instance.pk)
+            instance._old_status = old_instance.status
+        except ClientServiceRequest.DoesNotExist:
+            instance._old_status = None
+    else:
+        instance._old_status = None
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +66,17 @@ logger = logging.getLogger(__name__)
 def create_and_push_notification(recipient, category, title, message, link=''):
     """Create a Notification row AND push it over the WebSocket."""
     try:
+        # 1. Deduplicate: Skip if an identical notification was sent to this user in the last 10 seconds
+        recent_limit = timezone.now() - datetime.timedelta(seconds=10)
+        if Notification.objects.filter(
+            recipient=recipient,
+            title=title,
+            message=message,
+            created_at__gte=recent_limit
+        ).exists():
+            print(f"[NOTIFICATION] Skipping duplicate for {recipient.username}: {title}")
+            return
+
         print(f"[NOTIFICATION] Creating for user={recipient.username} (id={recipient.id}), title={title}")
         notification = Notification.objects.create(
             recipient=recipient,
@@ -113,34 +164,40 @@ def notify_document_activity(sender, instance, created, **kwargs):
 
         # --- Document verified → notify client ---
         elif instance.status == 'VERIFIED' and instance.client:
-            create_and_push_notification(
-                recipient=instance.client,
-                category='document',
-                title="Document Verified ✅",
-                message=f"Your document '{instance.title}' was approved.",
-                link="/client/vault?tab=documents",
-            )
+            old_status = getattr(instance, '_old_status', None)
+            # Only notify if it just became VERIFIED
+            if old_status != 'VERIFIED':
+                create_and_push_notification(
+                    recipient=instance.client,
+                    category='document',
+                    title="Document Verified ✅",
+                    message=f"Your document '{instance.title}' was approved.",
+                    link="/client/vault?tab=documents",
+                )
 
         # --- Document rejected → notify client ---
         elif instance.status == 'REJECTED' and instance.client:
-            create_and_push_notification(
-                recipient=instance.client,
-                category='document',
-                title="Document Rejected ❌",
-                message=f"Action required for '{instance.title}'.",
-                link="/client/vault?tab=documents",
-            )
-            # Send WhatsApp Template
-            if getattr(instance.client, 'phone_number', None):
-                send_whatsapp_template_task.delay(
-                    phone_number=instance.client.phone_number,
-                    template_name="doc_rejected_action_needed",
-                    variables=[
-                        instance.client.first_name or instance.client.username,
-                        instance.title,
-                        "Please review the document requirements."
-                    ]
+            old_status = getattr(instance, '_old_status', None)
+            # Only notify if it just became REJECTED
+            if old_status != 'REJECTED':
+                create_and_push_notification(
+                    recipient=instance.client,
+                    category='document',
+                    title="Document Rejected ❌",
+                    message=f"Action required for '{instance.title}'.",
+                    link="/client/vault?tab=documents",
                 )
+                # Send WhatsApp Template
+                if getattr(instance.client, 'phone_number', None):
+                    send_whatsapp_template_task.delay(
+                        phone_number=instance.client.phone_number,
+                        template_name="doc_rejected_action_needed",
+                        variables=[
+                            instance.client.first_name or instance.client.username,
+                            instance.title,
+                            "Please review the document requirements."
+                        ]
+                    )
 
     except Exception as exc:
         print(f"[SIGNAL] Document ERROR: {exc}")
@@ -234,25 +291,28 @@ def notify_service_activity(sender, instance, created, **kwargs):
                 )
         else:
             # Status update → notify client
-            status_display = dict(ClientServiceRequest.STATUS_CHOICES).get(instance.status, instance.status)
-            create_and_push_notification(
-                recipient=instance.client,
-                category='service',
-                title=f"Service Update: {status_display}",
-                message=f"Your request for '{instance.service.title}' is now {status_display}.",
-                link="/client/services",
-            )
-            # Send WhatsApp Template
-            if getattr(instance.client, 'phone_number', None):
-                send_whatsapp_template_task.delay(
-                    phone_number=instance.client.phone_number,
-                    template_name="service_status_update",
-                    variables=[
-                        instance.client.first_name or instance.client.username,
-                        instance.service.title,
-                        status_display
-                    ]
+            old_status = getattr(instance, '_old_status', None)
+            # Only notify if status actually changed
+            if old_status != instance.status:
+                status_display = dict(ClientServiceRequest.STATUS_CHOICES).get(instance.status, instance.status)
+                create_and_push_notification(
+                    recipient=instance.client,
+                    category='service',
+                    title=f"Service Update: {status_display}",
+                    message=f"Your request for '{instance.service.title}' is now {status_display}.",
+                    link="/client/services",
                 )
+                # Send WhatsApp Template
+                if getattr(instance.client, 'phone_number', None):
+                    send_whatsapp_template_task.delay(
+                        phone_number=instance.user.phone_number if hasattr(instance, 'user') else instance.client.phone_number, # safety
+                        template_name="service_status_update",
+                        variables=[
+                            instance.client.first_name or instance.client.username,
+                            instance.service.title,
+                            status_display
+                        ]
+                    )
     except Exception as exc:
         print(f"[SIGNAL] ServiceRequest ERROR: {exc}")
         logger.exception(f"Error in notify_service_activity: {exc}")
@@ -377,30 +437,33 @@ def notify_payment_activity(sender, instance, created, **kwargs):
     try:
         print(f"[SIGNAL] ServiceOrder signal fired: created={created}, status={instance.status}")
         if not created and instance.status == 'paid':
-            # Build item summary
-            items = instance.items.all()
-            item_names = ', '.join([item.service_title for item in items[:3]])
-            if items.count() > 3:
-                item_names += f" +{items.count() - 3} more"
+            old_status = getattr(instance, '_old_status', None)
+            # Only notify if it just became PAID
+            if old_status != 'paid':
+                # Build item summary
+                items = instance.items.all()
+                item_names = ', '.join([item.service_title for item in items[:3]])
+                if items.count() > 3:
+                    item_names += f" +{items.count() - 3} more"
 
-            create_and_push_notification(
-                recipient=instance.user,
-                category='payment',
-                title="Payment Successful 💳",
-                message=f"₹{instance.total_amount} paid for: {item_names}",
-                link="/client/services",
-            )
-            # Send WhatsApp Template
-            if getattr(instance.user, 'phone_number', None):
-                send_whatsapp_template_task.delay(
-                    phone_number=instance.user.phone_number,
-                    template_name="payment_receipt_success",
-                    variables=[
-                        instance.user.first_name or instance.user.username,
-                        str(instance.total_amount),
-                        item_names
-                    ]
+                create_and_push_notification(
+                    recipient=instance.user,
+                    category='payment',
+                    title="Payment Successful 💳",
+                    message=f"₹{instance.total_amount} paid for: {item_names}",
+                    link="/client/services",
                 )
+                # Send WhatsApp Template
+                if getattr(instance.user, 'phone_number', None):
+                    send_whatsapp_template_task.delay(
+                        phone_number=instance.user.phone_number,
+                        template_name="payment_receipt_success",
+                        variables=[
+                            instance.user.first_name or instance.user.username,
+                            str(instance.total_amount),
+                            item_names
+                        ]
+                    )
     except Exception as exc:
         print(f"[SIGNAL] ServiceOrder ERROR: {exc}")
         logger.exception(f"Error in notify_payment_activity: {exc}")
