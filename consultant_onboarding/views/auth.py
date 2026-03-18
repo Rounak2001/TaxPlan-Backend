@@ -16,6 +16,7 @@ from google.auth.transport import requests as google_requests
 from ..models import ConsultantApplication, IdentityDocument, ConsultantDocument as RealConsultantDocument
 from ..serializers import ApplicationSerializer, GoogleAuthSerializer, OnboardingSerializer, AuthConsultantDocumentSerializer
 from ..authentication import generate_applicant_token, IsApplicant
+from ..assessment_outcome import get_application_assessment_outcome
 from core_auth.services.whatsapp_otp import (
     generate_otp,
     store_otp,
@@ -124,22 +125,18 @@ def _parse_date_text(value):
 def get_profile_response_data(application):
     """Utility to return a consistent profile status object"""
     has_identity_doc = IdentityDocument.objects.filter(application=application).exists()
-    
-    has_passed_assessment = False
-    try:
-        from ..models import UserSession
-        latest_session = UserSession.objects.filter(application=application, status='completed').order_by('-end_time').first()
-        if latest_session and latest_session.score >= 30:
-            has_passed_assessment = True
-    except Exception:
-        pass
+    assessment = get_application_assessment_outcome(application)
 
     has_documents = RealConsultantDocument.objects.filter(application=application).exists()
 
     data = {
         'user': ApplicationSerializer(application).data,
         'has_identity_doc': has_identity_doc,
-        'has_passed_assessment': has_passed_assessment,
+        'has_passed_assessment': assessment['has_passed_assessment'],
+        'assessment_review_pending': assessment['review_pending'],
+        'assessment_status': assessment['status'],
+        'failed_assessment_attempts': assessment['failed_attempts'],
+        'assessment_attempts_remaining': assessment['attempts_remaining'],
         'has_accepted_declaration': application.has_accepted_declaration,
         'has_documents': has_documents,
     }
@@ -200,7 +197,10 @@ def google_auth(request):
         from core_auth.models import User
         if User.objects.filter(email=email, role=User.CLIENT).exists():
             return Response(
-                {'error': 'This email is already registered as a Client. To become a Consultant, please use a different email address (e.g. yourname+consultant@gmail.com).'},
+                {
+                    'error': 'This email is already registered as a Client. To become a Consultant, please use a different email address (e.g. yourname+consultant@gmail.com).',
+                    'code': 'EMAIL_CONFLICT',
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -290,19 +290,6 @@ def complete_onboarding(request):
 def get_user_profile(request):
     """Get current application's profile with step completion flags"""
     application = request.application
-    has_identity_doc = IdentityDocument.objects.filter(application=application).exists()
-    
-    has_passed_assessment = False
-    try:
-        from ..models import UserSession
-        latest_session = UserSession.objects.filter(application=application, status='completed').order_by('-end_time').first()
-        if latest_session and latest_session.score >= 30:
-            has_passed_assessment = True
-    except Exception:
-        pass
-
-    has_documents = RealConsultantDocument.objects.filter(application=application).exists()
-
     return Response(get_profile_response_data(application), status=status.HTTP_200_OK)
 
 
