@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from .models import ServiceOrder, OrderItem
 from consultants.models import Service, ClientServiceRequest, ConsultantServiceProfile
 from .utils import create_service_requests_from_order
+from core_auth.utils import get_active_profile
 
 import logging
 
@@ -25,7 +26,7 @@ def create_order(request):
     3. Create a pending ServiceOrder.
     4. Create Razorpay Order.
     """
-    user = request.user
+    user = get_active_profile(request)
     items_data = request.data.get('items', [])
     
     logger.debug(f"create_order called by {user.email}")

@@ -6,14 +6,22 @@ from core_auth.views import (
     CustomTokenRefreshView, WebSocketTokenView, ContactSubmissionView,
     ClientRegisterView, ClientEmailLoginView,
     SendMagicLinkView, VerifyMagicLinkView,
-    ForgotPasswordView, ResetPasswordView
+    ForgotPasswordView, ResetPasswordView,
+    ActivateProfileView, DeactivateProfileView,
 )
 from consultant_onboarding.views import auth as onboarding_auth
 from consultant_onboarding.views import face_matching as onboarding_face
 from consultant_onboarding.views.documents import UploadDocumentView as OnboardingDocumentUploadView
 
 
+from rest_framework.routers import DefaultRouter
+from core_auth.views import SubAccountViewSet
+
+router = DefaultRouter()
+router.register(r'auth/sub-accounts', SubAccountViewSet, basename='sub-accounts')
+
 urlpatterns = [
+    *router.urls,
     path('auth/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('auth/token/websocket/', WebSocketTokenView.as_view(), name='websocket_token'),
@@ -48,4 +56,8 @@ urlpatterns = [
     path('client/profile/', ClientProfileView.as_view(), name='client-profile'),
     path('consultant/clients/', ConsultantClientsView.as_view(), name='consultant-clients'),
     path('contact/', ContactSubmissionView.as_view(), name='contact-submission'),
+
+    # Netflix-style profile switching (HttpOnly cookie based)
+    path('auth/profiles/activate/', ActivateProfileView.as_view(), name='profile-activate'),
+    path('auth/profiles/deactivate/', DeactivateProfileView.as_view(), name='profile-deactivate'),
 ]

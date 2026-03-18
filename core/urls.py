@@ -25,9 +25,6 @@ urlpatterns = [
     
     # Onboarding Portal API
     path('api/', include('consultant_onboarding.urls')),
-
-    # ER diagram
-    path('lumen/',include('django_lumen.urls'))
 ]
 
 if settings.DEBUG:

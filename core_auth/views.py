@@ -417,27 +417,48 @@ class UserDashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
+        from .utils import get_active_profile
+        auth_user = request.user
+        active_user = get_active_profile(request)
+        
+        # Always use the main account (parent) to list sub-accounts
+        main_user = auth_user.parent_account if auth_user.parent_account else auth_user
+        
+        sub_accounts_data = [
+            {
+                "id": sub.id,
+                "first_name": sub.first_name,
+                "last_name": sub.last_name,
+                "username": sub.username
+            } for sub in main_user.sub_accounts.all()
+        ]
+        
         data = {
-            "id": user.id,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
-            "username": user.username,
-            "email": user.email,
-            "phone": user.phone_number,
-            "role": user.role,
-            "is_onboarded": user.is_onboarded,
-            "is_phone_verified": user.is_phone_verified,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "email": user.email,
-            "phone": user.phone_number,
+            "id": auth_user.id,
+            "first_name": auth_user.first_name,
+            "last_name": auth_user.last_name,
+            "full_name": f"{auth_user.first_name} {auth_user.last_name}".strip() or auth_user.username,
+            "username": auth_user.username,
+            "email": auth_user.email,
+            "phone": auth_user.phone_number,
+            "role": auth_user.role,
+            "is_onboarded": auth_user.is_onboarded,
+            "is_phone_verified": auth_user.is_phone_verified,
+            "sub_accounts": sub_accounts_data,
+            "active_profile": {
+                "id": active_user.id,
+                "first_name": active_user.first_name,
+                "last_name": active_user.last_name,
+                "full_name": f"{active_user.first_name} {active_user.last_name}".strip() or active_user.username,
+                "username": active_user.username,
+                "role": active_user.role,
+                "is_sub_account": active_user.id != auth_user.id,
+            }
         }
 
-        if user.role == "CONSULTANT":
+        if auth_user.role == "CONSULTANT":
             try:
-                profile = user.consultant_service_profile
+                profile = auth_user.consultant_service_profile
                 from consultants.models import ConsultantServiceExpertise
                 services = list(
                     ConsultantServiceExpertise.objects.filter(consultant=profile)
@@ -459,9 +480,9 @@ class UserDashboardView(APIView):
                 }
             except Exception:
                 data["stats"] = None
-        if user.role == "CLIENT":
+        if auth_user.role == "CLIENT":
             try:
-                profile = user.client_profile
+                profile = auth_user.client_profile
                 data["pan"] = profile.pan_number
                 data["gst"] = profile.gstin
                 
@@ -497,6 +518,66 @@ class UserDashboardView(APIView):
                 data["compliance"] = None
         
         return Response(data)
+
+
+class ActivateProfileView(APIView):
+    """
+    Netflix-style: Sets an HttpOnly 'active_profile' cookie for sub-account switching.
+    POST /api/auth/profiles/activate/  { "profile_id": 5 }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        profile_id = request.data.get('profile_id')
+        if not profile_id:
+            return Response({'error': 'profile_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            profile_user = User.objects.get(id=profile_id)
+        except User.DoesNotExist:
+            return Response({'error': 'Profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Security: only allow switching to own sub-accounts
+        is_own_subaccount = profile_user.parent_account == request.user
+        is_self = profile_user == request.user
+        if not (is_own_subaccount or is_self):
+            return Response({'error': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        response = Response({
+            'success': True,
+            'active_profile': {
+                'id': profile_user.id,
+                'first_name': profile_user.first_name,
+                'last_name': profile_user.last_name,
+                'full_name': f"{profile_user.first_name} {profile_user.last_name}".strip() or profile_user.username,
+                'username': profile_user.username,
+                'is_sub_account': is_own_subaccount,
+            }
+        })
+
+        # Set HttpOnly cookie — browser sends this automatically on every request
+        response.set_cookie(
+            key='active_profile',
+            value=str(profile_user.id),
+            httponly=True,
+            secure=True,
+            samesite='None',
+            max_age=43200,  # 12 hours, like Netflix
+        )
+        return response
+
+
+class DeactivateProfileView(APIView):
+    """
+    Clears the active_profile cookie, returning to the main account context.
+    POST /api/auth/profiles/deactivate/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        response = Response({'success': True, 'message': 'Switched back to main account.'})
+        response.delete_cookie('active_profile', samesite='None')
+        return response
 
 
 class WebSocketTokenView(APIView):
@@ -1243,3 +1324,27 @@ class ResetPasswordView(APIView):
             'success': True,
             'message': 'Password has been reset successfully. You can now login with your new password.',
         })
+
+
+# ─── Sub-Account Management ─────────────────────────────────────────────────
+from rest_framework.viewsets import ModelViewSet
+from core_auth.serializers import SubAccountSerializer
+
+class SubAccountViewSet(ModelViewSet):
+    """
+    ViewSet for managing family sub-accounts.
+    - LIST: Returns sub-accounts owned by the authenticated user.
+    - CREATE: Creates a new sub-account linked to the authenticated user.
+    - UPDATE/PARTIAL_UPDATE: Edits a sub-account's name.
+    - DELETE: Removes a sub-account.
+    """
+    serializer_class = SubAccountSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return User.objects.filter(parent_account=self.request.user)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
