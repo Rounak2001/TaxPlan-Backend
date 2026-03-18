@@ -10,7 +10,8 @@ class NotificationConsumer(AsyncWebsocketConsumer):
         print(f"[WS NOTIF] Connecting attempt for user: {self.user}")
         
         if not self.user or not self.user.is_authenticated:
-            print("[WS NOTIF] Connection rejected: User not authenticated")
+            print(f"[WS NOTIF] Connection rejected: User not authenticated (user={self.user})")
+            logger.warning(f"Notification WS rejected: unauthenticated user={self.user}")
             await self.close()
             return
 

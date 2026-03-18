@@ -405,6 +405,16 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': True,
         },
+        'chat': {
+            'handlers': ['file', 'console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'notifications': {
+            'handlers': ['file', 'console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
     },
 }
 

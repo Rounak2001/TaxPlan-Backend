@@ -37,45 +37,49 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
     async def connect(self):
         """Handle WebSocket connection with presence broadcast."""
-        self.conversation_id = self.scope['url_route']['kwargs']['conversation_id']
-        self.room_group_name = f'chat_{self.conversation_id}'
-        self.user = self.scope.get('user')
-        
-        logger.info(f"WebSocket connect attempt: user={getattr(self.user, 'username', 'anonymous')}, conversation={self.conversation_id}")
-        
-        # Reject if not authenticated
-        if isinstance(self.user, AnonymousUser) or not self.user.is_authenticated:
-            logger.warning(f"WebSocket rejected: unauthenticated user for conversation {self.conversation_id}")
-            await self.close(code=4001)
-            return
-        
-        # Validate user is a participant
-        is_participant = await self.check_participant()
-        if not is_participant:
-            logger.warning(f"WebSocket rejected: user {self.user.username} not participant in {self.conversation_id}")
-            await self.close(code=4003)
-            return
-        
-        # Join room group
-        await self.channel_layer.group_add(
-            self.room_group_name,
-            self.channel_name
-        )
-        
-        await self.accept()
-        logger.info(f"WebSocket accepted: user={self.user.username}, conversation={self.conversation_id}")
-        
-        # Broadcast presence: user joined with a request for others to reply
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                'type': 'user_presence',
-                'user_id': self.user.id,
-                'username': self.user.username,
-                'status': 'online',
-                'request_reply': True,  # Ask others to let us know they are here
-            }
-        )
+        try:
+            self.conversation_id = self.scope['url_route']['kwargs']['conversation_id']
+            self.room_group_name = f'chat_{self.conversation_id}'
+            self.user = self.scope.get('user')
+            
+            logger.info(f"WebSocket connect attempt: user={getattr(self.user, 'username', 'anonymous')}, conversation={self.conversation_id}")
+            
+            # Reject if not authenticated
+            if isinstance(self.user, AnonymousUser) or not self.user.is_authenticated:
+                logger.warning(f"WebSocket rejected: unauthenticated user for conversation {self.conversation_id}")
+                await self.close(code=4001)
+                return
+            
+            # Validate user is a participant
+            is_participant = await self.check_participant()
+            if not is_participant:
+                logger.warning(f"WebSocket rejected: user {self.user.username} not participant in {self.conversation_id}")
+                await self.close(code=4003)
+                return
+            
+            # Join room group
+            await self.channel_layer.group_add(
+                self.room_group_name,
+                self.channel_name
+            )
+            
+            await self.accept()
+            logger.info(f"WebSocket accepted: user={self.user.username}, conversation={self.conversation_id}")
+            
+            # Broadcast presence: user joined with a request for others to reply
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'user_presence',
+                    'user_id': self.user.id,
+                    'username': self.user.username,
+                    'status': 'online',
+                    'request_reply': True,  # Ask others to let us know they are here
+                }
+            )
+        except Exception as e:
+            logger.exception(f"Error in ChatConsumer.connect: {e}")
+            await self.close()
     
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection with presence broadcast."""
