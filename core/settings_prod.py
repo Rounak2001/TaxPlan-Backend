@@ -47,9 +47,9 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SESSION_COOKIE_DOMAIN = '.taxplanadvisor.in'
 CSRF_COOKIE_DOMAIN = '.taxplanadvisor.in'
 
-# Cookie Settings for Cross-Origin (Vercel frontend + EC2 backend)
-SESSION_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SAMESITE = 'None'
+# Cookie Settings for cross-subdomain (Vercel/Dashboard -> api.taxplanadvisor.in)
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
 
 # =============================================================================
 # CORS SETTINGS
@@ -147,7 +147,8 @@ SIMPLE_JWT = {
     'AUTH_COOKIE': 'access_token',
     'AUTH_COOKIE_SECURE': True,
     'AUTH_COOKIE_HTTP_ONLY': True,
-    'AUTH_COOKIE_SAMESITE': 'Lax',  # Changed to Lax since we're on the same base domain
+    'AUTH_COOKIE_SAMESITE': 'Lax',
+    'AUTH_COOKIE_DOMAIN': '.taxplanadvisor.in',
 }
 
 # =============================================================================
