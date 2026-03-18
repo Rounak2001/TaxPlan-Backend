@@ -34,6 +34,38 @@ from ..risk import compute_proctoring_risk_summary
 from ..assessment_outcome import get_application_assessment_outcome
 
 
+def normalize_question_identifier(value):
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def build_question_lookup(question_set):
+    lookup = {}
+    for question in (question_set or []):
+        if not isinstance(question, dict):
+            continue
+        question_id = normalize_question_identifier(question.get('id'))
+        if question_id:
+            lookup[question_id] = question
+    return lookup
+
+
+def find_question_by_text(question_set, question_text):
+    normalized_text = (question_text or '').strip()
+    if not normalized_text:
+        return None
+
+    for question in (question_set or []):
+        if not isinstance(question, dict):
+            continue
+        candidate_text = (question.get('text') or question.get('question') or '').strip()
+        if candidate_text and candidate_text == normalized_text:
+            return question
+    return None
+
+
 def get_all_questions_from_module(module, var_names=None):
     all_questions = []
     if var_names:
@@ -49,15 +81,16 @@ def get_all_questions_from_module(module, var_names=None):
 
 from .. import gst as gst_module
 from .. import income_tax as income_tax_module
+from .. import scrutiny as scrutiny_module
 from .. import tds as tds_module
-from .. import professional_tax as pt_module
 from .. import video_questions as video_questions_module
 
 DOMAIN_MAPPING = {
     "gst": {"module": gst_module, "vars": ["gst_assessment"]},
     "income-tax": {"module": income_tax_module, "vars": ["income_tax_batch1", "income_tax_assessment_batch2"]},
     "tds": {"module": tds_module, "vars": ["tds_assessment"]},
-    "professional-tax": {"module": pt_module, "vars": ["professional_tax_batch1"]} 
+    "scrutiny": {"module": scrutiny_module, "vars": ["questions"]},
+    "professional-tax": {"module": scrutiny_module, "vars": ["questions"]},
 }
 
 SLUG_MAPPING = {
@@ -68,9 +101,12 @@ SLUG_MAPPING = {
     "income-tax": "income-tax",
     "TDS": "tds",
     "tds": "tds",
-    "Professional Tax": "professional-tax",
-    "professional_tax": "professional-tax",
-    "profession-tax": "professional-tax"
+    "Scrutiny": "scrutiny",
+    "scrutiny": "scrutiny",
+    "Professional Tax": "scrutiny",
+    "professional_tax": "scrutiny",
+    "professional-tax": "scrutiny",
+    "profession-tax": "scrutiny",
 }
 
 
@@ -81,17 +117,39 @@ class TestTypeViewSet(viewsets.ModelViewSet):
     permission_classes = [IsApplicant]
 
     def list(self, request, *args, **kwargs):
-        if not TestType.objects.exists():
-            default_types = [
-                {'name': 'GST', 'slug': 'gst'},
-                {'name': 'Income Tax', 'slug': 'income-tax'},
-                {'name': 'TDS', 'slug': 'tds'},
-                {'name': 'Professional Tax', 'slug': 'professional-tax'},
-            ]
-            for dt in default_types:
-                TestType.objects.create(name=dt['name'], slug=dt['slug'])
-            print("Auto-seeded TestTypes")
-            
+        default_types = [
+            {'name': 'GST', 'slug': 'gst'},
+            {'name': 'Income Tax', 'slug': 'income-tax'},
+            {'name': 'TDS', 'slug': 'tds'},
+            {'name': 'Scrutiny', 'slug': 'scrutiny'},
+        ]
+
+        legacy_type = TestType.objects.filter(slug='professional-tax').first()
+        scrutiny_type = TestType.objects.filter(slug='scrutiny').first()
+
+        if legacy_type and not scrutiny_type:
+            legacy_type.name = 'Scrutiny'
+            legacy_type.slug = 'scrutiny'
+            legacy_type.save(update_fields=['name', 'slug'])
+        elif legacy_type and scrutiny_type:
+            if scrutiny_type.name != 'Scrutiny':
+                scrutiny_type.name = 'Scrutiny'
+                scrutiny_type.save(update_fields=['name'])
+            VideoQuestion.objects.filter(test_type=legacy_type).update(test_type=scrutiny_type)
+            UserSession.objects.filter(test_type=legacy_type).update(test_type=scrutiny_type)
+            legacy_type.delete()
+
+        existing_types = {tt.slug: tt for tt in TestType.objects.all()}
+        for dt in default_types:
+            existing = existing_types.get(dt['slug'])
+            if existing:
+                if existing.name != dt['name']:
+                    existing.name = dt['name']
+                    existing.save(update_fields=['name'])
+            else:
+                created = TestType.objects.create(name=dt['name'], slug=dt['slug'])
+                existing_types[dt['slug']] = created
+
         return super().list(request, *args, **kwargs)
 
 class UserSessionViewSet(viewsets.ModelViewSet):
@@ -213,6 +271,18 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         if assessment['passed']:
             return Response(
                 {'error': 'You have already passed the assessment.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if assessment.get('retry_locked'):
+            return Response(
+                {
+                    'error': 'Your next assessment attempt will unlock 24 hours after your last failed attempt.',
+                    'code': 'ASSESSMENT_RETRY_LOCKED',
+                    'retry_available_at': assessment.get('retry_available_at'),
+                    'retry_in_seconds': assessment.get('retry_in_seconds', 0),
+                    'attempts_remaining': assessment.get('attempts_remaining', 0),
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -375,7 +445,8 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         """Direct multipart video upload — saves to S3 via default_storage."""
         session = self.get_object()
         video_file = request.FILES.get('video')
-        question_id = request.data.get('question_id')
+        question_id = normalize_question_identifier(request.data.get('question_id'))
+        fallback_question_text = (request.data.get('question_text') or '').strip()
 
         if not video_file or not question_id:
             return Response({'error': 'Video file and question_id are required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -389,15 +460,25 @@ class UserSessionViewSet(viewsets.ModelViewSet):
 
             video_response = VideoResponse.objects.create(
                 session=session,
-                question_identifier=str(question_id),
+                question_identifier=question_id,
                 video_file=saved_path,
                 ai_status='pending'
             )
             
             question_text = "Please evaluate this video response."
-            found_question = next((q for q in session.video_question_set if q.get('id') == question_id), None)
+            question_lookup = build_question_lookup(session.video_question_set)
+            found_question = question_lookup.get(question_id)
+            if not found_question and fallback_question_text:
+                found_question = find_question_by_text(session.video_question_set, fallback_question_text)
+                if found_question:
+                    question_id = normalize_question_identifier(found_question.get('id')) or question_id
+                    if video_response.question_identifier != question_id:
+                        video_response.question_identifier = question_id
+                        video_response.save(update_fields=['question_identifier'])
             if found_question:
-                question_text = found_question.get('text', question_text)
+                question_text = found_question.get('text') or found_question.get('question') or question_text
+            elif fallback_question_text:
+                question_text = fallback_question_text
 
             # Trigger Celery Task asynchronously
             from ..tasks import evaluate_video_task
@@ -417,6 +498,10 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             'disqualified': assessment['disqualified'],
             'failed_attempts': assessment['failed_attempts'],
             'attempts_remaining': assessment['attempts_remaining'],
+            'retry_locked': assessment.get('retry_locked', False),
+            'retry_available_at': assessment.get('retry_available_at'),
+            'retry_in_seconds': assessment.get('retry_in_seconds', 0),
+            'can_retry_now': assessment.get('can_retry_now', False),
             'review_pending': assessment['review_pending'],
             'passed': assessment['passed'],
             'failed': assessment['failed'],

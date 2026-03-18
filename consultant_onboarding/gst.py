@@ -1649,5 +1649,252 @@ gst_assessment = [
             "D": "SEZ supply"
         },
         "answer": "B"
-    }
+    },
+    # ── GST COUNCIL & STRUCTURE ──────────────────
+    {"id":151,"question":"GST Council is constituted under which Article of the Constitution?","options":{"A":"Article 246A","B":"Article 279A","C":"Article 269A","D":"Article 286"},"answer":"B"},
+    {"id":152,"question":"Who is the Chairperson of the GST Council?","options":{"A":"RBI Governor","B":"Union Finance Minister","C":"Prime Minister","D":"Chief Justice of India"},"answer":"B"},
+    {"id":153,"question":"What voting share does the Centre have in GST Council?","options":{"A":"25%","B":"33%","C":"50%","D":"1/3rd of total votes"},"answer":"D"},
+    {"id":154,"question":"What is the minimum majority required for GST Council decisions?","options":{"A":"Simple majority","B":"3/4th of weighted votes","C":"2/3rd of members","D":"Unanimous"},"answer":"B"},
+    {"id":155,"question":"Article 246A of the Constitution deals with?","options":{"A":"GST Council","B":"Special provision for GST legislation by Parliament and states","C":"Distribution of GST revenue","D":"IGST on inter-state supply"},"answer":"B"},
+    {"id":156,"question":"Article 269A deals with?","options":{"A":"GST Council formation","B":"Levy and collection of GST on inter-state supply","C":"Exempt supplies","D":"CGST rates"},"answer":"B"},
+    {"id":157,"question":"Which constitutional amendment introduced GST in India?","options":{"A":"99th Amendment","B":"100th Amendment","C":"101st Amendment","D":"102nd Amendment"},"answer":"C"},
+    {"id":158,"question":"GST was implemented in India from?","options":{"A":"1st April 2017","B":"1st July 2017","C":"1st January 2017","D":"1st April 2018"},"answer":"B"},
+    {"id":159,"question":"Which of the following is NOT subsumed into GST?","options":{"A":"Service Tax","B":"Central Excise Duty","C":"Customs Duty","D":"VAT"},"answer":"C"},
+    {"id":160,"question":"GST on petroleum crude, diesel, petrol, ATF is notified by?","options":{"A":"GST Council recommendation","B":"Parliament alone","C":"Not yet brought under GST","D":"CBIC"},"answer":"C"},
+
+    # ── COMPOSITION SCHEME ───────────────────────
+    {"id":161,"question":"Composition scheme threshold for goods suppliers?","options":{"A":"Rs.75 lakh","B":"Rs.1 crore","C":"Rs.1.5 crore","D":"Rs.2 crore"},"answer":"C"},
+    {"id":162,"question":"Composition scheme threshold for service providers (Section 10(2A))?","options":{"A":"Rs.20 lakh","B":"Rs.50 lakh","C":"Rs.75 lakh","D":"Rs.1 crore"},"answer":"B"},
+    {"id":163,"question":"Composition tax rate for manufacturers (goods)?","options":{"A":"0.5% CGST + 0.5% SGST","B":"1% CGST + 1% SGST","C":"2.5% CGST + 2.5% SGST","D":"5% flat"},"answer":"A"},
+    {"id":164,"question":"Composition tax rate for restaurants (non-alcoholic)?","options":{"A":"1%","B":"2.5%","C":"5%","D":"2%"},"answer":"C"},
+    {"id":165,"question":"Composition tax rate for other eligible service providers?","options":{"A":"1%","B":"3%","C":"6% (3% CGST + 3% SGST)","D":"5%"},"answer":"C"},
+    {"id":166,"question":"Can a composition dealer collect GST from customers?","options":{"A":"Yes","B":"No","C":"Only for inter-state supplies","D":"Only above Rs.50,000"},"answer":"B"},
+    {"id":167,"question":"Can a composition dealer make inter-state supplies?","options":{"A":"Yes","B":"No","C":"Only for services","D":"Only with permission"},"answer":"B"},
+    {"id":168,"question":"Can a composition dealer claim ITC?","options":{"A":"Yes","B":"No","C":"Only on capital goods","D":"Only on services"},"answer":"B"},
+    {"id":169,"question":"What return does a composition dealer file quarterly?","options":{"A":"GSTR-1","B":"GSTR-4","C":"GSTR-9","D":"CMP-08"},"answer":"D"},
+    {"id":170,"question":"Annual return for composition dealer is filed in?","options":{"A":"GSTR-9","B":"GSTR-9A","C":"GSTR-4","D":"CMP-08"},"answer":"C"},
+    {"id":171,"question":"Can a composition dealer supply through an e-commerce operator?","options":{"A":"Yes","B":"No","C":"Only for services","D":"Only above Rs.20 lakh"},"answer":"B"},
+    {"id":172,"question":"Form to opt into composition scheme?","options":{"A":"GST REG-01","B":"GST CMP-01","C":"GST CMP-02","D":"GSTR-4"},"answer":"C"},
+    {"id":173,"question":"Is composition scheme available to a person making exempt supplies only?","options":{"A":"Yes","B":"No","C":"Optional","D":"Only for manufacturers"},"answer":"B"},
+    {"id":174,"question":"If a composition dealer crosses the threshold mid-year, when does he become regular taxpayer?","options":{"A":"Next financial year","B":"From the day he exceeds the threshold","C":"From 1st April of next year","D":"After filing GSTR-4"},"answer":"B"},
+    {"id":175,"question":"Can a composition dealer issue tax invoices?","options":{"A":"Yes","B":"No — only bill of supply","C":"Only for B2B","D":"Only for services"},"answer":"B"},
+
+    # ── ADVANCE RULING ───────────────────────────
+    {"id":176,"question":"Authority for Advance Ruling (AAR) is established under which section?","options":{"A":"Section 95","B":"Section 96","C":"Section 97","D":"Section 98"},"answer":"B"},
+    {"id":177,"question":"Who can apply for advance ruling?","options":{"A":"Any person","B":"Registered or unregistered person proposed to undertake supply","C":"Only companies","D":"Only exporters"},"answer":"B"},
+    {"id":178,"question":"What is the time limit for AAR to pronounce ruling?","options":{"A":"30 days","B":"60 days","C":"90 days","D":"180 days"},"answer":"C"},
+    {"id":179,"question":"Advance ruling is binding on?","options":{"A":"All taxpayers","B":"Applicant and jurisdictional officer only","C":"GST Council","D":"All officers of India"},"answer":"B"},
+    {"id":180,"question":"Appeal against AAR lies to?","options":{"A":"High Court","B":"Appellate Authority for Advance Ruling (AAAR)","C":"GST Tribunal","D":"CBIC"},"answer":"B"},
+    {"id":181,"question":"Can advance ruling be obtained on classification of goods or services?","options":{"A":"No","B":"Yes","C":"Only for goods","D":"Only for services"},"answer":"B"},
+    {"id":182,"question":"An advance ruling becomes void ab initio if obtained by?","options":{"A":"Wrong form","B":"Fraud, suppression, or misrepresentation","C":"A company","D":"Late filing"},"answer":"B"},
+    {"id":183,"question":"Can advance ruling be sought on GST rate applicable to a supply?","options":{"A":"No","B":"Yes","C":"Only for imported goods","D":"Only if dispute exists"},"answer":"B"},
+
+    # ── APPEALS & ADJUDICATION ───────────────────
+    {"id":184,"question":"First appellate authority under GST is?","options":{"A":"GST Tribunal","B":"Appellate Authority (Joint/Additional Commissioner)","C":"High Court","D":"AAR"},"answer":"B"},
+    {"id":185,"question":"Time limit to file appeal against order of adjudicating authority?","options":{"A":"30 days","B":"3 months","C":"6 months","D":"1 year"},"answer":"B"},
+    {"id":186,"question":"Pre-deposit required to file appeal under GST?","options":{"A":"Full tax amount","B":"10% of disputed tax","C":"25% of disputed tax","D":"No pre-deposit"},"answer":"B"},
+    {"id":187,"question":"GST Appellate Tribunal (GSTAT) hears appeals against orders of?","options":{"A":"AAR","B":"First appellate authority","C":"High Court","D":"CBIC"},"answer":"B"},
+    {"id":188,"question":"Pre-deposit for appeal before GSTAT?","options":{"A":"10%","B":"20% of disputed amount","C":"25%","D":"50%"},"answer":"B"},
+    {"id":189,"question":"Can High Court be approached in GST matters?","options":{"A":"No","B":"Yes, on questions of law","C":"Only for criminal matters","D":"Only for refunds"},"answer":"B"},
+    {"id":190,"question":"Section 107 of CGST Act deals with?","options":{"A":"Advance ruling","B":"Appeals to appellate authority","C":"Refund","D":"Assessment"},"answer":"B"},
+    {"id":191,"question":"What is the time limit for the department to file appeal?","options":{"A":"30 days","B":"6 months","C":"3 months","D":"1 year"},"answer":"C"},
+
+    # ── ASSESSMENT & AUDIT ───────────────────────
+    {"id":192,"question":"Self-assessment under GST is covered under which section?","options":{"A":"Section 59","B":"Section 60","C":"Section 61","D":"Section 62"},"answer":"A"},
+    {"id":193,"question":"Best judgement assessment is done under which section?","options":{"A":"Section 62","B":"Section 63","C":"Section 64","D":"Section 65"},"answer":"A"},
+    {"id":194,"question":"Assessment of non-filers of return is under which section?","options":{"A":"Section 61","B":"Section 62","C":"Section 63","D":"Section 64"},"answer":"B"},
+    {"id":195,"question":"Summary assessment under Section 64 requires prior approval of?","options":{"A":"Commissioner","B":"Additional/Joint Commissioner","C":"GST Council","D":"High Court"},"answer":"B"},
+    {"id":196,"question":"GST audit by department is conducted under which section?","options":{"A":"Section 65","B":"Section 66","C":"Section 67","D":"Section 68"},"answer":"A"},
+    {"id":197,"question":"Special audit under Section 66 is conducted by?","options":{"A":"GST Officer","B":"CA or CMA nominated by Commissioner","C":"Income Tax Officer","D":"Internal auditor"},"answer":"B"},
+    {"id":198,"question":"Time limit for GST audit under Section 65?","options":{"A":"30 days","B":"3 months (extendable by 6 months)","C":"6 months","D":"1 year"},"answer":"B"},
+    {"id":199,"question":"Who can conduct scrutiny of returns under Section 61?","options":{"A":"Commissioner","B":"Proper officer","C":"GST Council","D":"CBIC"},"answer":"B"},
+    {"id":200,"question":"If a registered person fails to file return after notice, assessment can be done under?","options":{"A":"Section 61","B":"Section 62","C":"Section 73","D":"Section 74"},"answer":"B"},
+
+    # ── SEARCH, SEIZURE & ARREST ─────────────────
+    {"id":201,"question":"Power of inspection under GST is provided under which section?","options":{"A":"Section 67","B":"Section 68","C":"Section 69","D":"Section 70"},"answer":"A"},
+    {"id":202,"question":"Who can authorise search and seizure under GST?","options":{"A":"Any GST officer","B":"Joint Commissioner or above","C":"Commissioner only","D":"GST Council"},"answer":"B"},
+    {"id":203,"question":"Goods can be seized under GST if they are liable to?","options":{"A":"Only export","B":"Confiscation","C":"Exemption","D":"Zero-rating"},"answer":"B"},
+    {"id":204,"question":"Provisional release of seized goods requires?","options":{"A":"Court order","B":"Execution of bond with security","C":"Payment of full tax","D":"No conditions"},"answer":"B"},
+    {"id":205,"question":"Power of arrest under GST is under which section?","options":{"A":"Section 67","B":"Section 68","C":"Section 69","D":"Section 70"},"answer":"C"},
+    {"id":206,"question":"For which offences can arrest be made under GST?","options":{"A":"Late filing only","B":"Cognizable offences involving tax evasion above prescribed amount","C":"Non-registration","D":"Wrong ITC claim below Rs.1 lakh"},"answer":"B"},
+    {"id":207,"question":"Power to summon persons under GST is provided under?","options":{"A":"Section 69","B":"Section 70","C":"Section 71","D":"Section 72"},"answer":"B"},
+    {"id":208,"question":"What is confiscation under GST?","options":{"A":"Cancellation of registration","B":"Forfeiture of goods by government","C":"Suspension of returns","D":"Penalty on tax"},"answer":"B"},
+
+    # ── ANTI-PROFITEERING ────────────────────────
+    {"id":209,"question":"Anti-profiteering provision under GST is in which section?","options":{"A":"Section 164","B":"Section 171","C":"Section 172","D":"Section 170"},"answer":"B"},
+    {"id":210,"question":"Anti-profiteering authority is called?","options":{"A":"GST Council","B":"National Anti-Profiteering Authority (NAA)","C":"CBIC","D":"CCI"},"answer":"B"},
+    {"id":211,"question":"Anti-profiteering requires that benefits of GST reduction are?","options":{"A":"Retained by supplier","B":"Passed on to recipients","C":"Deposited to government","D":"Claimed as ITC"},"answer":"B"},
+    {"id":212,"question":"The Competition Commission of India (CCI) took over anti-profiteering functions from which date?","options":{"A":"1 April 2022","B":"1 December 2022","C":"1 April 2023","D":"1 July 2023"},"answer":"C"},
+
+    # ── REAL ESTATE ──────────────────────────────
+    {"id":213,"question":"GST rate on affordable residential apartments (under construction)?","options":{"A":"5%","B":"1%","C":"12%","D":"18%"},"answer":"B"},
+    {"id":214,"question":"GST rate on non-affordable residential apartments (under construction)?","options":{"A":"1%","B":"5%","C":"12%","D":"18%"},"answer":"B"},
+    {"id":215,"question":"Is GST applicable on sale of completed/ready-to-move property with OC?","options":{"A":"Yes, at 12%","B":"No, it is exempt","C":"Yes, at 5%","D":"Yes, at 18%"},"answer":"B"},
+    {"id":216,"question":"GST rate on commercial properties (under construction)?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"B"},
+    {"id":217,"question":"Is ITC available to builders/developers post-April 2019?","options":{"A":"Yes, fully","B":"No, for residential projects under new scheme","C":"Only for commercial","D":"Only for affordable housing"},"answer":"B"},
+    {"id":218,"question":"GST rate on works contract for government construction?","options":{"A":"5%","B":"12%","C":"18%","D":"Nil"},"answer":"B"},
+    {"id":219,"question":"GST rate on works contract for residential buildings (non-government)?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"C"},
+    {"id":220,"question":"Transferable Development Rights (TDR) under GST is taxable under?","options":{"A":"Forward charge","B":"Reverse Charge Mechanism","C":"Exempt","D":"Zero-rated"},"answer":"B"},
+
+    # ── HEALTHCARE & EDUCATION ───────────────────
+    {"id":221,"question":"Are healthcare services by clinical establishments exempt under GST?","options":{"A":"No, taxable at 5%","B":"Yes, fully exempt","C":"Taxable at 12%","D":"Taxable at 18%"},"answer":"B"},
+    {"id":222,"question":"Are medicines sold by hospital pharmacy taxable?","options":{"A":"No","B":"Yes, at applicable GST rate","C":"Always exempt","D":"Only above Rs.5,000"},"answer":"B"},
+    {"id":223,"question":"Are educational services by recognised institutions exempt under GST?","options":{"A":"No","B":"Yes","C":"Only primary education","D":"Only government schools"},"answer":"B"},
+    {"id":224,"question":"Is coaching provided by private coaching institute exempt?","options":{"A":"Yes","B":"No, taxable at 18%","C":"Taxable at 5%","D":"Taxable at 12%"},"answer":"B"},
+    {"id":225,"question":"GST on food supplied in hospital canteen to patients?","options":{"A":"18%","B":"5%","C":"Nil/exempt if part of healthcare","D":"12%"},"answer":"C"},
+    {"id":226,"question":"Are veterinary services exempt from GST?","options":{"A":"No","B":"Yes","C":"Taxable at 5%","D":"Taxable at 12%"},"answer":"B"},
+
+    # ── BANKING, FINANCE & INSURANCE ────────────
+    {"id":227,"question":"GST rate on life insurance premium (term policy)?","options":{"A":"5%","B":"12%","C":"18%","D":"Nil"},"answer":"C"},
+    {"id":228,"question":"GST rate on health insurance premium?","options":{"A":"5%","B":"12%","C":"18%","D":"Nil"},"answer":"C"},
+    {"id":229,"question":"Are banking services (loans, deposits) exempt from GST?","options":{"A":"Yes fully","B":"No, processing fees and charges are taxable at 18%","C":"Taxable at 5%","D":"Only above Rs.10 lakh"},"answer":"B"},
+    {"id":230,"question":"Is interest earned on loans subject to GST?","options":{"A":"Yes, at 18%","B":"No, interest is exempt","C":"Taxable at 12%","D":"Only for NBFCs"},"answer":"B"},
+    {"id":231,"question":"GST on ATM transaction charges?","options":{"A":"Nil","B":"18%","C":"5%","D":"12%"},"answer":"B"},
+    {"id":232,"question":"Are mutual fund distribution services taxable?","options":{"A":"No","B":"Yes, at 18%","C":"At 5%","D":"Only above Rs.1 lakh commission"},"answer":"B"},
+    {"id":233,"question":"GST on stockbroker's brokerage?","options":{"A":"5%","B":"12%","C":"18%","D":"Nil"},"answer":"C"},
+    {"id":234,"question":"Is purchase and sale of securities (shares) subject to GST?","options":{"A":"Yes, at 18%","B":"No, securities are outside GST scope","C":"Only derivatives","D":"Only equity shares"},"answer":"B"},
+
+    # ── TRANSPORT & LOGISTICS ────────────────────
+    {"id":235,"question":"GST on GTA services under forward charge?","options":{"A":"Nil","B":"5% (no ITC) or 12% (with ITC)","C":"18%","D":"Always RCM"},"answer":"B"},
+    {"id":236,"question":"GST on passenger transport by air (economy class)?","options":{"A":"Nil","B":"5%","C":"12%","D":"18%"},"answer":"B"},
+    {"id":237,"question":"GST on passenger transport by air (business class)?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"B"},
+    {"id":238,"question":"GST on transport by rail?","options":{"A":"Nil","B":"5%","C":"12%","D":"18%"},"answer":"B"},
+    {"id":239,"question":"Is transport of agricultural produce by road exempt?","options":{"A":"No","B":"Yes","C":"Taxable at 5%","D":"Only if by GTA"},"answer":"B"},
+    {"id":240,"question":"GST on renting of motor vehicle for passenger transport (per seat contract)?","options":{"A":"5%","B":"12%","C":"18%","D":"Nil"},"answer":"A"},
+    {"id":241,"question":"GST on courier services?","options":{"A":"5%","B":"12%","C":"18%","D":"Nil"},"answer":"C"},
+    {"id":242,"question":"Is cab service through e-commerce operator (Ola/Uber) taxable?","options":{"A":"No","B":"Yes, GST collected by e-commerce operator","C":"Only above Rs.1,000 per trip","D":"Nil rated"},"answer":"B"},
+
+    # ── HOTEL, RESTAURANT & TOURISM ─────────────
+    {"id":243,"question":"GST on hotel accommodation with tariff above Rs.7,500 per night?","options":{"A":"12%","B":"18%","C":"28%","D":"5%"},"answer":"B"},
+    {"id":244,"question":"GST on hotel accommodation with tariff up to Rs.7,500 per night?","options":{"A":"Nil","B":"12%","C":"18%","D":"5%"},"answer":"B"},
+    {"id":245,"question":"GST on outdoor catering?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"C"},
+    {"id":246,"question":"GST on restaurant services in hotels with room tariff above Rs.7,500?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"C"},
+    {"id":247,"question":"GST on standalone restaurant (non-air conditioned)?","options":{"A":"Nil","B":"5% (no ITC)","C":"12%","D":"18%"},"answer":"B"},
+    {"id":248,"question":"GST on tour operator services?","options":{"A":"5% (no ITC)","B":"12%","C":"18%","D":"28%"},"answer":"A"},
+
+    # ── SPECIFIC GOODS RATES ─────────────────────
+    {"id":249,"question":"GST rate on gold?","options":{"A":"1%","B":"3%","C":"5%","D":"12%"},"answer":"B"},
+    {"id":250,"question":"GST on gold jewellery making charges?","options":{"A":"3%","B":"5%","C":"12%","D":"18%"},"answer":"B"},
+    {"id":251,"question":"GST on diamonds?","options":{"A":"0.25%","B":"3%","C":"5%","D":"12%"},"answer":"A"},
+    {"id":252,"question":"GST on cement?","options":{"A":"12%","B":"18%","C":"28%","D":"5%"},"answer":"C"},
+    {"id":253,"question":"GST on mobile phones?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"C"},
+    {"id":254,"question":"GST on electric vehicles (EVs)?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"A"},
+    {"id":255,"question":"GST on solar panels?","options":{"A":"Nil","B":"5%","C":"12%","D":"18%"},"answer":"C"},
+    {"id":256,"question":"GST on packaged food items (branded)?","options":{"A":"Nil","B":"5%","C":"12%","D":"18%"},"answer":"B"},
+    {"id":257,"question":"GST on unbranded/loose food grains?","options":{"A":"5%","B":"Nil","C":"12%","D":"18%"},"answer":"B"},
+    {"id":258,"question":"GST on sugar?","options":{"A":"Nil","B":"5%","C":"12%","D":"18%"},"answer":"B"},
+
+    # ── E-COMMERCE ───────────────────────────────
+    {"id":259,"question":"Who collects TCS under GST for e-commerce?","options":{"A":"Supplier","B":"E-commerce operator","C":"Government","D":"Recipient"},"answer":"B"},
+    {"id":260,"question":"TCS rate under GST for e-commerce operators?","options":{"A":"0.5% CGST + 0.5% SGST (1% total)","B":"2%","C":"5%","D":"1% CGST + 1% SGST (2% total)"},"answer":"A"},
+    {"id":261,"question":"E-commerce operator must file which return?","options":{"A":"GSTR-1","B":"GSTR-3B","C":"GSTR-8","D":"GSTR-9"},"answer":"C"},
+    {"id":262,"question":"Due date for GSTR-8 (TCS by e-commerce operator)?","options":{"A":"10th of next month","B":"11th of next month","C":"20th of next month","D":"31st of next month"},"answer":"A"},
+    {"id":263,"question":"Is an e-commerce operator required to register under GST?","options":{"A":"Only if turnover exceeds Rs.20 lakh","B":"Mandatory regardless of turnover","C":"Only if supplying goods","D":"Only for B2C transactions"},"answer":"B"},
+    {"id":264,"question":"Can a supplier on e-commerce platform opt for composition scheme?","options":{"A":"Yes","B":"No","C":"Only for services","D":"Only for goods below Rs.10 lakh"},"answer":"B"},
+    {"id":265,"question":"Section 9(5) of CGST Act makes e-commerce operators liable to pay GST on?","options":{"A":"All supplies","B":"Specific notified services like cab, restaurant, housekeeping","C":"Goods only","D":"Exports only"},"answer":"B"},
+
+    # ── QRMP SCHEME ──────────────────────────────
+    {"id":266,"question":"QRMP scheme stands for?","options":{"A":"Quarterly Return Monthly Payment","B":"Quick Return Monthly Payment","C":"Quarterly Refund Monthly Provision","D":"Quarterly Return Minimum Payment"},"answer":"A"},
+    {"id":267,"question":"Who is eligible for QRMP scheme?","options":{"A":"All taxpayers","B":"Taxpayers with aggregate turnover up to Rs.5 crore","C":"Composition dealers only","D":"Exporters only"},"answer":"B"},
+    {"id":268,"question":"Under QRMP, GSTR-1 is filed?","options":{"A":"Monthly","B":"Quarterly","C":"Annually","D":"Half-yearly"},"answer":"B"},
+    {"id":269,"question":"Under QRMP, tax is paid?","options":{"A":"Annually","B":"Monthly (months 1 and 2) and quarterly filing (month 3)","C":"Quarterly only","D":"Only at year end"},"answer":"B"},
+    {"id":270,"question":"Invoice Furnishing Facility (IFF) under QRMP is for?","options":{"A":"Annual invoices","B":"Uploading B2B invoices for first two months of quarter","C":"B2C invoices only","D":"Export invoices"},"answer":"B"},
+
+    # ── REFUND TYPES & PROCEDURES ────────────────
+    {"id":271,"question":"Refund of unutilised ITC is available in case of?","options":{"A":"Taxable domestic supplies","B":"Zero-rated supplies and inverted duty structure","C":"Exempt supplies","D":"RCM supplies"},"answer":"B"},
+    {"id":272,"question":"Time limit for provisional refund order?","options":{"A":"15 days","B":"7 working days","C":"30 days","D":"60 days"},"answer":"B"},
+    {"id":273,"question":"Maximum provisional refund amount?","options":{"A":"75%","B":"80%","C":"90%","D":"100%"},"answer":"C"},
+    {"id":274,"question":"Form for filing GST refund claim?","options":{"A":"GST RFD-01","B":"GST RFD-02","C":"GST RFD-04","D":"GSTR-9"},"answer":"A"},
+    {"id":275,"question":"Form for acknowledgement of refund application?","options":{"A":"RFD-01","B":"RFD-02","C":"RFD-03","D":"RFD-05"},"answer":"B"},
+    {"id":276,"question":"Refund of IGST on exports is credited to?","options":{"A":"Cash ledger","B":"Bank account directly","C":"ITC ledger","D":"Liability ledger"},"answer":"B"},
+    {"id":277,"question":"If refund is not processed within 60 days, interest payable is at?","options":{"A":"12%","B":"6%","C":"18%","D":"9%"},"answer":"B"},
+    {"id":278,"question":"Can refund be withheld if taxpayer has pending returns?","options":{"A":"No","B":"Yes","C":"Only for goods","D":"Only for exports"},"answer":"B"},
+    {"id":279,"question":"Refund of tax paid on supply of goods to SEZ unit under which provision?","options":{"A":"Section 16","B":"Section 54","C":"Section 55","D":"Section 77"},"answer":"B"},
+    {"id":280,"question":"What is 'unjust enrichment' in context of GST refund?","options":{"A":"High profit earned","B":"Refund denied if tax burden passed to recipient","C":"Penalty for wrong refund","D":"Interest on refund"},"answer":"B"},
+
+    # ── PLACE OF SUPPLY — SPECIFIC RULES ─────────
+    {"id":281,"question":"Place of supply for telecommunications services — fixed line?","options":{"A":"Location of supplier","B":"Location where connection is installed","C":"Location of billing","D":"Location of recipient"},"answer":"B"},
+    {"id":282,"question":"Place of supply for banking services to unregistered persons?","options":{"A":"Location of bank branch","B":"Location of recipient","C":"Location of head office","D":"Place of payment"},"answer":"A"},
+    {"id":283,"question":"Place of supply for insurance services to registered person?","options":{"A":"Location of insurer","B":"Location of recipient (GSTIN state)","C":"Place of property","D":"Location of agent"},"answer":"B"},
+    {"id":284,"question":"Place of supply for online information and database access services (OIDAR) to non-registered Indian recipient?","options":{"A":"Location of supplier","B":"Location of recipient in India","C":"Place of server","D":"Place of billing"},"answer":"B"},
+    {"id":285,"question":"Place of supply for event services where event is held in multiple states?","options":{"A":"Location of supplier","B":"Proportional to each state where held","C":"Only main venue state","D":"Location of recipient"},"answer":"B"},
+    {"id":286,"question":"Place of supply for advertising services to Central/State Government?","options":{"A":"Location of media office","B":"State where advertisement is displayed","C":"Location of advertiser","D":"Location of agency"},"answer":"B"},
+    {"id":287,"question":"Place of supply for goods installed and assembled at a specific site?","options":{"A":"Location of supplier","B":"Place of installation","C":"Location of manufacturer","D":"Place of delivery"},"answer":"B"},
+    {"id":288,"question":"For bill-to ship-to transactions, place of supply is?","options":{"A":"Location of shipper","B":"Location of the bill-to party (recipient of invoice)","C":"Location of ship-to party","D":"Location of supplier"},"answer":"B"},
+
+    # ── ITC SPECIFIC PROVISIONS ──────────────────
+    {"id":289,"question":"What is the ITC reversal formula for exempt and taxable supplies under Rule 42?","options":{"A":"100% reversal","B":"Proportionate reversal based on exempt/total turnover","C":"Reversal based on cost","D":"No reversal required"},"answer":"B"},
+    {"id":290,"question":"ITC on motor vehicles used for transportation of goods is?","options":{"A":"Blocked","B":"Allowed","C":"Partially allowed","D":"Allowed only under RCM"},"answer":"B"},
+    {"id":291,"question":"ITC on motor vehicles used for transportation of 13 or more passengers is?","options":{"A":"Blocked","B":"Allowed","C":"Partially allowed","D":"Only for tour operators"},"answer":"B"},
+    {"id":292,"question":"ITC on demo vehicles maintained by car dealers is?","options":{"A":"Blocked","B":"Allowed","C":"Partially allowed","D":"Allowed if capitalised"},"answer":"B"},
+    {"id":293,"question":"ITC on membership of a club or health centre is?","options":{"A":"Allowed","B":"Blocked under Section 17(5)","C":"Partially allowed","D":"Allowed if mandatory"},"answer":"B"},
+    {"id":294,"question":"ITC on food and beverages for employees in a factory canteen (if mandatory under law)?","options":{"A":"Always blocked","B":"Allowed as it is a statutory obligation","C":"Only 50% allowed","D":"Blocked unless exported"},"answer":"B"},
+    {"id":295,"question":"Can ITC be transferred when a business is transferred as a going concern?","options":{"A":"No","B":"Yes","C":"Only for goods","D":"Only for services"},"answer":"B"},
+    {"id":296,"question":"ITC on inputs used to manufacture zero-rated goods (export) is?","options":{"A":"Blocked","B":"Available and refundable","C":"Carried forward only","D":"Not allowed"},"answer":"B"},
+    {"id":297,"question":"What is the rule for ITC on capital goods used partly for exempt supplies?","options":{"A":"Full ITC allowed","B":"ITC reversed proportionately over useful life under Rule 43","C":"ITC fully blocked","D":"Allowed if written off"},"answer":"B"},
+    {"id":298,"question":"Can a new registered person claim ITC on closing stock of inputs held before registration?","options":{"A":"No","B":"Yes, subject to conditions","C":"Only within 30 days","D":"Only for goods above Rs.10 lakh"},"answer":"B"},
+
+    # ── SUPPLY — SPECIFIC CONCEPTS ───────────────
+    {"id":299,"question":"Import of services from a related person for a consideration is treated as?","options":{"A":"Exempt supply","B":"Supply even if without consideration","C":"Zero-rated supply","D":"Non-taxable supply"},"answer":"B"},
+    {"id":300,"question":"Supply of goods by a principal to his agent who undertakes to supply on his behalf is covered under?","options":{"A":"Schedule II","B":"Schedule I","C":"Schedule III","D":"Section 15"},"answer":"B"},
+    {"id":301,"question":"Which of the following is an activity treated as neither goods nor services under Schedule III?","options":{"A":"Branch transfer","B":"Sale of land","C":"Import of services","D":"Job work"},"answer":"B"},
+    {"id":302,"question":"Actionable claims (other than lottery, betting, gambling) are treated under GST as?","options":{"A":"Goods","B":"Neither goods nor services","C":"Services","D":"Exempt supply"},"answer":"B"},
+    {"id":303,"question":"Lottery, betting and gambling are treated as?","options":{"A":"Exempt","B":"Taxable supply of services","C":"Zero-rated","D":"Non-taxable"},"answer":"B"},
+    {"id":304,"question":"What is the GST rate on lottery authorised by state governments?","options":{"A":"12%","B":"18%","C":"28%","D":"Nil"},"answer":"C"},
+    {"id":305,"question":"Under the valuation rules, if open market value is not available, value shall be?","options":{"A":"Cost of production + 10%","B":"110% of cost of production or supply","C":"Invoice value","D":"Nil"},"answer":"B"},
+    {"id":306,"question":"Is GST applicable on liquidated damages received from a supplier?","options":{"A":"No","B":"Yes, treated as consideration for tolerating an act","C":"Only above Rs.1 lakh","D":"Only for companies"},"answer":"B"},
+
+    # ── TRANSITIONAL PROVISIONS & MISC ───────────
+    {"id":307,"question":"Form TRAN-1 was used for?","options":{"A":"Annual return","B":"Claiming transitional ITC of pre-GST taxes","C":"Refund under GST","D":"Registration"},"answer":"B"},
+    {"id":308,"question":"Which body manages the GST Network (GSTN)?","options":{"A":"CBIC","B":"A non-government company with government stake","C":"RBI","D":"NSDL"},"answer":"B"},
+    {"id":309,"question":"GST on legal services by advocate to business entity (registered) is under?","options":{"A":"Forward charge","B":"Reverse Charge Mechanism","C":"Exempt","D":"Zero-rated"},"answer":"B"},
+    {"id":310,"question":"Is GST applicable on electricity charges?","options":{"A":"Yes, at 18%","B":"No, electricity is exempt from GST","C":"Yes, at 5%","D":"Yes, at 12%"},"answer":"B"},
+    {"id":311,"question":"Is alcohol for human consumption subject to GST?","options":{"A":"Yes, at 28%","B":"No, it is outside GST","C":"Yes, at 18%","D":"Only beer"},"answer":"B"},
+    {"id":312,"question":"GST on renting of residential dwelling for use as residence?","options":{"A":"18%","B":"Exempt","C":"5%","D":"12%"},"answer":"B"},
+    {"id":313,"question":"GST on renting of residential dwelling to a registered person for commercial use?","options":{"A":"Exempt","B":"18% under RCM paid by registered recipient","C":"5%","D":"12%"},"answer":"B"},
+    {"id":314,"question":"Is stamp duty subsumed into GST?","options":{"A":"Yes","B":"No","C":"Only for property transactions","D":"Partially"},"answer":"B"},
+
+    # ── GSTR FORMS & RECONCILIATION ──────────────
+    {"id":315,"question":"GSTR-5 is filed by?","options":{"A":"Composition dealers","B":"Non-resident taxable persons","C":"E-commerce operators","D":"ISD"},"answer":"B"},
+    {"id":316,"question":"GSTR-6 is filed by?","options":{"A":"Non-resident taxable persons","B":"Input Service Distributors (ISD)","C":"E-commerce operators","D":"Composition dealers"},"answer":"B"},
+    {"id":317,"question":"GSTR-7 is filed by?","options":{"A":"E-commerce operators","B":"Persons required to deduct TDS under GST","C":"ISD","D":"Non-resident persons"},"answer":"B"},
+    {"id":318,"question":"What is the due date of GSTR-7 (TDS return under GST)?","options":{"A":"7th of next month","B":"10th of next month","C":"20th of next month","D":"15th of next month"},"answer":"B"},
+    {"id":319,"question":"GSTR-11 is filed by?","options":{"A":"SEZ units","B":"Persons having UIN (Unique Identification Number) for refund","C":"Non-resident taxable persons","D":"Exporters"},"answer":"B"},
+    {"id":320,"question":"What is GSTR-2A?","options":{"A":"Static ITC statement","B":"Auto-populated dynamic ITC statement from suppliers' GSTR-1","C":"Annual return","D":"Refund form"},"answer":"B"},
+    {"id":321,"question":"GSTR-10 is a final return filed by?","options":{"A":"All taxpayers annually","B":"Taxpayer whose registration has been cancelled","C":"Composition dealers","D":"SEZ units"},"answer":"B"},
+    {"id":322,"question":"What is the time limit to file GSTR-10 (final return)?","options":{"A":"30 days from cancellation","B":"3 months from cancellation or order date whichever is later","C":"6 months","D":"1 year"},"answer":"B"},
+
+    # ── GST ON SPECIFIC SERVICES ─────────────────
+    {"id":323,"question":"GST on services provided by Government to business entities?","options":{"A":"Exempt","B":"Taxable, recipient pays under RCM","C":"5%","D":"Always forward charge"},"answer":"B"},
+    {"id":324,"question":"Services by a member of Parliament/State Legislature are?","options":{"A":"Taxable at 18%","B":"Exempt from GST","C":"Taxable at 5%","D":"Under RCM"},"answer":"B"},
+    {"id":325,"question":"Passenger transportation by metered auto-rickshaw is?","options":{"A":"Taxable at 5%","B":"Exempt from GST","C":"Taxable at 12%","D":"Taxable at 18%"},"answer":"B"},
+    {"id":326,"question":"GST on renting of agricultural land?","options":{"A":"18%","B":"Nil/exempt","C":"5%","D":"12%"},"answer":"B"},
+    {"id":327,"question":"GST on services by way of slaughtering of animals?","options":{"A":"18%","B":"Nil","C":"5%","D":"12%"},"answer":"B"},
+    {"id":328,"question":"GST on IT software services?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"C"},
+    {"id":329,"question":"GST on manpower supply services?","options":{"A":"5%","B":"12%","C":"18%","D":"28%"},"answer":"C"},
+    {"id":330,"question":"GST on security services provided to a registered person (who is not specified)?","options":{"A":"Forward charge at 18%","B":"RCM at 18%","C":"Exempt","D":"5%"},"answer":"B"},
+
+    # ── PENALTIES & OFFENCES ─────────────────────
+    {"id":331,"question":"How many offences are listed under Section 122 of CGST Act?","options":{"A":"10","B":"21","C":"15","D":"25"},"answer":"B"},
+    {"id":332,"question":"Minimum penalty for tax evasion (non-fraud) under Section 122?","options":{"A":"Rs.5,000","B":"Rs.10,000","C":"Rs.25,000","D":"Equal to tax evaded"},"answer":"B"},
+    {"id":333,"question":"Penalty for issuing invoices without actual supply?","options":{"A":"Rs.10,000","B":"Equal to 100% of tax on such invoice","C":"Rs.25,000","D":"Rs.50,000"},"answer":"B"},
+    {"id":334,"question":"Penalty for non-registration despite being liable?","options":{"A":"Rs.5,000","B":"Rs.10,000 or 10% of tax, whichever is higher","C":"Rs.25,000","D":"Rs.1 lakh"},"answer":"B"},
+    {"id":335,"question":"Can penalty be imposed without show cause notice (SCN)?","options":{"A":"Yes","B":"No — SCN is mandatory","C":"Only for minor offences","D":"Only above Rs.1 lakh"},"answer":"B"},
+    {"id":336,"question":"Reduced penalty if tax and interest paid within 30 days of SCN under Section 73?","options":{"A":"Nil penalty","B":"25% of penalty","C":"50% of penalty","D":"10% of tax"},"answer":"A"},
+    {"id":337,"question":"Under Section 74 (fraud cases), reduced penalty if tax and interest paid within 30 days of SCN?","options":{"A":"Nil","B":"10% of tax or Rs.10,000 whichever is higher","C":"25%","D":"50%"},"answer":"B"},
+    {"id":338,"question":"Offences under GST punishable with imprisonment are under?","options":{"A":"Section 121","B":"Section 132","C":"Section 133","D":"Section 122"},"answer":"B"},
+
+    # ── MISCELLANEOUS / CONCEPTUAL ───────────────
+    {"id":339,"question":"What is 'deemed export' under GST?","options":{"A":"Physical export only","B":"Supplies where goods don't leave India but payment in forex/specific conditions","C":"Service exports","D":"Zero-rated only"},"answer":"B"},
+    {"id":340,"question":"SEZ developer/unit receives supplies at?","options":{"A":"18% IGST","B":"Zero rate (treated as zero-rated supply)","C":"Applicable IGST","D":"Exempt only"},"answer":"B"},
+    {"id":341,"question":"Can SEZ units claim refund of IGST paid on imports?","options":{"A":"No","B":"Yes","C":"Only for goods","D":"Only for services"},"answer":"B"},
+    {"id":342,"question":"What is the Unique Identification Number (UIN) given to?","options":{"A":"All GST taxpayers","B":"Specified bodies like UN, embassies for refund of GST paid","C":"Exporters","D":"Composition dealers"},"answer":"B"},
+    {"id":343,"question":"GST on goods destroyed or written off — ITC treatment?","options":{"A":"No reversal needed","B":"ITC must be reversed","C":"Partially reversed","D":"Carried forward"},"answer":"B"},
+    {"id":344,"question":"What is the concept of 'distinct persons' under GST?","options":{"A":"Two separate companies","B":"Same entity having registrations in different states","C":"Supplier and recipient","D":"Director and company"},"answer":"B"},
+    {"id":345,"question":"Goods sent on approval basis — time limit before GST applicability?","options":{"A":"30 days","B":"6 months","C":"45 days","D":"1 year"},"answer":"B"},
+    {"id":346,"question":"GST on royalty paid to government for mining?","options":{"A":"Exempt","B":"Taxable under RCM","C":"Taxable under forward charge","D":"Zero-rated"},"answer":"B"},
+    {"id":347,"question":"Can a registered person opt out of regular scheme and join composition mid-year?","options":{"A":"Yes, anytime","B":"No — only at the beginning of financial year","C":"Only after 2 years","D":"Only with Commissioner approval"},"answer":"B"},
+    {"id":348,"question":"GST on printing of books, journals (without content)?","options":{"A":"Nil","B":"5%","C":"12%","D":"18%"},"answer":"D"},
+    {"id":349,"question":"GST on printed books?","options":{"A":"5%","B":"12%","C":"18%","D":"Nil"},"answer":"D"},
+    {"id":350,"question":"What is the GST rate on works contract for construction of roads, bridges, tunnels for government?","options":{"A":"5%","B":"12%","C":"18%","D":"Nil"},"answer":"B"}
 ]

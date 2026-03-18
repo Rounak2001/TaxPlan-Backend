@@ -1,9 +1,14 @@
+from datetime import timedelta
+
+from django.utils import timezone
+
 from .models import UserSession, VideoResponse
 
 MCQ_PASS_THRESHOLD = 30
 VIDEO_PASS_THRESHOLD = 15
 VIDEO_SCORE_PER_QUESTION = 5
 MAX_FAILED_ATTEMPTS = 2
+RETRY_LOCK_DURATION = timedelta(days=1)
 
 
 def get_session_assessment_outcome(session):
@@ -122,11 +127,41 @@ def get_application_assessment_outcome(application):
 
     disqualified = flagged or failed_attempts >= MAX_FAILED_ATTEMPTS
     attempts_remaining = 0 if disqualified else max(0, MAX_FAILED_ATTEMPTS - failed_attempts)
+    retry_locked = False
+    retry_available_at = None
+    retry_in_seconds = 0
+
+    if (
+        latest_session
+        and latest['failed']
+        and not latest['review_pending']
+        and not disqualified
+        and attempts_remaining > 0
+    ):
+        retry_base_time = latest_session.end_time or latest_session.start_time
+        if retry_base_time:
+            retry_available_at = retry_base_time + RETRY_LOCK_DURATION
+            retry_delta = retry_available_at - timezone.now()
+            if retry_delta.total_seconds() > 0:
+                retry_locked = True
+                retry_in_seconds = int(retry_delta.total_seconds())
+
+    can_retry_now = (
+        latest['failed']
+        and not latest['review_pending']
+        and not disqualified
+        and attempts_remaining > 0
+        and not retry_locked
+    )
 
     latest.update({
         'disqualified': disqualified,
         'failed_attempts': failed_attempts,
         'attempts_remaining': attempts_remaining,
+        'retry_locked': retry_locked,
+        'retry_available_at': retry_available_at,
+        'retry_in_seconds': retry_in_seconds,
+        'can_retry_now': can_retry_now,
         'has_completed_session': latest_session is not None,
         'has_passed_assessment': latest['passed'],
     })

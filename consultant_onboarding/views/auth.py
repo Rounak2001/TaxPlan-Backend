@@ -137,6 +137,10 @@ def get_profile_response_data(application):
         'assessment_status': assessment['status'],
         'failed_assessment_attempts': assessment['failed_attempts'],
         'assessment_attempts_remaining': assessment['attempts_remaining'],
+        'assessment_retry_locked': assessment.get('retry_locked', False),
+        'assessment_retry_available_at': assessment.get('retry_available_at'),
+        'assessment_retry_in_seconds': assessment.get('retry_in_seconds', 0),
+        'assessment_can_retry_now': assessment.get('can_retry_now', False),
         'has_accepted_declaration': application.has_accepted_declaration,
         'has_documents': has_documents,
     }
