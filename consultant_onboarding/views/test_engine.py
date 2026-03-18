@@ -31,6 +31,7 @@ from ..proctoring_policy import (
     proctoring_response,
 )
 from ..risk import compute_proctoring_risk_summary
+from ..assessment_outcome import get_application_assessment_outcome
 
 
 def get_all_questions_from_module(module, var_names=None):
@@ -190,23 +191,30 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         if not selected_tests:
             return Response({'error': 'No domains selected'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check for Max Attempts (2 failures allowed) OR permanent disqualification (flagged)
-        past_sessions = UserSession.objects.filter(application=request.application).exclude(status='ongoing')
-        failed_attempts = 0
-        for s in past_sessions:
-            if s.status == 'flagged':
-                return Response(
-                    {'error': 'You have been permanently disqualified due to a proctoring violation. You cannot take further assessments.'}, 
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            if s.status == 'completed' and s.score < 30:
-                failed_attempts += 1
-        
-        if failed_attempts >= 2:
-             return Response(
-                 {'error': 'You have exceeded the maximum of 2 failed attempts. You are disqualified from further assessments.'}, 
-                 status=status.HTTP_403_FORBIDDEN
-             )
+        assessment = get_application_assessment_outcome(request.application)
+        if assessment['flagged']:
+            return Response(
+                {'error': 'You have been permanently disqualified due to a proctoring violation. You cannot take further assessments.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if assessment['failed_attempts'] >= 2:
+            return Response(
+                {'error': 'You have exceeded the maximum of 2 failed attempts. You are disqualified from further assessments.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if assessment['review_pending']:
+            return Response(
+                {'error': 'Your previous assessment is still under review. Please wait for the final result before starting another attempt.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if assessment['passed']:
+            return Response(
+                {'error': 'You have already passed the assessment.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         # Block if there's already an ongoing session
         if UserSession.objects.filter(application=request.application, status='ongoing').exists():
@@ -404,46 +412,34 @@ class UserSessionViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def latest_result(self, request):
-        past_sessions = UserSession.objects.filter(application=request.application).exclude(status='ongoing')
-        failed_attempts = 0
-        is_disqualified = False
-        
-        for s in past_sessions:
-            if s.status == 'flagged':
-                is_disqualified = True
-                break
-            if s.status == 'completed' and s.score < 30:
-                failed_attempts += 1
-        
-        if failed_attempts >= 2:
-            is_disqualified = True
-
-        session = UserSession.objects.filter(application=request.application, status__in=['completed', 'flagged']).order_by('-end_time').first()
-        
+        assessment = get_application_assessment_outcome(request.application)
         response_data = {
-            'disqualified': is_disqualified,
-            'failed_attempts': failed_attempts
+            'disqualified': assessment['disqualified'],
+            'failed_attempts': assessment['failed_attempts'],
+            'attempts_remaining': assessment['attempts_remaining'],
+            'review_pending': assessment['review_pending'],
+            'passed': assessment['passed'],
+            'failed': assessment['failed'],
+            'status': assessment['status'],
+            'failure_reasons': assessment['failure_reasons'],
         }
 
+        session = assessment.get('session')
         if session:
-            video_responses = VideoResponse.objects.filter(session=session)
-            video_score = sum([vr.ai_score for vr in video_responses if vr.ai_score])
-            video_total_possible = len(session.video_question_set) * 5 
-            
-            expected_videos = len(session.video_question_set)
-            completed_videos = video_responses.filter(ai_status='completed').count()
-            video_evaluation_complete = (completed_videos >= expected_videos)
-
             response_data.update({
-                'score': session.score if session.status != 'flagged' else None,
-                'total': len(session.question_set),
-                'passed': session.score >= 30 and session.status != 'flagged',
-                'status': session.status,
+                'score': assessment['mcq_score'] if not assessment['hide_marks'] else None,
+                'total': assessment['mcq_total'],
                 'session_id': session.id,
-                'video_score': video_score if session.status != 'flagged' else None,
-                'video_total_possible': video_total_possible,
-                'video_evaluation_complete': video_evaluation_complete,
-                'hide_marks': session.status == 'flagged',
+                'mcq_passed': assessment['mcq_passed'],
+                'video_score': assessment['video_score'] if not assessment['hide_marks'] else None,
+                'video_total_possible': assessment['video_total_possible'],
+                'video_expected': assessment['video_expected'],
+                'video_received': assessment['video_received'],
+                'video_completed': assessment['video_completed'],
+                'video_passed': assessment['video_passed'],
+                'video_failed': assessment['video_failed'],
+                'video_evaluation_complete': assessment['video_evaluation_complete'],
+                'hide_marks': assessment['hide_marks'],
                 'proctoring_ai': compute_proctoring_risk_summary(session),
             })
             return Response(response_data, status=status.HTTP_200_OK)

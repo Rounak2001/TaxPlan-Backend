@@ -9,6 +9,9 @@ from django.contrib.auth.models import AnonymousUser
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from urllib.parse import parse_qs
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @database_sync_to_async
@@ -24,8 +27,12 @@ def get_user_from_token(token_str):
         user_id = token.payload.get('user_id')
         if user_id:
             return User.objects.get(id=user_id)
-    except (InvalidToken, TokenError, User.DoesNotExist):
-        pass
+    except (InvalidToken, TokenError) as e:
+        logger.warning(f"WebSocket Token Error: {e}")
+    except User.DoesNotExist:
+        logger.warning(f"WebSocket User Does Not Exist for token")
+    except Exception as e:
+        logger.error(f"WebSocket Unexpected Auth Error: {e}")
     
     return AnonymousUser()
 
@@ -44,8 +51,11 @@ class JWTAuthMiddleware(BaseMiddleware):
         
         if token_list:
             token = token_list[0]
-            scope['user'] = await get_user_from_token(token)
+            user = await get_user_from_token(token)
+            scope['user'] = user
+            logger.info(f"WebSocket Auth: user={getattr(user, 'username', 'anonymous')}, authenticated={user.is_authenticated}")
         else:
             scope['user'] = AnonymousUser()
+            logger.warning("WebSocket Connection attempt without token")
         
         return await super().__call__(scope, receive, send)

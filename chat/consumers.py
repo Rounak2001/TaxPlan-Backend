@@ -37,45 +37,49 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
     async def connect(self):
         """Handle WebSocket connection with presence broadcast."""
-        self.conversation_id = self.scope['url_route']['kwargs']['conversation_id']
-        self.room_group_name = f'chat_{self.conversation_id}'
-        self.user = self.scope.get('user')
-        
-        logger.info(f"WebSocket connect attempt: user={getattr(self.user, 'username', 'anonymous')}, conversation={self.conversation_id}")
-        
-        # Reject if not authenticated
-        if isinstance(self.user, AnonymousUser) or not self.user.is_authenticated:
-            logger.warning(f"WebSocket rejected: unauthenticated user for conversation {self.conversation_id}")
-            await self.close(code=4001)
-            return
-        
-        # Validate user is a participant
-        is_participant = await self.check_participant()
-        if not is_participant:
-            logger.warning(f"WebSocket rejected: user {self.user.username} not participant in {self.conversation_id}")
-            await self.close(code=4003)
-            return
-        
-        # Join room group
-        await self.channel_layer.group_add(
-            self.room_group_name,
-            self.channel_name
-        )
-        
-        await self.accept()
-        logger.info(f"WebSocket accepted: user={self.user.username}, conversation={self.conversation_id}")
-        
-        # Broadcast presence: user joined with a request for others to reply
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                'type': 'user_presence',
-                'user_id': self.user.id,
-                'username': self.user.username,
-                'status': 'online',
-                'request_reply': True,  # Ask others to let us know they are here
-            }
-        )
+        try:
+            self.conversation_id = self.scope['url_route']['kwargs']['conversation_id']
+            self.room_group_name = f'chat_{self.conversation_id}'
+            self.user = self.scope.get('user')
+            
+            logger.info(f"WebSocket connect attempt: user={getattr(self.user, 'username', 'anonymous')}, conversation={self.conversation_id}")
+            
+            # Reject if not authenticated
+            if isinstance(self.user, AnonymousUser) or not self.user.is_authenticated:
+                logger.warning(f"WebSocket rejected: unauthenticated user for conversation {self.conversation_id}")
+                await self.close(code=4001)
+                return
+            
+            # Validate user is a participant
+            is_participant = await self.check_participant()
+            if not is_participant:
+                logger.warning(f"WebSocket rejected: user {self.user.username} not participant in {self.conversation_id}")
+                await self.close(code=4003)
+                return
+            
+            # Join room group
+            await self.channel_layer.group_add(
+                self.room_group_name,
+                self.channel_name
+            )
+            
+            await self.accept()
+            logger.info(f"WebSocket accepted: user={self.user.username}, conversation={self.conversation_id}")
+            
+            # Broadcast presence: user joined with a request for others to reply
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'user_presence',
+                    'user_id': self.user.id,
+                    'username': self.user.username,
+                    'status': 'online',
+                    'request_reply': True,  # Ask others to let us know they are here
+                }
+            )
+        except Exception as e:
+            logger.exception(f"Error in ChatConsumer.connect: {e}")
+            await self.close()
     
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection with presence broadcast."""
@@ -147,7 +151,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             print(f"[CHAT] Message saved to DB: id={message['id']}")  # DEBUG
             logger.info(f"Message saved: id={message['id']}, sender={self.user.username}")
             
-            # Broadcast to room group
+            # Broadcast to room group (for the chat window)
             await self.channel_layer.group_send(
                 self.room_group_name,
                 {
@@ -158,9 +162,29 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'content': message['content'],
                     'timestamp': message['timestamp'],
                     'is_read': message['is_read'],
-                    'temp_id': temp_id,  # Echo back for client matching
+                    'temp_id': temp_id,
                 }
             )
+
+            # Send real-time notification to the recipient's dashboard (if they are NOT in the chat room)
+            if self.user.role == 'CONSULTANT':
+                recipient_id = message.get('client_id')
+                if recipient_id:
+                    await self.channel_layer.group_send(
+                        f"user_{recipient_id}",
+                        {
+                            "type": "notification_message",
+                            "data": {
+                                "type": "NEW_MESSAGE",
+                                "category": "chat",
+                                "title": f"New message from {self.user.first_name or self.user.username}",
+                                "message": message['content'][:50] + ('...' if len(message['content']) > 50 else ''),
+                                "conversation_id": str(self.conversation_id),
+                                "sender_name": self.user.first_name or self.user.username,
+                            }
+                        }
+                    )
+                    logger.info(f"Sent real-time notification to client {recipient_id}")
         else:
             print(f"[CHAT] FAILED to save message")  # DEBUG
             logger.error(f"Failed to save message from {self.user.username}")
@@ -300,24 +324,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 
                 # Update conversation timestamp
                 conversation.save(update_fields=['updated_at'])
-                # --- WhatsApp Outbound Sync ---
-                if self.user.role == 'CONSULTANT' and conversation.client.phone_number:
-                    # Send message to client's WhatsApp securely via Meta API using Celery
-                    from notifications.tasks import send_whatsapp_text_task
-                    
-                    # Ensure phone number is formatted correctly (e.g. removing '+')
-                    client_phone = conversation.client.phone_number.replace('+', '').replace(' ', '')
-                    
-                    # Prefix message with Consultant's name to avoid confusion
-                    consultant_name = self.user.first_name or self.user.username
-                    wa_message = f"[{consultant_name}]: {content}"
-                    
-                    # Offload to Celery background task for immediate React dashboard response
-                    send_whatsapp_text_task.delay(
-                        phone_number=client_phone,
-                        text=wa_message
-                    )
-                    logger.info(f"Queued outbound WhatsApp message to {client_phone[-4:]} via Celery")
+                # Prefix message with Consultant's name to avoid confusion
+                consultant_name = self.user.first_name or self.user.username
+                wa_message = f"[{consultant_name}]: {content}"
+                
+                # --- WhatsApp Outbound Sync & Session Locking ---
+                if self.user.role == 'CONSULTANT':
+                    # Lock the client's WhatsApp reply to THIS consultant/conversation for 24 hours
+                    session_key = f"wa_session_{conversation.client.id}"
+                    cache.set(session_key, conversation.id, 86400)
+                    logger.info(f"Locked WhatsApp session for client {conversation.client.id} to conversation {conversation.id}")
+
+                    if conversation.client.phone_number:
+                        # Send message to client's WhatsApp securely via Meta API using Celery
+                        from notifications.tasks import send_whatsapp_text_task
+                        
+                        # Ensure phone number is formatted correctly
+                        client_phone = conversation.client.phone_number.replace('+', '').replace(' ', '')
+                        
+                        # Offload to Celery background task
+                        send_whatsapp_text_task.delay(
+                            phone_number=client_phone,
+                            text=wa_message
+                        )
+                        logger.info(f"Queued outbound WhatsApp message to {client_phone[-4:]} via Celery")
                 # ------------------------------
 
                 return {
@@ -327,6 +357,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'content': message.content,
                     'timestamp': message.timestamp.isoformat(),
                     'is_read': message.is_read,
+                    'client_id': conversation.client.id,  # For dashboard notifications
                 }
         except Conversation.DoesNotExist:
             print(f"[CHAT] ERROR: Conversation not found: {self.conversation_id}")  # DEBUG

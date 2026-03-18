@@ -9,6 +9,7 @@ from .models import ServiceOrder, OrderItem
 from consultants.models import Service, ClientServiceRequest, ConsultantServiceProfile
 from .utils import create_service_requests_from_order
 from core_auth.utils import get_active_profile
+from .pricing import get_verified_price
 
 import logging
 
@@ -57,22 +58,25 @@ def create_order(request):
                 service = Service.objects.filter(title=item.get('title')).first()
 
             # Security: Use DB price if service exists, otherwise trust frontend (for custom landing page bundles)
-            # Ensure price exists either from DB or frontend
-            frontend_price = float(item.get('price', 0))
-            if service:
-                if not service.price:
-                     return Response(
-                        {'error': f"Service {service.title} has no price configured"}, 
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                item_price = float(service.price)
-            else:
+            # We use get_verified_price which double-checks the DB and calculates add-on prices
+            item_price = get_verified_price(service, item)
+            
+            if item_price <= 0 and not service:
+                # Custom bundles must have a valid price from frontend if not in DB
+                frontend_price = float(item.get('price', 0))
                 if frontend_price <= 0:
                     return Response(
                         {'error': f"Invalid price for custom item: {item.get('title', 'Unknown')}"}, 
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 item_price = frontend_price
+            elif item_price <= 0 and service:
+                 return Response(
+                    {'error': f"Service {service.title} has no price configured"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            item_price = float(item_price)
 
             item_total = item_price * qty
             total_amount += item_total

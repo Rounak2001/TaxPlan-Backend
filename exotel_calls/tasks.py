@@ -74,7 +74,6 @@ def process_scheduled_calls():
             'Url': applet_url,     # Connect to applet
             'StatusCallback': f"{settings.BACKEND_URL}/api/calls/status-callback/",
             'StatusCallbackContentType': 'application/json',
-            'StatusCallbackEvents[0]': 'terminal',
             'CustomField': str(call_log.id), # Pass call log so callback logs it
         }
         

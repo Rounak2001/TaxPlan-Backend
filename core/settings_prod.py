@@ -24,7 +24,8 @@ SECRET_KEY = os.environ['DJANGO_SECRET_KEY']  # Required - will error if not set
 # Add your domain(s) here - includes frontend for WebSocket origin validation
 ALLOWED_HOSTS = [
     os.getenv('ALLOWED_HOST', 'api.taxplanadvisor.in'),
-    'taxplanadvisor.in',  # Frontend for WebSocket origin validation
+    'taxplanadvisor.in',
+    'www.taxplanadvisor.in',
     'localhost',
     '127.0.0.1',
     'api.taxplanadvisor.in',
@@ -46,9 +47,9 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SESSION_COOKIE_DOMAIN = '.taxplanadvisor.in'
 CSRF_COOKIE_DOMAIN = '.taxplanadvisor.in'
 
-# Cookie Settings for Cross-Origin (Vercel frontend + EC2 backend)
-SESSION_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SAMESITE = 'None'
+# Cookie Settings for cross-subdomain (Vercel/Dashboard -> api.taxplanadvisor.in)
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
 
 # =============================================================================
 # CORS SETTINGS
@@ -57,12 +58,14 @@ CSRF_COOKIE_SAMESITE = 'None'
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 
-FRONTEND_URL = os.getenv('FRONTEND_URL')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://taxplanadvisor.in')
 # ONBOARDING_FRONTEND_URL should be set to https://partner-onboard.taxplanadvisor.in
 ONBOARDING_FRONTEND_URL = os.getenv('ONBOARDING_FRONTEND_URL')
 
 _cors_origins = [
-    FRONTEND_URL or 'http://localhost:8080',
+    FRONTEND_URL,
+    'https://www.taxplanadvisor.in',
+    'http://localhost:8080',
 ]
 if ONBOARDING_FRONTEND_URL:
     _cors_origins.append(ONBOARDING_FRONTEND_URL)
@@ -146,7 +149,8 @@ SIMPLE_JWT = {
     'AUTH_COOKIE': 'access_token',
     'AUTH_COOKIE_SECURE': True,
     'AUTH_COOKIE_HTTP_ONLY': True,
-    'AUTH_COOKIE_SAMESITE': 'Lax',  # Changed to Lax since we're on the same base domain
+    'AUTH_COOKIE_SAMESITE': 'Lax',
+    'AUTH_COOKIE_DOMAIN': '.taxplanadvisor.in',
 }
 
 # =============================================================================

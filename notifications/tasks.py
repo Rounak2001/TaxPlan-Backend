@@ -34,9 +34,21 @@ def send_whatsapp_text_task(self, phone_number, text):
             error_code = error_data.get('code') if error_data else None
             if error_code == 131047:
                 logger.warning(f"Meta 24hr window closed for {phone_number}. Falling back to template via Celery.")
+                
+                # Try to fetch client name from DB for personalization
+                client_name = "Client"
+                try:
+                    from core_auth.models import User
+                    # Strip any non-digits for cleaner search if needed or use the formatted phone
+                    # Usually stored as +91... in DB
+                    search_phone = f"+{phone_number}" if not phone_number.startswith('+') else phone_number
+                    user = User.objects.filter(phone_number__icontains=phone_number[-10:]).first()
+                    if user:
+                        client_name = user.first_name or user.username
+                except Exception as e:
+                    logger.error(f"Error fetching user name for WA template: {e}")
+
                 # Truncate content for preview
-                # Format: "[Consultant Name]: Message preview..."
-                # We need to extract the preview safely
                 preview_parts = text.split("]: ", 1)
                 if len(preview_parts) == 2:
                     consultant_name = preview_parts[0].replace("[", "")
@@ -52,7 +64,7 @@ def send_whatsapp_text_task(self, phone_number, text):
                     phone_number=phone_number,
                     template_name="unread_secure_message",
                     variables=[
-                        "Client",  # We don't have the client name here easily, fallback to generic "Client" or fetch it
+                        client_name,
                         consultant_name,
                         preview
                     ]

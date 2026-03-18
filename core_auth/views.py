@@ -21,7 +21,7 @@ MAGIC_LINK_EXPIRY_MINUTES=15
 logger = logging.getLogger(__name__)
 
 def set_auth_cookies(response, user):
-    """Helper to set HttpOnly JWT cookies for a user."""
+    """Helper to set HttpOnly JWT cookies for a user using settings-based configuration."""
     refresh = RefreshToken.for_user(user)
     
     # Add custom claims to the access token
@@ -32,21 +32,29 @@ def set_auth_cookies(response, user):
     access_token = str(refresh.access_token)
     refresh_token = str(refresh)
     
+    # Get config from SIMPLE_JWT or use defaults
+    jwt_conf = getattr(settings, 'SIMPLE_JWT', {})
+    samesite = jwt_conf.get('AUTH_COOKIE_SAMESITE', 'Lax')
+    secure = jwt_conf.get('AUTH_COOKIE_SECURE', True)
+    domain = jwt_conf.get('AUTH_COOKIE_DOMAIN', None)
+    
     response.set_cookie(
         key='access_token',
         value=access_token,
         httponly=True,
-        secure=True,  # Required for SameSite=None
-        samesite='None',  # Required for cross-origin cookies
+        secure=secure,
+        samesite=samesite,
+        domain=domain,
         max_age=3600
     )
     response.set_cookie(
         key='refresh_token',
         value=refresh_token,
         httponly=True,
-        secure=True,
-        samesite='None',
-        max_age=86400
+        secure=secure,
+        samesite=samesite,
+        domain=domain,
+        max_age=86400 * 7 # 7 days
     )
     return response
 
@@ -359,9 +367,13 @@ class LogoutView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
+        jwt_conf = getattr(settings, 'SIMPLE_JWT', {})
+        samesite = jwt_conf.get('AUTH_COOKIE_SAMESITE', 'Lax')
+        domain = jwt_conf.get('AUTH_COOKIE_DOMAIN', None)
+        
         response = Response({'success': True, 'message': 'Logged out successfully'})
-        response.delete_cookie('access_token', samesite='None')
-        response.delete_cookie('refresh_token', samesite='None')
+        response.delete_cookie('access_token', samesite=samesite, domain=domain)
+        response.delete_cookie('refresh_token', samesite=samesite, domain=domain)
         return response
 
 class CustomTokenRefreshView(APIView):
@@ -385,8 +397,9 @@ class CustomTokenRefreshView(APIView):
             # Validate and decode the refresh token
             refresh = RefreshToken(refresh_token)
             
-            # Generate new access token
-            access_token = str(refresh.access_token)
+            # Rotation logic if enabled
+            jwt_conf = getattr(settings, 'SIMPLE_JWT', {})
+            rotate_refresh = jwt_conf.get('ROTATE_REFRESH_TOKENS', True)
             
             # Create response
             response = Response({
@@ -395,18 +408,44 @@ class CustomTokenRefreshView(APIView):
             })
             
             # Set new access token as HttpOnly cookie
+            samesite = jwt_conf.get('AUTH_COOKIE_SAMESITE', 'Lax')
+            secure = jwt_conf.get('AUTH_COOKIE_SECURE', True)
+            domain = jwt_conf.get('AUTH_COOKIE_DOMAIN', None)
+            
             response.set_cookie(
                 key='access_token',
-                value=access_token,
+                value=str(refresh.access_token),
                 httponly=True,
-                secure=True,
-                samesite='None',
+                secure=secure,
+                samesite=samesite,
+                domain=domain,
                 max_age=3600  # 1 hour
             )
+            
+            # Handle Refresh Token Rotation
+            if rotate_refresh:
+                # Blacklist the old one if BLACKLIST_AFTER_ROTATION is true
+                # simple_jwt handles the blacklist if we use its TokenRefreshView,
+                # here we need to manually rotate if we want to follow the settings.
+                new_refresh = str(refresh) # RefreshToken(str(refresh)) might be needed for rotation if settings applied
+                # Actually str(refresh) will give the SAME token unless blacklist enabled?
+                # Let's just issue a COMPLETELY new one for the user to be sure
+                new_token = RefreshToken.for_user(User.objects.get(id=refresh.payload.get('user_id')))
+                
+                response.set_cookie(
+                    key='refresh_token',
+                    value=str(new_token),
+                    httponly=True,
+                    secure=secure,
+                    samesite=samesite,
+                    domain=domain,
+                    max_age=86400 * 7
+                )
             
             return response
             
         except Exception as e:
+            logger.error(f"Refresh Token Error: {str(e)}")
             return Response(
                 {'error': 'Invalid or expired refresh token'}, 
                 status=status.HTTP_401_UNAUTHORIZED

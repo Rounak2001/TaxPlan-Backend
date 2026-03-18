@@ -210,7 +210,8 @@ class WhatsAppWebhookView(APIView):
         api_version = settings.META_API_VERSION
         
         if not phone_number_id or not access_token:
-            return
+            logger.error("WhatsApp credentials missing in settings.")
+            return False, None
             
         url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
         headers = {
