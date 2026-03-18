@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.contrib import messages
+from django.db import connection, transaction
 from .models import (
     ConsultantApplication,
     AuthConsultantDocument,
@@ -80,6 +81,48 @@ class ConsultantApplicationAdmin(admin.ModelAdmin):
     search_fields = ('email', 'first_name', 'last_name')
     actions = [approve_applications]
     show_facets = admin.ShowFacets.NEVER
+
+    def _delete_related_records(self, queryset):
+        app_ids = list(queryset.values_list("id", flat=True))
+        if not app_ids:
+            return
+
+        sessions = UserSession.objects.filter(application_id__in=app_ids)
+        session_ids = list(sessions.values_list("id", flat=True))
+        if session_ids:
+            existing_tables = set(connection.introspection.table_names())
+            legacy_session_tables = (
+                "application_assessment_proctoringaudiotelemetry",
+                "application_assessment_proctoringaudioclip",
+            )
+            for table_name in legacy_session_tables:
+                if table_name in existing_tables:
+                    placeholders = ", ".join(["%s"] * len(session_ids))
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            f"DELETE FROM {table_name} WHERE session_id IN ({placeholders})",
+                            session_ids,
+                        )
+            Violation.objects.filter(session_id__in=session_ids).delete()
+            VideoResponse.objects.filter(session_id__in=session_ids).delete()
+            ProctoringSnapshot.objects.filter(session_id__in=session_ids).delete()
+            sessions.delete()
+
+        AuthConsultantDocument.objects.filter(application_id__in=app_ids).delete()
+        IdentityDocument.objects.filter(application_id__in=app_ids).delete()
+        ConsultantDocument.objects.filter(application_id__in=app_ids).delete()
+        PANVerification.objects.filter(application_id__in=app_ids).delete()
+        ConsultantCredential.objects.filter(application_id__in=app_ids).delete()
+
+    def delete_queryset(self, request, queryset):
+        with transaction.atomic():
+            self._delete_related_records(queryset)
+            queryset.delete()
+
+    def delete_model(self, request, obj):
+        with transaction.atomic():
+            self._delete_related_records(ConsultantApplication.objects.filter(pk=obj.pk))
+            obj.delete()
 
 admin.site.register(ConsultantApplication, ConsultantApplicationAdmin)
 
