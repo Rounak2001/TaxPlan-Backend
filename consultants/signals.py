@@ -1,7 +1,12 @@
 from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
 from django.db.models import Avg
-from .models import ClientServiceRequest, ConsultantServiceExpertise, ConsultantReview
+from .models import (
+    ClientServiceRequest,
+    ConsultantServiceExpertise,
+    ConsultantReview,
+    ConsultantServiceProfile,
+)
 from core_auth.models import ClientProfile
 
 
@@ -38,24 +43,33 @@ def auto_remove_consultant_from_topic(sender, instance, **kwargs):
     from consultations.models import Topic
     service = instance.service
     category = service.category
+    consultant_profile = ConsultantServiceProfile.objects.select_related('user').filter(
+        id=instance.consultant_id
+    ).first()
+
+    if not consultant_profile or not consultant_profile.user_id:
+        return
+
+    consultant_user = consultant_profile.user
+    consultant_name = consultant_user.get_full_name() or consultant_user.username
     
     # 1. Precise Sync Removal
     precise_topic = Topic.objects.filter(service=service).first()
     if precise_topic:
-        precise_topic.consultants.remove(instance.consultant.user)
-        print(f"🔄 [Auto-Sync] Removed {instance.consultant.full_name} from precise topic '{precise_topic.name}'")
+        precise_topic.consultants.remove(consultant_user)
+        print(f"🔄 [Auto-Sync] Removed {consultant_name} from precise topic '{precise_topic.name}'")
 
     # 2. Broad Sync Removal (only if no other category expertise remains)
     still_has_category_services = ConsultantServiceExpertise.objects.filter(
-        consultant=instance.consultant,
+        consultant_id=consultant_profile.id,
         service__category=category
     ).exists()
     
     if not still_has_category_services:
         broad_topics = Topic.objects.filter(category=category, service__isnull=True)
         for topic in broad_topics:
-            topic.consultants.remove(instance.consultant.user)
-            print(f"🔄 [Auto-Sync] Removed {instance.consultant.full_name} from broad topic '{topic.name}' (no more services in category)")
+            topic.consultants.remove(consultant_user)
+            print(f"🔄 [Auto-Sync] Removed {consultant_name} from broad topic '{topic.name}' (no more services in category)")
 
 
 
@@ -308,9 +322,13 @@ def cleanup_orphaned_pending_documents_on_delete(sender, instance, **kwargs):
     from the system (e.g. via admin).
     """
     from document_vault.models import Document
-    
+
+    client_id = getattr(instance, 'client_id', None)
+    if not client_id:
+        return
+
     deleted_count = Document.objects.filter(
-        client=instance.client,
+        client_id=client_id,
         status='PENDING',
         description__icontains=instance.service.title
     ).delete()[0]

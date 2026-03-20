@@ -13,7 +13,7 @@ from google.auth.transport import requests as google_requests
 
 from ..models import ConsultantApplication, IdentityDocument, ConsultantDocument as RealConsultantDocument
 from ..serializers import ApplicationSerializer, GoogleAuthSerializer, OnboardingSerializer, AuthConsultantDocumentSerializer
-from ..authentication import generate_applicant_token, IsApplicant
+from ..authentication import ApplicantAuthentication, generate_applicant_token, IsApplicant
 from ..assessment_outcome import get_application_assessment_outcome
 from ..credential_service import trigger_auto_credential_check
 from ..utils.name_matching import first_last_name, first_last_names_match, first_last_similarity_pct
@@ -240,6 +240,7 @@ def google_auth(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def complete_onboarding(request):
     """
@@ -257,6 +258,7 @@ def complete_onboarding(request):
 
 
 @api_view(['GET'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def get_user_profile(request):
     """Get current application's profile with step completion flags"""
@@ -265,6 +267,7 @@ def get_user_profile(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def accept_declaration(request):
     """Mark the application as having accepted the onboarding declaration"""
@@ -276,6 +279,7 @@ def accept_declaration(request):
 
 
 @api_view(["POST"])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def send_phone_otp(request):
     """
@@ -357,6 +361,7 @@ def send_phone_otp(request):
 
 
 @api_view(["POST"])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def verify_phone_otp(request):
     """Verify OTP and mark applicant phone number as verified."""
@@ -426,6 +431,7 @@ def health_check(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def upload_document(request):
     """
@@ -451,6 +457,7 @@ def upload_document(request):
 
 
 @api_view(['GET'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def get_user_documents(request):
     """Get all documents uploaded by the applicant"""
@@ -460,6 +467,7 @@ def get_user_documents(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def get_identity_upload_url(request):
     """Get presigned URL to upload identity document directly to S3"""
@@ -484,6 +492,7 @@ def get_identity_upload_url(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def upload_identity_document(request):
     """

@@ -6,12 +6,13 @@ from django.core.files.storage import default_storage
 
 from ..models import ConsultantDocument
 from ..serializers import ConsultantDocumentSerializer
-from ..authentication import IsApplicant
+from ..authentication import ApplicantAuthentication, IsApplicant
 from ..credential_service import trigger_auto_credential_check
 from ..utils.name_matching import first_last_name, first_last_names_match, get_latest_verified_identity_name
 
 
 class GetDocumentUploadUrlView(APIView):
+    authentication_classes = [ApplicantAuthentication]
     permission_classes = [IsApplicant]
 
     def post(self, request):
@@ -37,6 +38,7 @@ class GetDocumentUploadUrlView(APIView):
 
 
 class UploadDocumentView(APIView):
+    authentication_classes = [ApplicantAuthentication]
     permission_classes = [IsApplicant]
 
     def post(self, request):
@@ -173,6 +175,7 @@ class UploadDocumentView(APIView):
 
 
 class DocumentListView(APIView):
+    authentication_classes = [ApplicantAuthentication]
     permission_classes = [IsApplicant]
 
     def get(self, request):

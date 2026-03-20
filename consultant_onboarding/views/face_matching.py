@@ -2,11 +2,11 @@ import uuid
 import base64
 from django.conf import settings
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 
 from ..models import FaceVerification
-from ..authentication import IsApplicant
+from ..authentication import ApplicantAuthentication, IsApplicant
 from ..credential_service import trigger_auto_credential_check
 from ..utils.rekognition_client import get_rekognition_client
 
@@ -15,6 +15,7 @@ rekognition = get_rekognition_client()
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def upload_photo(request, user_id=None):
     """
@@ -42,6 +43,7 @@ def upload_photo(request, user_id=None):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def verify_face(request, user_id=None):
     """

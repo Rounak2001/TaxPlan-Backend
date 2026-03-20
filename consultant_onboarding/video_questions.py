@@ -50,14 +50,64 @@ _scrutiny_video_questions = [
     "How do you maintain consistency in replies when a client is facing both GST and Income Tax scrutiny on related issues?",
 ]
 
+_scrutiny_shared_video_questions = [
+    "What does a scrutiny notice usually mean, and what should be the first response from a taxpayer or consultant?",
+    "If a client receives a tax or GST notice asking for documents, how would you prepare and organize the response?",
+    "What are the key timelines and precautions a consultant should keep in mind while replying to scrutiny or compliance notices?",
+    "What is the importance of a point by point written reply in assessment or scrutiny proceedings?",
+]
+
+_scrutiny_income_tax_tds_video_questions = [
+    "If a client receives a scrutiny notice under the Income Tax Act, what should be the first response?",
+    "How would you explain faceless assessment to a taxpayer who has never dealt with a tax notice before?",
+    "What should a consultant do after receiving an income tax assessment order that appears incorrect or excessive?",
+    "What are the common reasons an income tax return may get selected for further verification or scrutiny?",
+    "If a client receives a notice for short deduction or non deduction of TDS, how would you approach the case?",
+    "What documents or reports would you review first while handling a TDS scrutiny or mismatch case?",
+]
+
+_scrutiny_gstr_video_questions = [
+    "If a business receives a GST notice for excess ITC claimed, what documents would you review first?",
+    "How would you handle a case where the GST department points out a mismatch between GSTR-1 and GSTR-3B?",
+    "What steps would you suggest before filing a GST annual return to avoid future scrutiny?",
+    "How would you prepare a response when a GST officer asks for reconciliations, books, and return workings together?",
+    "What should a consultant review first in a GST appeal or regular assessment matter?",
+    "How would you explain GST scrutiny, assessment, and appeal stages to a business owner in simple terms?",
+]
+
+_registration_video_questions = [
+    "How would you help a client decide whether they need PAN, TAN, GST, or another registration first?",
+    "What are the first documents you usually ask for before starting a new business registration assignment?",
+    "Explain the difference between PAN and TAN in simple terms for a new business owner.",
+    "How would you guide a founder choosing between a partnership, LLP, and private limited company?",
+    "What checks would you do before filing an MSME or Udyam registration for a client?",
+    "How would you explain IEC registration to a client planning to start import or export activity?",
+    "What are the most common mistakes applicants make during company or LLP registration, and how do you prevent them?",
+    "How would you handle a trust or NGO client seeking both 12A and 80G registration support?",
+    "What is the role of a DSC in registration and compliance filings, and when is it usually needed?",
+    "If a foreign entity wants to enter India, what documents and practical registration checkpoints would you review first?",
+]
+
 
 video_questions = {
     "introduction": [
         "Please introduce yourself, including your educational background and your experience in taxation or related fields."
     ],
+    "gstr": _gst_video_questions,
     "gst": _gst_video_questions,
+    "itr": _income_tax_video_questions + _tds_video_questions,
     "income_tax": _income_tax_video_questions,
     "tds": _tds_video_questions,
     "scrutiny": _scrutiny_video_questions,
     "professional_tax": _scrutiny_video_questions,
+    "registrations": _registration_video_questions,
+    "registration": _registration_video_questions,
 }
+
+
+def get_scoped_scrutiny_video_questions(scope="all"):
+    if scope == "gstr":
+        return _scrutiny_gstr_video_questions
+    if scope == "income_tax_tds":
+        return _scrutiny_income_tax_tds_video_questions
+    return _scrutiny_video_questions

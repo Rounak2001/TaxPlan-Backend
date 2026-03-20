@@ -6,12 +6,12 @@ import random
 import json
 import uuid
 
-from ..models import TestType, UserSession, VideoResponse, Violation
+from ..models import TestType, UserSession, VideoQuestion, VideoResponse, Violation
 from ..serializers import (
     TestTypeSerializer, UserSessionSerializer,
     ViolationSerializer
 )
-from ..authentication import IsApplicant
+from ..authentication import ApplicantAuthentication, IsApplicant
 from ..proctoring_policy import (
     MAX_SESSION_VIOLATIONS,
     MAX_VIOLATIONS_PER_TYPE,
@@ -81,80 +81,215 @@ def get_all_questions_from_module(module, var_names=None):
 
 from .. import gst as gst_module
 from .. import income_tax as income_tax_module
+from .. import registrations as registrations_module
 from .. import scrutiny as scrutiny_module
 from .. import tds as tds_module
 from .. import video_questions as video_questions_module
 
-DOMAIN_MAPPING = {
-    "gst": {"module": gst_module, "vars": ["gst_assessment"]},
-    "income-tax": {"module": income_tax_module, "vars": ["income_tax_batch1", "income_tax_assessment_batch2"]},
-    "tds": {"module": tds_module, "vars": ["tds_assessment"]},
-    "scrutiny": {"module": scrutiny_module, "vars": ["questions"]},
-    "professional-tax": {"module": scrutiny_module, "vars": ["questions"]},
+ASSESSMENT_DOMAIN_ORDER = ["itr", "gstr", "scrutiny", "registrations"]
+
+ASSESSMENT_DOMAIN_CONFIG = {
+    "itr": {
+        "name": "ITR",
+        "sources": [
+            {"module": income_tax_module, "vars": ["income_tax_batch1", "income_tax_assessment_batch2"]},
+            {"module": tds_module, "vars": ["tds_assessment"]},
+        ],
+    },
+    "gstr": {
+        "name": "GSTR",
+        "sources": [
+            {"module": gst_module, "vars": ["gst_assessment"]},
+        ],
+    },
+    "scrutiny": {
+        "name": "Scrutiny",
+        "sources": [
+            {"module": scrutiny_module, "vars": ["questions"]},
+        ],
+    },
+    "registrations": {
+        "name": "Registrations",
+        "sources": [
+            {"module": registrations_module, "vars": ["questions"]},
+        ],
+    },
 }
 
 SLUG_MAPPING = {
-    "GST": "gst",
-    "gst": "gst",
-    "Income Tax": "income-tax",
-    "income_tax": "income-tax",
-    "income-tax": "income-tax",
-    "TDS": "tds",
-    "tds": "tds",
-    "Scrutiny": "scrutiny",
+    "itr": "itr",
+    "income-tax": "itr",
+    "tds": "itr",
+    "gstr": "gstr",
+    "gst": "gstr",
     "scrutiny": "scrutiny",
-    "Professional Tax": "scrutiny",
-    "professional_tax": "scrutiny",
     "professional-tax": "scrutiny",
     "profession-tax": "scrutiny",
+    "registration": "registrations",
+    "registrations": "registrations",
 }
+
+
+def normalize_selected_domain_slug(value):
+    normalized = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if not normalized:
+        return None
+    return SLUG_MAPPING.get(normalized, normalized)
+
+
+def normalize_selected_test_details(raw_details):
+    details_by_slug = {}
+    if not isinstance(raw_details, list):
+        return details_by_slug
+
+    for detail in raw_details:
+        if not isinstance(detail, dict):
+            continue
+
+        slug = normalize_selected_domain_slug(
+            detail.get("slug") or detail.get("name") or detail.get("domain")
+        )
+        if not slug:
+            continue
+
+        raw_service_ids = detail.get("selected_service_ids")
+        if raw_service_ids is None:
+            raw_service_ids = detail.get("selectedServiceIds")
+        if not isinstance(raw_service_ids, list):
+            raw_service_ids = []
+
+        service_ids = []
+        for service_id in raw_service_ids:
+            normalized_service_id = str(service_id or "").strip()
+            if normalized_service_id and normalized_service_id not in service_ids:
+                service_ids.append(normalized_service_id)
+
+        details_by_slug[slug] = {
+            "selected_service_ids": service_ids,
+        }
+
+    return details_by_slug
+
+
+def get_scrutiny_selection_scope(selection_detail):
+    if not isinstance(selection_detail, dict):
+        return scrutiny_module.SCRUTINY_SCOPE_ALL
+
+    selected_service_ids = set(selection_detail.get("selected_service_ids") or [])
+    has_income_tax = any(
+        service_id.startswith("itr_") or service_id.startswith("tds_")
+        for service_id in selected_service_ids
+    )
+    has_gstr = any(service_id.startswith("gst_") for service_id in selected_service_ids)
+
+    if has_income_tax and not has_gstr:
+        return scrutiny_module.SCRUTINY_SCOPE_INCOME_TAX_TDS
+    if has_gstr and not has_income_tax:
+        return scrutiny_module.SCRUTINY_SCOPE_GSTR
+    return scrutiny_module.SCRUTINY_SCOPE_ALL
+
+
+def get_scoped_question_bank(slug, selected_test_details):
+    question_bank = DOMAIN_QUESTION_BANKS[slug]
+    if slug != "scrutiny":
+        return question_bank
+
+    scope = get_scrutiny_selection_scope(selected_test_details.get("scrutiny"))
+    if scope == scrutiny_module.SCRUTINY_SCOPE_ALL:
+        return question_bank
+
+    allowed_scopes = {scope}
+    scoped_questions = []
+    for question in question_bank:
+        source_question = {
+            "id": question.get("source_id"),
+            "question": question.get("question"),
+            "options": question.get("options") or {},
+        }
+        if scrutiny_module.classify_scrutiny_question(source_question) in allowed_scopes:
+            scoped_questions.append(question)
+    return scoped_questions
+
+
+def get_scoped_video_pool(slug, selected_test_details):
+    if slug != "scrutiny":
+        return video_questions_module.video_questions.get(slug, [])
+
+    scope = get_scrutiny_selection_scope(selected_test_details.get("scrutiny"))
+    return video_questions_module.get_scoped_scrutiny_video_questions(scope)
+
+
+def build_domain_question_banks():
+    question_banks = {}
+    next_question_id = 1
+
+    for slug in ASSESSMENT_DOMAIN_ORDER:
+        bank = []
+        for source in ASSESSMENT_DOMAIN_CONFIG[slug]["sources"]:
+            questions = get_all_questions_from_module(source["module"], source["vars"])
+            for question in questions:
+                question_copy = dict(question)
+                question_copy["source_id"] = question_copy.get("id")
+                question_copy["id"] = next_question_id
+                question_copy["domain"] = slug
+                bank.append(question_copy)
+                next_question_id += 1
+        question_banks[slug] = bank
+
+    return question_banks
+
+
+DOMAIN_QUESTION_BANKS = build_domain_question_banks()
+
+
+def ensure_test_type(name, slug):
+    test_type, _created = TestType.objects.get_or_create(slug=slug, defaults={"name": name})
+    if test_type.name != name:
+        test_type.name = name
+        test_type.save(update_fields=["name"])
+    return test_type
+
+
+def merge_legacy_test_type(legacy_slug, target_type):
+    legacy_type = TestType.objects.filter(slug=legacy_slug).exclude(id=target_type.id).first()
+    if not legacy_type:
+        return
+
+    VideoQuestion.objects.filter(test_type=legacy_type).update(test_type=target_type)
+    UserSession.objects.filter(test_type=legacy_type).update(test_type=target_type)
+    legacy_type.delete()
 
 
 class TestTypeViewSet(viewsets.ModelViewSet):
     queryset = TestType.objects.all()
     serializer_class = TestTypeSerializer
     lookup_field = 'slug'
+    authentication_classes = [ApplicantAuthentication]
     permission_classes = [IsApplicant]
 
     def list(self, request, *args, **kwargs):
-        default_types = [
-            {'name': 'GST', 'slug': 'gst'},
-            {'name': 'Income Tax', 'slug': 'income-tax'},
-            {'name': 'TDS', 'slug': 'tds'},
-            {'name': 'Scrutiny', 'slug': 'scrutiny'},
-        ]
+        itr_type = ensure_test_type('ITR', 'itr')
+        gstr_type = ensure_test_type('GSTR', 'gstr')
+        scrutiny_type = ensure_test_type('Scrutiny', 'scrutiny')
+        ensure_test_type('Registrations', 'registrations')
 
-        legacy_type = TestType.objects.filter(slug='professional-tax').first()
-        scrutiny_type = TestType.objects.filter(slug='scrutiny').first()
+        merge_legacy_test_type('income-tax', itr_type)
+        merge_legacy_test_type('tds', itr_type)
+        merge_legacy_test_type('gst', gstr_type)
+        merge_legacy_test_type('professional-tax', scrutiny_type)
 
-        if legacy_type and not scrutiny_type:
-            legacy_type.name = 'Scrutiny'
-            legacy_type.slug = 'scrutiny'
-            legacy_type.save(update_fields=['name', 'slug'])
-        elif legacy_type and scrutiny_type:
-            if scrutiny_type.name != 'Scrutiny':
-                scrutiny_type.name = 'Scrutiny'
-                scrutiny_type.save(update_fields=['name'])
-            VideoQuestion.objects.filter(test_type=legacy_type).update(test_type=scrutiny_type)
-            UserSession.objects.filter(test_type=legacy_type).update(test_type=scrutiny_type)
-            legacy_type.delete()
-
-        existing_types = {tt.slug: tt for tt in TestType.objects.all()}
-        for dt in default_types:
-            existing = existing_types.get(dt['slug'])
-            if existing:
-                if existing.name != dt['name']:
-                    existing.name = dt['name']
-                    existing.save(update_fields=['name'])
-            else:
-                created = TestType.objects.create(name=dt['name'], slug=dt['slug'])
-                existing_types[dt['slug']] = created
-
-        return super().list(request, *args, **kwargs)
+        response = super().list(request, *args, **kwargs)
+        order = {slug: index for index, slug in enumerate(ASSESSMENT_DOMAIN_ORDER)}
+        response.data = sorted(
+            [item for item in response.data if item.get('slug') in order],
+            key=lambda item: order[item['slug']]
+        )
+        return response
 
 class UserSessionViewSet(viewsets.ModelViewSet):
     queryset = UserSession.objects.all()
     serializer_class = UserSessionSerializer
+    authentication_classes = [ApplicantAuthentication]
     permission_classes = [IsApplicant]
 
     def get_queryset(self):
@@ -236,15 +371,22 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        selected_tests = request.data.get('selected_tests', []) 
+        selected_tests = request.data.get('selected_tests', [])
+        selected_test_details = normalize_selected_test_details(
+            request.data.get('selected_test_details', [])
+        )
+        if isinstance(selected_tests, str):
+            selected_tests = [selected_tests]
+        elif not isinstance(selected_tests, list):
+            selected_tests = list(selected_tests or [])
         test_type_id = request.data.get('test_type')
-        
+
         if not selected_tests and test_type_id:
-             try:
-                 tt_name = TestType.objects.get(id=test_type_id).name
-                 selected_tests = [tt_name]
-             except Exception:
-                 pass
+            try:
+                tt_name = TestType.objects.get(id=test_type_id).name
+                selected_tests = [tt_name]
+            except Exception:
+                pass
 
         if not selected_tests:
             return Response({'error': 'No domains selected'}, status=status.HTTP_400_BAD_REQUEST)
@@ -293,23 +435,30 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
 
+        valid_domains = []
+        for test_name in selected_tests:
+            slug = normalize_selected_domain_slug(test_name)
+            if slug in DOMAIN_QUESTION_BANKS and slug not in valid_domains:
+                valid_domains.append(slug)
+
+        if not valid_domains:
+            return Response({'error': 'No valid domains selected'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if valid_domains == ['registrations']:
+            return Response(
+                {'error': 'Registrations can only be selected along with at least one other category.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         total_mcqs = 50
-        num_domains = len(selected_tests)
+        num_domains = len(valid_domains)
         questions_per_domain = total_mcqs // num_domains
         remainder = total_mcqs % num_domains
-        
-        final_question_set = []
-        valid_domains = []
 
-        for idx, test_name in enumerate(selected_tests):
-            slug = SLUG_MAPPING.get(test_name, test_name.lower().replace(" ", "_"))
-            if slug not in DOMAIN_MAPPING:
-                continue 
-            
-            valid_domains.append(slug)
-            config = DOMAIN_MAPPING[slug]
-            questions = get_all_questions_from_module(config['module'], config['vars'])
-            
+        final_question_set = []
+
+        for idx, slug in enumerate(valid_domains):
+            questions = get_scoped_question_bank(slug, selected_test_details)
             count = questions_per_domain + (1 if idx < remainder else 0)
             selected = random.sample(questions, min(len(questions), count))
             for q in selected:
@@ -332,9 +481,7 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         
         domain_video_pool = []
         for domain in valid_domains:
-            vq_key = domain.replace("-", "_")
-            if vq_key in video_data:
-                domain_video_pool.extend(video_data[vq_key])
+            domain_video_pool.extend(get_scoped_video_pool(domain, selected_test_details))
         
         selected_vqs = random.sample(domain_video_pool, min(len(domain_video_pool), 4))
         for i, vq_text in enumerate(selected_vqs):

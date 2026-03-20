@@ -4,6 +4,7 @@ Ported from backend1/consultant_core/views/admin.py and adapted
 to use ConsultantApplication instead of a custom User model.
 """
 import jwt
+import logging
 import random
 import string
 import os
@@ -13,6 +14,7 @@ from urllib.parse import urlparse
 from django.conf import settings
 from django.core.mail import send_mail
 from django.core.files.storage import default_storage
+from django.db import transaction
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -34,6 +36,8 @@ from consultant_onboarding.models import (
     ProctoringSnapshot,
 )
 from core_auth.models import User
+
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------
 # Hardcoded admin credentials (matches backend1)
@@ -570,33 +574,45 @@ def delete_consultant(request, app_id):
     except ConsultantApplication.DoesNotExist:
         return Response({'error': 'Consultant not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Delete stored onboarding files before deleting rows.
-    for d in AuthConsultantDocument.objects.filter(application=app):
-        if d.file:
-            _safe_delete_storage_file(str(d.file))
+    try:
+        with transaction.atomic():
+            # Delete stored onboarding files before deleting rows.
+            for d in AuthConsultantDocument.objects.filter(application=app):
+                if d.file:
+                    _safe_delete_storage_file(str(d.file))
 
-    for d in IdentityDocument.objects.filter(application=app):
-        _safe_delete_storage_file(d.file_path)
+            for d in IdentityDocument.objects.filter(application=app):
+                _safe_delete_storage_file(d.file_path)
 
-    for d in ConsultantDocument.objects.filter(application=app):
-        _safe_delete_storage_file(d.file_path)
+            for d in ConsultantDocument.objects.filter(application=app):
+                _safe_delete_storage_file(d.file_path)
 
-    for f in FaceVerification.objects.filter(application=app):
-        _safe_delete_storage_file(f.id_image_path)
-        _safe_delete_storage_file(f.live_image_path)
+            for f in FaceVerification.objects.filter(application=app):
+                _safe_delete_storage_file(f.id_image_path)
+                _safe_delete_storage_file(f.live_image_path)
 
-    for s in UserSession.objects.filter(application=app):
-        for v in VideoResponse.objects.filter(session=s):
-            _safe_delete_storage_file(v.video_file)
-        for snap in ProctoringSnapshot.objects.filter(session=s):
-            _safe_delete_storage_file(snap.image_url)
+            for s in UserSession.objects.filter(application=app):
+                for v in VideoResponse.objects.filter(session=s):
+                    _safe_delete_storage_file(v.video_file)
+                for snap in ProctoringSnapshot.objects.filter(session=s):
+                    _safe_delete_storage_file(snap.image_url)
 
-    # Remove the live consultant account only (never delete client accounts by email).
-    User.objects.filter(email=app.email, role=User.CONSULTANT).delete()
+            # Remove the live consultant account only (never delete client accounts by email).
+            User.objects.filter(email=app.email, role=User.CONSULTANT).delete()
 
-    app_email = app.email
-    app_id_value = app.id
-    app.delete()
+            app_email = app.email
+            app_id_value = app.id
+            app.delete()
+    except Exception:
+        logger.exception(
+            "Failed to delete consultant app_id=%s email=%s",
+            app.id,
+            app.email,
+        )
+        return Response(
+            {'error': 'Failed to delete consultant. Please retry or check server logs.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     return Response(
         {'message': 'Consultant deleted successfully', 'id': app_id_value, 'email': app_email},
