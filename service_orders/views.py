@@ -1,5 +1,6 @@
 import razorpay
 import json
+from decimal import Decimal, InvalidOperation
 from django.conf import settings
 from django.db import transaction
 from rest_framework import status, permissions
@@ -36,14 +37,14 @@ def create_order(request):
         logger.warning("No items in cart")
         return Response({'error': 'No items in cart'}, status=status.HTTP_400_BAD_REQUEST)
 
-    total_amount = 0
+    total_amount = Decimal("0.00")
     valid_items = []
 
     try:
         # 1. Validate items and calculate total from DB
         for item in items_data:
             service_id = item.get('service_id')
-            qty = int(item.get('quantity', 1))
+            qty = max(1, int(item.get('quantity', 1)))
             
             service = None
             if service_id:
@@ -62,7 +63,10 @@ def create_order(request):
             
             if item_price <= 0 and not service:
                 # Custom bundles must have a valid price from frontend if not in DB
-                frontend_price = float(item.get('price', 0))
+                try:
+                    frontend_price = Decimal(str(item.get('price', 0)))
+                except (InvalidOperation, TypeError, ValueError):
+                    frontend_price = Decimal("0.00")
                 if frontend_price <= 0:
                     return Response(
                         {'error': f"Invalid price for custom item: {item.get('title', 'Unknown')}"}, 
@@ -74,8 +78,6 @@ def create_order(request):
                     {'error': f"Service {service.title} has no price configured"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
-
-            item_price = float(item_price)
 
             item_total = item_price * qty
             total_amount += item_total
@@ -94,7 +96,7 @@ def create_order(request):
             valid_items.append({
                 'service': service, # May be None for custom bundles
                 'quantity': qty,
-                'price': item_price, 
+                    'price': item_price,
                 'category': item.get('category') or (service.category.name if service and service.category else 'General'),
                 'title': service.title if service else item.get('title', 'Custom Service'),
                 'variant': item.get('variantName', ''),
@@ -129,7 +131,7 @@ def create_order(request):
 
             # 4. Razorpay Order
             razorpay_order = razorpay_client.order.create({
-                "amount": int(total_amount * 100), # paise
+                "amount": int((total_amount * Decimal("100")).quantize(Decimal("1"))), # paise
                 "currency": "INR",
                 "receipt": f"receipt_order_{order.id}",
                 "payment_capture": 1 
@@ -141,7 +143,8 @@ def create_order(request):
             return Response({
                 'order_id': order.id,
                 'razorpay_order_id': razorpay_order['id'],
-                'amount': total_amount,
+                'amount': float(total_amount),
+                'amount_paise': razorpay_order['amount'],
                 'key_id': settings.RAZORPAY_KEY_ID
             })
 

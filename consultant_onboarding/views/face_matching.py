@@ -7,6 +7,7 @@ from rest_framework.response import Response
 
 from ..models import FaceVerification
 from ..authentication import IsApplicant
+from ..credential_service import trigger_auto_credential_check
 from ..utils.rekognition_client import get_rekognition_client
 
 # Initialize Rekognition client
@@ -123,6 +124,7 @@ def verify_face(request, user_id=None):
         if is_match:
             application.is_verified = True
             application.save(update_fields=['is_verified'])
+            trigger_auto_credential_check(application, "face_verification")
 
         return Response({
             "match": is_match,

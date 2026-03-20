@@ -80,13 +80,9 @@ def evaluate_video_task(self, video_response_id, question_text):
 
         # After successful evaluation, check if all conditions are met for auto-credential generation
         try:
-            from .credential_service import check_and_auto_generate_credentials
+            from .credential_service import trigger_auto_credential_check
             application = video_response.session.application
-            success, msg = check_and_auto_generate_credentials(application)
-            if success:
-                logger.info(f"Auto-credentials triggered for {application.email} after video eval.")
-            else:
-                logger.debug(f"Auto-credential check for {application.email}: {msg}")
+            trigger_auto_credential_check(application, "video_evaluation")
         except Exception as cred_err:
             # Never let credential generation failure break the video evaluation task
             logger.warning(f"Auto-credential check failed (non-fatal): {cred_err}")

@@ -10,21 +10,18 @@ from botocore.config import Config
 
 TARGET_BACHELOR_FIELD_KEYWORDS = [
     "commerce",
-    "account",
-    "accountancy",
-    "finance",
-    "tax",
-    "taxation",
-    "business",
-    "management",
-    "economics",
-    "law",
     "bcom",
     "b.com",
-    "bba",
-    "bms",
-    "llb",
-    "ba economics",
+    "account",
+    "accounting",
+    "accountancy",
+    "finance",
+    "financial management",
+    "banking",
+    "tax",
+    "taxation",
+    "audit",
+    "auditing",
 ]
 
 def _parse_retry_delay_seconds(message):
@@ -376,7 +373,7 @@ class QualificationDocumentVerifier:
             
             1. Identify the type of document. Is it a Bachelor's Degree, Master's Degree, Certificate, Transcript, or something else (Unknown/Invalid)?
             2. Verify if the document looks like a valid, legitimate document (Verification Status: Verified or Invalid).
-            3. If it is a Bachelor's degree, extract the program/field and decide if it belongs to a relevant domain for this platform.
+            3. If it is a Bachelor's degree, extract the program/field and decide if it belongs to a finance, tax, accounting, commerce, banking, or auditing domain.
                Relevant-domain keywords: {", ".join(TARGET_BACHELOR_FIELD_KEYWORDS)}.
                Mark is_target_field=true only when the extracted field clearly matches one of those keywords.
             
