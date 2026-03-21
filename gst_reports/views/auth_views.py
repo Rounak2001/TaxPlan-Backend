@@ -31,18 +31,20 @@ def generate_otp(request):
     # Security: If user is a consultant, ensure this GSTIN belongs to an assigned client
     if request.user.role == 'CONSULTANT':
         from core_auth.models import ClientProfile
-        # Check if any assigned client has this GSTIN
-        # Note: A consultant might have multiple clients, we need to check if *any* assigned client matches the requested GSTIN.
-        # However, ClientProfile has a 1-to-1 with User. 
-        # The query should be: Is there a ClientProfile assigned to this consultant THAT HAS this GSTIN?
+        from consultants.models import ClientServiceRequest
+        # Check if any active service client has this GSTIN
+        service_client_ids = ClientServiceRequest.objects.filter(
+            assigned_consultant__user=request.user,
+        ).exclude(status__in=['completed', 'cancelled']).values_list('client_id', flat=True)
+        
         is_assigned = ClientProfile.objects.filter(
-            assigned_consultant=request.user,
+            user_id__in=service_client_ids,
             gstin__iexact=gstin.strip()
         ).exists()
         
         if not is_assigned:
             # Debugging check: list available GSTINs for this consultant
-            available_gstins = list(ClientProfile.objects.filter(assigned_consultant=request.user).values_list('gstin', flat=True))
+            available_gstins = list(ClientProfile.objects.filter(user_id__in=service_client_ids).values_list('gstin', flat=True))
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied(f"You are not authorized for GSTIN {gstin}. Your assigned GSTINs: {available_gstins}")
 

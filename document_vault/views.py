@@ -33,18 +33,14 @@ class FolderViewSet(viewsets.ModelViewSet):
             
             if client_id:
                 # Consultant viewing folders for a specific client
-                # Allow if primary OR assigned via service
                 return Folder.objects.filter(
-                    client_id=client_id
-                ).filter(
-                    models.Q(client__client_profile__assigned_consultant=user) |
-                    models.Q(client_id__in=service_client_ids)
+                    client_id=client_id,
+                    client_id__in=service_client_ids
                 ).distinct()
             
-            # Default to all folders for any assigned/service clients
+            # Default to all folders for any service-assigned clients
             return Folder.objects.filter(
-                models.Q(client__client_profile__assigned_consultant=user) |
-                models.Q(client_id__in=service_client_ids)
+                client_id__in=service_client_ids
             ).distinct()
         
         # Clients see their own folders
@@ -57,13 +53,12 @@ class FolderViewSet(viewsets.ModelViewSet):
         
         target_client = user
         if user.role == 'CONSULTANT':
-            # Security: Ensure client is assigned (Primary or Service)
+            # Security: Ensure client is assigned via active service
             from core_auth.models import ClientProfile
             
-            is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
             is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
             
-            if not (is_primary or is_service):
+            if not is_service:
                 from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied("This client is not assigned to you.")
             
@@ -110,24 +105,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status__in=ClientServiceRequest.ACTIVE_STATUSES
             ).values_list('client_id', flat=True)
             
-            # Consultants see docs for clients who are:
-            # 1. Primary assigned clients OR
-            # 2. Clients with active service assignments
+            # Consultants see docs for clients with active service assignments
             qs = Document.objects.select_related('client', 'consultant', 'folder').filter(
-                models.Q(client__client_profile__assigned_consultant=user) |
-                models.Q(client_id__in=service_client_ids)
+                client_id__in=service_client_ids
             ).distinct()
         else:
             # Clients see their own docs, but filter out PENDING requests from unassigned consultants
-            # Get currently assigned consultants (primary + service-based)
-            from core_auth.models import ClientProfile
-            
-            try:
-                client_profile = user.client_profile
-                primary_consultant = client_profile.assigned_consultant
-            except ClientProfile.DoesNotExist:
-                primary_consultant = None
-            
             # Get consultants assigned via active services
             service_consultant_ids = ClientServiceRequest.objects.filter(
                 client=user,
@@ -136,8 +119,6 @@ class DocumentViewSet(viewsets.ModelViewSet):
             
             # Build list of valid consultant IDs
             valid_consultant_ids = list(service_consultant_ids)
-            if primary_consultant:
-                valid_consultant_ids.append(primary_consultant.id)
             
             # Filter: Show all docs EXCEPT pending requests from unassigned consultants
             qs = Document.objects.select_related('client', 'consultant', 'folder').filter(client=user).filter(
@@ -170,14 +151,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
         client_id = self.request.data.get('client')
 
         if user.role == 'CONSULTANT':
-            # Security: Ensure client is assigned (Primary or Service)
+            # Security: Ensure client is assigned via active service
             from core_auth.models import ClientProfile
             from consultants.models import ClientServiceRequest
             
-            is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
             is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
             
-            if not (is_primary or is_service):
+            if not is_service:
                 from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied("This client is not assigned to you.")
             
@@ -304,8 +284,7 @@ class SharedReportViewSet(viewsets.ModelViewSet):
             # 1. Primary assigned clients OR
             # 2. Clients with active service assignments
             return SharedReport.objects.filter(
-                models.Q(client__client_profile__assigned_consultant=user) |
-                models.Q(client_id__in=service_client_ids)
+                client_id__in=service_client_ids
             ).filter(consultant=user).distinct()
         # Clients see reports shared with them
         return SharedReport.objects.filter(client=user)
@@ -317,11 +296,10 @@ class SharedReportViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only consultants can share reports.")
         
         client_id = self.request.data.get('client')
-        # Security: Ensure client is assigned to this consultant (Primary OR Service)
+        # Security: Ensure client is assigned to this consultant via active service
         from core_auth.models import ClientProfile
-        is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
         is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
-        if not (is_primary or is_service):
+        if not is_service:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("This client is not assigned to you.")
             
@@ -378,8 +356,7 @@ class LegalNoticeViewSet(viewsets.ModelViewSet):
             # 1. Primary assigned clients OR
             # 2. Clients with active service assignments
             return LegalNotice.objects.filter(
-                models.Q(client__client_profile__assigned_consultant=user) |
-                models.Q(client_id__in=service_client_ids)
+                client_id__in=service_client_ids
             ).filter(consultant=user).distinct()
         # Clients see notices for them or uploaded by them
         return LegalNotice.objects.filter(client=user)
@@ -389,26 +366,21 @@ class LegalNoticeViewSet(viewsets.ModelViewSet):
         if user.role == 'CONSULTANT':
             client_id = self.request.data.get('client')
             from core_auth.models import ClientProfile
-            is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
             is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
-            if not (is_primary or is_service):
+            if not is_service:
                 from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied("This client is not assigned to you.")
             
             serializer.save(consultant=user, uploaded_by=user)
         else:
             # Client uploading a notice
-            from core_auth.models import ClientProfile
-            try:
-                profile = user.client_profile
-                if not profile.assigned_consultant:
-                    from rest_framework.exceptions import ValidationError
-                    raise ValidationError("You don't have an assigned consultant yet.")
-                
-                serializer.save(client=user, consultant=profile.assigned_consultant, uploaded_by=user)
-            except ClientProfile.DoesNotExist:
-                from rest_framework.exceptions import PermissionDenied
-                raise PermissionDenied("Complete your profile first.")
+            from consultants.utils import get_active_consultant_for_client
+            active_consultant = get_active_consultant_for_client(user)
+            if not active_consultant:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError("You don't have an assigned consultant yet.")
+            
+            serializer.save(client=user, consultant=active_consultant, uploaded_by=user)
 
     @decorators.action(detail=True, methods=['post'], url_path='resolve')
     def toggle_resolved(self, request, pk=None):

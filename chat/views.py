@@ -39,9 +39,32 @@ class ConversationListCreateView(generics.ListCreateAPIView):
     
     def get_queryset(self):
         user = self.request.user
-        return Conversation.objects.filter(
-            Q(consultant=user) | Q(client=user)
-        ).select_related('consultant', 'client').prefetch_related('messages')
+        from consultants.models import ClientServiceRequest
+
+        if user.role == 'CONSULTANT':
+            # Only show conversations with clients who have active services with this consultant
+            active_client_ids = ClientServiceRequest.objects.filter(
+                assigned_consultant__user=user,
+            ).exclude(status__in=['completed', 'cancelled']).values_list('client_id', flat=True)
+
+            return Conversation.objects.filter(
+                consultant=user,
+                client_id__in=active_client_ids,
+            ).select_related('consultant', 'client').prefetch_related('messages')
+
+        elif user.role == 'CLIENT':
+            # Only show conversations with consultants who have active services with this client
+            active_consultant_ids = ClientServiceRequest.objects.filter(
+                client=user,
+                assigned_consultant__isnull=False,
+            ).exclude(status__in=['completed', 'cancelled']).values_list('assigned_consultant__user_id', flat=True)
+
+            return Conversation.objects.filter(
+                client=user,
+                consultant_id__in=active_consultant_ids,
+            ).select_related('consultant', 'client').prefetch_related('messages')
+
+        return Conversation.objects.none()
     
     def create(self, request, *args, **kwargs):
         """
@@ -65,17 +88,15 @@ class ConversationListCreateView(generics.ListCreateAPIView):
             )
         
         elif user.role == 'CLIENT':
-            # Get consultant_id from request or fallback to primary consultant
+            # Get consultant_id from request or fallback to active service consultant
             consultant_id = request.data.get('consultant_id')
             
             if not consultant_id:
-                # Get assigned consultant from client profile
-                try:
-                    assigned_consultant = user.client_profile.assigned_consultant
-                    if assigned_consultant:
-                        consultant_id = assigned_consultant.id
-                except AttributeError:
-                    pass
+                # Get assigned consultant from active services
+                from consultants.utils import get_active_consultant_for_client
+                active_consultant = get_active_consultant_for_client(user)
+                if active_consultant:
+                    consultant_id = active_consultant.id
             
             if not consultant_id:
                 return Response(

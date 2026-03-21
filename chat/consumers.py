@@ -162,6 +162,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'content': message['content'],
                     'timestamp': message['timestamp'],
                     'is_read': message['is_read'],
+                    'delivery_channel': message.get('delivery_channel', 'dashboard'),
                     'temp_id': temp_id,
                 }
             )
@@ -237,7 +238,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'content': event['content'],
             'timestamp': event['timestamp'],
             'is_read': event['is_read'],
+            'delivery_channel': event.get('delivery_channel', 'dashboard'),
             'temp_id': event.get('temp_id'),
+        }))
+    
+    async def delivery_status(self, event):
+        """Broadcast: WhatsApp delivery status update from Celery."""
+        await self.send(text_data=json.dumps({
+            'type': 'delivery_status',
+            'message_id': event['message_id'],
+            'delivery_channel': event['delivery_channel'],
         }))
     
     async def user_presence(self, event):
@@ -318,7 +328,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 message = Message.objects.create(
                     conversation=conversation,
                     sender=self.user,
-                    content=content
+                    content=content,
+                    delivery_channel='wa_pending' if (
+                        self.user.role == 'CONSULTANT' and conversation.client.phone_number
+                    ) else 'dashboard'
                 )
                 print(f"[CHAT] Created message: {message.id}")  # DEBUG
                 
@@ -342,10 +355,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         # Ensure phone number is formatted correctly
                         client_phone = conversation.client.phone_number.replace('+', '').replace(' ', '')
                         
-                        # Offload to Celery background task
+                        # Offload to Celery background task with message_id for status tracking
                         send_whatsapp_text_task.delay(
                             phone_number=client_phone,
-                            text=wa_message
+                            text=wa_message,
+                            message_id=message.id
                         )
                         logger.info(f"Queued outbound WhatsApp message to {client_phone[-4:]} via Celery")
                 # ------------------------------
@@ -357,6 +371,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'content': message.content,
                     'timestamp': message.timestamp.isoformat(),
                     'is_read': message.is_read,
+                    'delivery_channel': message.delivery_channel,
                     'client_id': conversation.client.id,  # For dashboard notifications
                 }
         except Conversation.DoesNotExist:

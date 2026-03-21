@@ -2,6 +2,7 @@
 Helper functions for service order processing
 """
 
+import logging
 from django.db.models import F
 from django.utils import timezone
 from consultants.models import ClientServiceRequest
@@ -65,6 +66,24 @@ def create_service_requests_from_order(order):
         
         # Refresh to get updated status
         request.refresh_from_db()
+        
+        # Fire async email to client about the purchase and assignment
+        try:
+            from notifications.tasks import send_service_assignment_email_task
+            client_name = order.user.first_name or order.user.username
+            
+            # The service title fallback handles custom DB services or frontend string items
+            service_title_for_email = getattr(item.service, 'title', getattr(item, 'service_title', 'Custom Service'))
+            
+            send_service_assignment_email_task.delay(
+                client_email=order.user.email,
+                client_name=client_name,
+                service_title=service_title_for_email,
+                amount_paid=str(item.price)
+            )
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to queue assignment email task for order {order.id}: {e}")
         
         created_requests.append({
             'request_id': request.id,

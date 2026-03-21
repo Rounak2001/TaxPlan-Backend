@@ -34,14 +34,6 @@ class ConsultantProfile(models.Model):
 
 class ClientProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='client_profile')
-    assigned_consultant = models.ForeignKey(
-        User, 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True, 
-        limit_choices_to={'role': User.CONSULTANT},
-        related_name='assigned_clients'
-    )
     pan_number = models.CharField(max_length=10, null=True, blank=True)
     gstin = models.CharField(max_length=15, null=True, blank=True)
     gst_username = models.CharField(max_length=255, null=True, blank=True)

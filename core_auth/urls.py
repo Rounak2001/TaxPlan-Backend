@@ -6,7 +6,8 @@ from core_auth.views import (
     CustomTokenRefreshView, WebSocketTokenView, ContactSubmissionView,
     ClientRegisterView, ClientEmailLoginView,
     SendMagicLinkView, VerifyMagicLinkView,
-    ForgotPasswordView, ResetPasswordView
+    ForgotPasswordView, ResetPasswordView,
+    VerifySessionView
 )
 from consultant_onboarding.views import auth as onboarding_auth
 from consultant_onboarding.views import face_matching as onboarding_face
@@ -14,6 +15,7 @@ from consultant_onboarding.views.documents import UploadDocumentView as Onboardi
 
 
 urlpatterns = [
+    path('auth/verify-session/', VerifySessionView.as_view(), name='verify-session'),
     path('auth/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('auth/token/websocket/', WebSocketTokenView.as_view(), name='websocket_token'),

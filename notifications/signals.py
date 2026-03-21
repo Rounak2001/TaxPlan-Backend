@@ -107,22 +107,15 @@ def create_and_push_notification(recipient, category, title, message, link=''):
 def _get_consultant_for_client(client_user):
     """
     Find the consultant responsible for a client.
-    Checks: 1) Primary assignment  2) Active service request assignment.
+    Checks active service request assignments.
     Returns User object or None.
     """
-    # 1. Try primary assignment from ClientProfile
-    try:
-        if hasattr(client_user, 'client_profile') and client_user.client_profile.assigned_consultant:
-            return client_user.client_profile.assigned_consultant
-    except Exception:
-        pass
-
-    # 2. Fallback: find consultant via the latest active service request
+    # Find consultant via the latest active service request
     try:
         latest_sr = ClientServiceRequest.objects.filter(
             client=client_user,
             assigned_consultant__isnull=False,
-        ).exclude(status__in=['completed', 'cancelled']).order_by('-created_at').first()
+        ).exclude(status__in=['completed', 'cancelled']).order_by('-updated_at').first()
         if latest_sr and latest_sr.assigned_consultant:
             return latest_sr.assigned_consultant.user
     except Exception:
