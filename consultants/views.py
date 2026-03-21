@@ -623,7 +623,8 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        user = self.request.user
+        from core_auth.utils import get_active_profile
+        user = get_active_profile(self.request)
         if user.role == "CLIENT":
             return ClientServiceRequest.objects.filter(client=user).order_by('-created_at')
         elif user.role == "CONSULTANT":

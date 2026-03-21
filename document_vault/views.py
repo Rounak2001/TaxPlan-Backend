@@ -6,6 +6,7 @@ from .models import Document, SharedReport, LegalNotice, Folder
 from .serializers import DocumentSerializer, DocumentUploadSerializer, SharedReportSerializer, LegalNoticeSerializer, FolderSerializer
 from core_auth.serializers import IsConsultantUser, IsClientUser
 from consultants.models import ClientServiceRequest
+from core_auth.utils import get_active_profile
 
 def create_system_folders(client_user):
     """Creates default system folders for a client."""
@@ -22,7 +23,7 @@ class FolderViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
+        user = get_active_profile(self.request)
         client_id = self.request.query_params.get('client_id')
         
         if user.role == 'CONSULTANT':
@@ -47,7 +48,7 @@ class FolderViewSet(viewsets.ModelViewSet):
         return Folder.objects.filter(client=user)
 
     def perform_create(self, serializer):
-        user = self.request.user
+        user = get_active_profile(self.request)
         client_id = self.request.data.get('client')
         name = serializer.validated_data.get('name')
         
@@ -95,7 +96,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
+        user = get_active_profile(self.request)
         folder_id = self.request.query_params.get('folder_id')
         
         if user.role == 'CONSULTANT':
@@ -146,7 +147,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return None
 
     def perform_create(self, serializer):
-        user = self.request.user
+        user = get_active_profile(self.request)
         folder_id = self.request.data.get('folder')
         client_id = self.request.data.get('client')
 
@@ -186,7 +187,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             serializer.save(client=user, folder_id=folder_id, status='UPLOADED', uploaded_at=timezone.now())
 
     def perform_update(self, serializer):
-        user = self.request.user
+        user = get_active_profile(self.request)
         # For updates, client and consultant are read-only in serializer, 
         # but we must still ensure the NEW folder belongs to the document's client.
         document = self.get_object()
@@ -206,7 +207,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
         document = self.get_object()
             
         # Security check: only the assigned client can upload
-        if document.client != request.user:
+        active_user = get_active_profile(request)
+        if document.client != active_user:
             return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
             
         serializer = DocumentUploadSerializer(document, data=request.data, partial=True)
@@ -251,7 +253,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         """
         Returns the count of pending and rejected document requests for the authenticated client.
         """
-        user = request.user
+        user = get_active_profile(request)
         pending = Document.objects.filter(client=user, status='PENDING').count()
         rejected = Document.objects.filter(client=user, status='REJECTED').count()
         
@@ -272,7 +274,7 @@ class SharedReportViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
+        user = get_active_profile(self.request)
         if user.role == 'CONSULTANT':
             # Get clients assigned via active service requests
             service_client_ids = ClientServiceRequest.objects.filter(
@@ -290,7 +292,7 @@ class SharedReportViewSet(viewsets.ModelViewSet):
         return SharedReport.objects.filter(client=user)
 
     def perform_create(self, serializer):
-        user = self.request.user
+        user = get_active_profile(self.request)
         if user.role != 'CONSULTANT':
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only consultants can share reports.")
@@ -307,11 +309,12 @@ class SharedReportViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         """Only consultants can delete shared reports."""
-        if request.user.role != 'CONSULTANT':
+        user = get_active_profile(request)
+        if user.role != 'CONSULTANT':
             return Response({'error': 'Only consultants can delete reports'}, status=status.HTTP_403_FORBIDDEN)
         
         report = self.get_object()
-        if report.consultant != request.user:
+        if report.consultant != user:
             return Response({'error': 'You can only delete your own shared reports'}, status=status.HTTP_403_FORBIDDEN)
         
         return super().destroy(request, *args, **kwargs)
@@ -320,7 +323,8 @@ class SharedReportViewSet(viewsets.ModelViewSet):
     def mark_read(self, request, pk=None):
         """Mark a specific shared report as read by the client."""
         report = self.get_object()
-        if report.client != request.user:
+        active_user = get_active_profile(request)
+        if report.client != active_user:
             return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
         report.is_read = True
         report.save(update_fields=['is_read'])
@@ -329,9 +333,10 @@ class SharedReportViewSet(viewsets.ModelViewSet):
     @decorators.action(detail=False, methods=['get'], url_path='unread-count', permission_classes=[permissions.IsAuthenticated])
     def unread_count(self, request):
         """Returns the count of unread shared reports for the authenticated client."""
-        if request.user.role != 'CLIENT':
+        user = get_active_profile(request)
+        if user.role != 'CLIENT':
             return Response({'count': 0})
-        count = SharedReport.objects.filter(client=request.user, is_read=False).count()
+        count = SharedReport.objects.filter(client=user, is_read=False).count()
         return Response({'count': count})
 
 
@@ -344,7 +349,7 @@ class LegalNoticeViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
+        user = get_active_profile(self.request)
         if user.role == 'CONSULTANT':
             # Get clients assigned via active service requests
             service_client_ids = ClientServiceRequest.objects.filter(
@@ -362,7 +367,7 @@ class LegalNoticeViewSet(viewsets.ModelViewSet):
         return LegalNotice.objects.filter(client=user)
 
     def perform_create(self, serializer):
-        user = self.request.user
+        user = get_active_profile(self.request)
         if user.role == 'CONSULTANT':
             client_id = self.request.data.get('client')
             from core_auth.models import ClientProfile

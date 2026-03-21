@@ -76,7 +76,6 @@ INSTALLED_APPS = [
     'storages',
     'channels',
     'django_extensions',
-    'django_lumen',
     
     # Internal Apps
     'core_auth',
@@ -272,6 +271,8 @@ CORS_ALLOWED_ORIGINS = [
     # Onboarding portal — Vercel deployment
     "https://partner-onboard.taxplanadvisor.in",
 ]
+
+
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8080",
