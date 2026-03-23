@@ -1,9 +1,7 @@
 import uuid
 import re
-import json
 import logging
 from datetime import datetime
-from difflib import SequenceMatcher
 from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -15,8 +13,10 @@ from google.auth.transport import requests as google_requests
 
 from ..models import ConsultantApplication, IdentityDocument, ConsultantDocument as RealConsultantDocument
 from ..serializers import ApplicationSerializer, GoogleAuthSerializer, OnboardingSerializer, AuthConsultantDocumentSerializer
-from ..authentication import generate_applicant_token, IsApplicant
+from ..authentication import ApplicantAuthentication, generate_applicant_token, IsApplicant
 from ..assessment_outcome import get_application_assessment_outcome
+from ..credential_service import trigger_auto_credential_check
+from ..utils.name_matching import first_last_name, first_last_names_match, first_last_similarity_pct
 from core_auth.services.whatsapp_otp import (
     generate_otp,
     store_otp,
@@ -28,8 +28,7 @@ from core_auth.services.whatsapp_otp import (
 )
 
 logger = logging.getLogger(__name__)
-
-NAME_MATCH_THRESHOLD = 50
+NAME_MATCH_THRESHOLD = 100
 
 
 def _normalize_indian_mobile(raw_phone):
@@ -49,39 +48,6 @@ def _normalize_indian_mobile(raw_phone):
     wa_phone = f"91{digits_only}"
     display = f"+91 {digits_only[:5]} {digits_only[5:]}"
     return digits_only, full_phone, wa_phone, display, None
-
-
-def _normalize_name(value):
-    text = str(value or '').strip().lower()
-    text = re.sub(r'[^a-z\s]', ' ', text)
-    return re.sub(r'\s+', ' ', text).strip()
-
-
-def _fuzzy_name_similarity_pct(left, right):
-    left_norm = _normalize_name(left)
-    right_norm = _normalize_name(right)
-    if not left_norm or not right_norm:
-        return 0
-    return int(round(SequenceMatcher(None, left_norm, right_norm).ratio() * 100))
-
-
-def _first_last_name(value):
-    tokens = _normalize_name(value).split()
-    if not tokens:
-        return ''
-    if len(tokens) == 1:
-        return tokens[0]
-    return f"{tokens[0]} {tokens[-1]}"
-
-
-def _fuzzy_first_last_similarity_pct(left, right):
-    left_norm = _first_last_name(left)
-    right_norm = _first_last_name(right)
-    if not left_norm or not right_norm:
-        return 0
-    return int(round(SequenceMatcher(None, left_norm, right_norm).ratio() * 100))
-
-
 def _parse_date_text(value):
     raw = str(value or '').strip()
     if not raw:
@@ -274,6 +240,7 @@ def google_auth(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def complete_onboarding(request):
     """
@@ -285,11 +252,13 @@ def complete_onboarding(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     application = serializer.save()
+    trigger_auto_credential_check(application, "profile_completion")
     
     return Response(get_profile_response_data(application), status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def get_user_profile(request):
     """Get current application's profile with step completion flags"""
@@ -298,16 +267,19 @@ def get_user_profile(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def accept_declaration(request):
     """Mark the application as having accepted the onboarding declaration"""
     application = request.application
     application.has_accepted_declaration = True
     application.save(update_fields=['has_accepted_declaration'])
+    trigger_auto_credential_check(application, "declaration_acceptance")
     return Response(get_profile_response_data(application), status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def send_phone_otp(request):
     """
@@ -389,6 +361,7 @@ def send_phone_otp(request):
 
 
 @api_view(["POST"])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def verify_phone_otp(request):
     """Verify OTP and mark applicant phone number as verified."""
@@ -427,6 +400,7 @@ def verify_phone_otp(request):
     application.phone_number = full_phone
     application.is_phone_verified = True
     application.save(update_fields=["phone_number", "is_phone_verified"])
+    trigger_auto_credential_check(application, "phone_verification")
 
     return Response(
         {
@@ -457,6 +431,7 @@ def health_check(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def upload_document(request):
     """
@@ -482,6 +457,7 @@ def upload_document(request):
 
 
 @api_view(['GET'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def get_user_documents(request):
     """Get all documents uploaded by the applicant"""
@@ -491,6 +467,7 @@ def get_user_documents(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def get_identity_upload_url(request):
     """Get presigned URL to upload identity document directly to S3"""
@@ -515,6 +492,7 @@ def get_identity_upload_url(request):
 
 
 @api_view(['POST'])
+@authentication_classes([ApplicantAuthentication])
 @permission_classes([IsApplicant])
 def upload_identity_document(request):
     """
@@ -558,9 +536,11 @@ def upload_identity_document(request):
         extracted_name = str(result.get('extracted_name') or '').strip()
         extracted_dob = str(result.get('extracted_dob') or '').strip()
         profile_name = f"{application.first_name or ''} {application.last_name or ''}".strip()
+        profile_first_last = first_last_name(profile_name)
         profile_dob = getattr(application, 'dob', None)
-        name_similarity_pct = _fuzzy_name_similarity_pct(profile_name, extracted_name) if extracted_name else 0
-        name_match = (name_similarity_pct >= NAME_MATCH_THRESHOLD) if extracted_name else None
+        document_first_last = first_last_name(extracted_name)
+        name_similarity_pct = first_last_similarity_pct(profile_name, extracted_name) if extracted_name else 0
+        name_match = first_last_names_match(profile_name, extracted_name) if extracted_name else None
         parsed_extracted_dob = _parse_date_text(extracted_dob)
         # Only compare DOB if BOTH the profile and the ID have a date; skip otherwise
         if profile_dob and parsed_extracted_dob:
@@ -572,7 +552,7 @@ def upload_identity_document(request):
         print(f"--- IDENTITY VERIFICATION DEBUG ---")
         print(f"  Gemini verification_status: {verification_status}")
         print(f"  Extracted name: '{extracted_name}' | Profile name: '{profile_name}'")
-        print(f"  Name similarity: {name_similarity_pct}% (threshold: {NAME_MATCH_THRESHOLD}%) → match: {name_match}")
+        print(f"  First/last name comparison: '{document_first_last}' vs '{profile_first_last}' | similarity: {name_similarity_pct}% | match: {name_match}")
         print(f"  Extracted DOB: '{extracted_dob}' | Profile DOB: {profile_dob} | Parsed: {parsed_extracted_dob}")
         print(f"  DOB match: {dob_match}")
         print(f"-----------------------------------")
@@ -594,6 +574,9 @@ def upload_identity_document(request):
                     "name_similarity_pct": name_similarity_pct,
                     "name_threshold_pct": NAME_MATCH_THRESHOLD,
                     "name_match": name_match,
+                    "name_match_rule": "first_and_last_name_only",
+                    "profile_first_last_name": profile_first_last,
+                    "document_first_last_name": document_first_last,
                     "dob_match": dob_match,
                 }
             }, status=status.HTTP_400_BAD_REQUEST)
@@ -634,6 +617,8 @@ def upload_identity_document(request):
                 }
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        trigger_auto_credential_check(application, "identity_verification")
+
         return Response({
             "message": "Identity document uploaded and verified successfully",
             "path": saved_path,
@@ -643,6 +628,9 @@ def upload_identity_document(request):
                 "name_similarity_pct": name_similarity_pct,
                 "name_threshold_pct": NAME_MATCH_THRESHOLD,
                 "name_match": name_match,
+                "name_match_rule": "first_and_last_name_only",
+                "profile_first_last_name": profile_first_last,
+                "document_first_last_name": document_first_last,
                 "dob_match": dob_match,
             }
         }, status=status.HTTP_200_OK)

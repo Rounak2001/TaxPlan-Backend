@@ -362,5 +362,160 @@ questions = [
 {"id":350,"question":"A consultant hired specifically for GST and Income Tax scrutiny and assessment handling should demonstrate:","options":{"A":"Ability to guarantee favourable outcomes","B":"Deep procedural and substantive knowledge, ethical integrity, strong documentation skills, and litigation capability","C":"Only GST knowledge","D":"Only knowledge of tax rates"},"answer":"B"},
 ]
 
+SCRUTINY_SCOPE_GSTR = "gstr"
+SCRUTINY_SCOPE_INCOME_TAX_TDS = "income_tax_tds"
+SCRUTINY_SCOPE_SHARED = "shared"
+SCRUTINY_SCOPE_ALL = "all"
+
+_GST_SCRUTINY_KEYWORDS = (
+    "gst",
+    "gstr",
+    "cgst",
+    "igst",
+    "sgst",
+    "itc",
+    "asmt",
+    "drc",
+    "gstat",
+    "appellate authority",
+    "zero-rated",
+    "icegate",
+    "e-way",
+    "input tax credit",
+    "inverted duty",
+    "section 61",
+    "section 62",
+    "section 63",
+    "section 64",
+    "section 65",
+    "section 66",
+    "section 67",
+    "section 68",
+    "section 69",
+    "section 70",
+    "section 73",
+    "section 74",
+    "section 75",
+    "section 79",
+    "section 83",
+    "adt-01",
+    "adt-02",
+    "reg-26",
+)
+
+_INCOME_TAX_TDS_SCRUTINY_KEYWORDS = (
+    "income tax",
+    "assessee",
+    "assessing officer",
+    "ao ",
+    " ao",
+    "cbdt",
+    "cpc",
+    "nfac",
+    "cass",
+    "form 35",
+    "cit(a)",
+    "itat",
+    "high court",
+    "supreme court",
+    "faceless assessment",
+    "reassessment",
+    "panchnama",
+    "search assessment",
+    "section 131",
+    "section 132",
+    "section 133",
+    "section 133a",
+    "section 142",
+    "section 143",
+    "section 144",
+    "section 144b",
+    "section 144c",
+    "section 147",
+    "section 148",
+    "section 148a",
+    "section 149",
+    "section 153a",
+    "section 153c",
+    "section 153d",
+    "section 154",
+    "section 156",
+    "section 220",
+    "section 246a",
+    "section 253",
+    "section 254",
+    "section 260a",
+    "section 263",
+    "section 264",
+    "section 271",
+    "section 272a",
+    "section 275",
+    "section 94b",
+    "section 115bbe",
+    "section 144c",
+    "tds",
+    "deductor",
+    "deductee",
+    "form 16",
+    "form 16a",
+    "form 26as",
+    "26q",
+    "24q",
+    "challan",
+    "short deduction",
+)
+
+
+def _scrutiny_blob(question):
+    parts = [question.get("question", "")]
+    options = question.get("options") or {}
+    parts.extend(options.values())
+    return " ".join(str(part) for part in parts).lower()
+
+
+def _matches_any_keyword(blob, keywords):
+    return any(keyword in blob for keyword in keywords)
+
+
+def classify_scrutiny_question(question):
+    question_id = int(question.get("id") or 0)
+    if 1 <= question_id <= 70:
+        return SCRUTINY_SCOPE_GSTR
+    if 71 <= question_id <= 140:
+        return SCRUTINY_SCOPE_INCOME_TAX_TDS
+
+    blob = _scrutiny_blob(question)
+    has_gstr = _matches_any_keyword(blob, _GST_SCRUTINY_KEYWORDS)
+    has_income_tax_tds = _matches_any_keyword(blob, _INCOME_TAX_TDS_SCRUTINY_KEYWORDS)
+
+    if has_gstr and not has_income_tax_tds:
+        return SCRUTINY_SCOPE_GSTR
+    if has_income_tax_tds and not has_gstr:
+        return SCRUTINY_SCOPE_INCOME_TAX_TDS
+    return SCRUTINY_SCOPE_SHARED
+
+
+gstr_scrutiny_questions = []
+income_tax_tds_scrutiny_questions = []
+shared_scrutiny_questions = []
+
+for _question in questions:
+    _scope = classify_scrutiny_question(_question)
+    if _scope == SCRUTINY_SCOPE_GSTR:
+        gstr_scrutiny_questions.append(_question)
+    elif _scope == SCRUTINY_SCOPE_INCOME_TAX_TDS:
+        income_tax_tds_scrutiny_questions.append(_question)
+    else:
+        shared_scrutiny_questions.append(_question)
+
+
+def get_scoped_scrutiny_questions(scope=SCRUTINY_SCOPE_ALL):
+    if scope == SCRUTINY_SCOPE_GSTR:
+        return gstr_scrutiny_questions
+    if scope == SCRUTINY_SCOPE_INCOME_TAX_TDS:
+        return income_tax_tds_scrutiny_questions
+    return questions
+
+
 # Backward-compatible export name expected by older assessment code.
 scrutiny_batch1 = questions

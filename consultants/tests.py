@@ -9,6 +9,7 @@ from consultants.models import (
     Service
 )
 from core_auth.models import ClientProfile
+from consultations.models import Topic
 
 User = get_user_model()
 
@@ -97,3 +98,55 @@ class ConsultantReviewTestCase(TestCase):
         self.consultant_profile.refresh_from_db()
         self.assertEqual(self.consultant_profile.average_rating, 0.0)
         self.assertEqual(self.consultant_profile.total_reviews, 0)
+
+
+class ConsultantCascadeDeleteSignalTestCase(TestCase):
+    def setUp(self):
+        self.consultant_user = User.objects.create_user(
+            username="consultant_delete",
+            email="consultant-delete@test.com",
+            password="password",
+            role="CONSULTANT",
+        )
+        self.consultant_profile = ConsultantServiceProfile.objects.create(
+            user=self.consultant_user,
+            qualification="CA",
+        )
+        self.category = ServiceCategory.objects.create(
+            name="Cascade Tax",
+            description="Cascade test services",
+            is_active=True,
+        )
+        self.service = Service.objects.create(
+            category=self.category,
+            title="Cascade ITR Filing",
+            tat="2 days",
+            documents_required="PAN, Aadhaar",
+        )
+        self.precise_topic = Topic.objects.create(
+            name="Cascade ITR Topic",
+            category=self.category,
+            service=self.service,
+        )
+        self.broad_topic = Topic.objects.create(
+            name="Cascade Tax Broad Topic",
+            category=self.category,
+        )
+        self.precise_topic.consultants.add(self.consultant_user)
+        self.broad_topic.consultants.add(self.consultant_user)
+        ConsultantServiceExpertise.objects.create(
+            consultant=self.consultant_profile,
+            service=self.service,
+        )
+
+    def test_deleting_consultant_user_does_not_crash_expertise_post_delete_signal(self):
+        self.consultant_user.delete()
+
+        self.assertFalse(
+            ConsultantServiceProfile.objects.filter(id=self.consultant_profile.id).exists()
+        )
+        self.assertFalse(
+            ConsultantServiceExpertise.objects.filter(service=self.service).exists()
+        )
+        self.assertEqual(self.precise_topic.consultants.count(), 0)
+        self.assertEqual(self.broad_topic.consultants.count(), 0)

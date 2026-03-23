@@ -6,10 +6,13 @@ from django.core.files.storage import default_storage
 
 from ..models import ConsultantDocument
 from ..serializers import ConsultantDocumentSerializer
-from ..authentication import IsApplicant
+from ..authentication import ApplicantAuthentication, IsApplicant
+from ..credential_service import trigger_auto_credential_check
+from ..utils.name_matching import first_last_name, first_last_names_match, get_latest_verified_identity_name
 
 
 class GetDocumentUploadUrlView(APIView):
+    authentication_classes = [ApplicantAuthentication]
     permission_classes = [IsApplicant]
 
     def post(self, request):
@@ -35,6 +38,7 @@ class GetDocumentUploadUrlView(APIView):
 
 
 class UploadDocumentView(APIView):
+    authentication_classes = [ApplicantAuthentication]
     permission_classes = [IsApplicant]
 
     def post(self, request):
@@ -83,6 +87,7 @@ class UploadDocumentView(APIView):
                 document.save()
 
             verification_status = str(document.verification_status or "").strip().lower()
+            extracted_name = str((result or {}).get("extracted_name") or "").strip()
             if claimed_doc_type == "bachelors_degree" and verification_status != "verified":
                 rejection_reason = (
                     (result or {}).get("rejection_reason")
@@ -105,9 +110,63 @@ class UploadDocumentView(APIView):
                     status=400,
                 )
 
+            if claimed_doc_type == "bachelors_degree":
+                gov_id_name = get_latest_verified_identity_name(application)
+                if not gov_id_name:
+                    gov_id_name = f"{application.first_name or ''} {application.last_name or ''}".strip()
+
+                if not extracted_name:
+                    try:
+                        if document.file_path:
+                            default_storage.delete(str(document.file_path).lstrip('/'))
+                    except Exception:
+                        pass
+                    document.delete()
+                    return Response(
+                        {
+                            "error": "Could not read the name on the Bachelor's degree. Please upload a clearer certificate.",
+                            "document_type": document_type,
+                            "verification_status": document.verification_status,
+                            "details": {
+                                **(result or {}),
+                                "name_match_rule": "first_and_last_name_only",
+                            },
+                        },
+                        status=400,
+                    )
+
+                if gov_id_name and not first_last_names_match(gov_id_name, extracted_name):
+                    try:
+                        if document.file_path:
+                            default_storage.delete(str(document.file_path).lstrip('/'))
+                    except Exception:
+                        pass
+                    document.delete()
+                    return Response(
+                        {
+                            "error": "First and last name on the Bachelor's degree must match the verified Government ID.",
+                            "document_type": document_type,
+                            "verification_status": document.verification_status,
+                            "details": {
+                                **(result or {}),
+                                "name_match_rule": "first_and_last_name_only",
+                                "government_id_first_last_name": first_last_name(gov_id_name),
+                                "document_first_last_name": first_last_name(extracted_name),
+                            },
+                        },
+                        status=400,
+                    )
+
             serializer = ConsultantDocumentSerializer(document)
             response_data = serializer.data
             response_data['verification_status'] = document.verification_status
+            response_data['name_match_rule'] = 'first_and_last_name_only'
+            if claimed_doc_type == "bachelors_degree":
+                gov_id_name = get_latest_verified_identity_name(application) or f"{application.first_name or ''} {application.last_name or ''}".strip()
+                response_data['government_id_first_last_name'] = first_last_name(gov_id_name)
+                response_data['document_first_last_name'] = first_last_name(extracted_name)
+
+            trigger_auto_credential_check(application, f"qualification_upload:{document_type}")
             
             return Response(response_data, status=201)
 
@@ -116,6 +175,7 @@ class UploadDocumentView(APIView):
 
 
 class DocumentListView(APIView):
+    authentication_classes = [ApplicantAuthentication]
     permission_classes = [IsApplicant]
 
     def get(self, request):

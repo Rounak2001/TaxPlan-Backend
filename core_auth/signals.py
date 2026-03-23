@@ -9,9 +9,14 @@ def delete_user_on_client_profile_delete(sender, instance, **kwargs):
     This ensures that 'deleting a client' from the profiles list correctly
     triggers the CASCADE to documents and services.
     """
-    if instance.user:
-        try:
-            instance.user.delete()
-            print(f"Deleted User {instance.user.username} following ClientProfile deletion.")
-        except User.DoesNotExist:
-            pass
+    user_id = getattr(instance, 'user_id', None)
+    if not user_id:
+        return
+
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return
+
+    username = user.username
+    user.delete()
+    print(f"Deleted User {username} following ClientProfile deletion.")
