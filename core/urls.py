@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-import os
+import os   
 
 # Strong Admin URL from environment, default to 'admin/' if not set in dev
 admin_url = os.getenv('ADMIN_URL', 'admin/')

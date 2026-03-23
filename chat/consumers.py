@@ -6,6 +6,7 @@ presence tracking, and read receipts.
 
 import json
 import logging
+from urllib.parse import parse_qs
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
@@ -19,7 +20,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
     """
     Async WebSocket consumer for chat with presence tracking.
     
-    Connection URL: ws://.../ws/chat/{conversation_id}/?token=<jwt_token>
+    Connection URL: ws://.../ws/chat/{conversation_id}/?token=<jwt_token>[&profile_id=<sub_account_id>]
+    
+    The optional `profile_id` query param tells the consumer which sub-account
+    is the active sender. If omitted, the main (JWT) account is used.
     
     Inbound Message Types:
     - {"type": "message", "content": "Hello!"}  - Send a message
@@ -50,6 +54,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.close(code=4001)
                 return
             
+            # Resolve effective sender: if a valid sub-account profile_id is passed,
+            # messages will be attributed to that sub-account user.
+            query_string = self.scope.get('query_string', b'').decode()
+            query_params = parse_qs(query_string)
+            profile_id_list = query_params.get('profile_id', [])
+            self.effective_sender = await self.resolve_effective_sender(
+                profile_id_list[0] if profile_id_list else None
+            )
+            logger.info(f"Effective sender resolved: {self.effective_sender.username} (id={self.effective_sender.id})")
+
             # Validate user is a participant
             is_participant = await self.check_participant()
             if not is_participant:
@@ -64,17 +78,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
             
             await self.accept()
-            logger.info(f"WebSocket accepted: user={self.user.username}, conversation={self.conversation_id}")
+            logger.info(f"WebSocket accepted: user={self.user.username}, effective_sender={self.effective_sender.username}, conversation={self.conversation_id}")
             
             # Broadcast presence: user joined with a request for others to reply
             await self.channel_layer.group_send(
                 self.room_group_name,
                 {
                     'type': 'user_presence',
-                    'user_id': self.user.id,
-                    'username': self.user.username,
+                    'user_id': self.effective_sender.id,
+                    'username': self.effective_sender.username,
                     'status': 'online',
-                    'request_reply': True,  # Ask others to let us know they are here
+                    'request_reply': True,
                 }
             )
         except Exception as e:
@@ -83,6 +97,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection with presence broadcast."""
+        effective = getattr(self, 'effective_sender', None) or getattr(self, 'user', None)
         logger.info(f"WebSocket disconnect: user={getattr(self.user, 'username', 'unknown')}, code={close_code}")
         
         if hasattr(self, 'room_group_name') and hasattr(self, 'user') and self.user.is_authenticated:
@@ -92,8 +107,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     self.room_group_name,
                     {
                         'type': 'user_presence',
-                        'user_id': self.user.id,
-                        'username': self.user.username,
+                        'user_id': effective.id if effective else self.user.id,
+                        'username': effective.username if effective else self.user.username,
                         'status': 'offline',
                     }
                 )
@@ -208,12 +223,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
     async def handle_typing(self, is_typing):
         """Handle typing indicator."""
+        effective = getattr(self, 'effective_sender', self.user)
         await self.channel_layer.group_send(
             self.room_group_name,
             {
                 'type': 'typing_indicator',
-                'user_id': self.user.id,
-                'username': self.user.username,
+                'user_id': effective.id,
+                'username': effective.username,
                 'is_typing': is_typing,
             }
         )
@@ -299,13 +315,40 @@ class ChatConsumer(AsyncWebsocketConsumer):
     # ===== Database Operations =====
     
     @database_sync_to_async
+    def resolve_effective_sender(self, profile_id):
+        """
+        Resolve the effective sender from the optional profile_id param.
+        
+        - If profile_id is provided and the profile is a sub-account of self.user → return sub-account
+        - Otherwise → return self.user (main account)
+        """
+        if not profile_id:
+            return self.user
+        try:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            profile = User.objects.get(id=profile_id)
+            # Security: only allow if it's a direct sub-account of the JWT user
+            if profile.parent_account_id == self.user.id:
+                return profile
+        except Exception:
+            pass
+        return self.user
+
+    @database_sync_to_async
     def check_participant(self):
-        """Check if user is a participant of the conversation."""
+        """Check if user (or their sub-account) is a participant of the conversation."""
         from .models import Conversation
         
         try:
             conversation = Conversation.objects.get(id=self.conversation_id)
-            return self.user.id in [conversation.consultant_id, conversation.client_id]
+            # Accept if JWT user is consultant or client directly
+            if self.user.id in [conversation.consultant_id, conversation.client_id]:
+                return True
+            # Accept if JWT user is the parent of the conversation's client (sub-account chat)
+            if conversation.client.parent_account_id == self.user.id:
+                return True
+            return False
         except Conversation.DoesNotExist:
             logger.warning(f"Conversation not found: {self.conversation_id}")
             return False
@@ -318,7 +361,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Save a message to database with proper transaction handling."""
         from .models import Conversation, Message
         
-        print(f"[CHAT] save_message called: conv={self.conversation_id}, user={self.user.id}")  # DEBUG
+        # Use the effective sender (resolved sub-account or main user)
+        sender = getattr(self, 'effective_sender', self.user)
+        print(f"[CHAT] save_message called: conv={self.conversation_id}, effective_sender={sender.id}")  # DEBUG
         
         try:
             with transaction.atomic():
@@ -327,11 +372,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 
                 message = Message.objects.create(
                     conversation=conversation,
-                    sender=self.user,
-                    content=content,
-                    delivery_channel='wa_pending' if (
-                        self.user.role == 'CONSULTANT' and conversation.client.phone_number
-                    ) else 'dashboard'
+                    sender=sender,
+                    content=content
                 )
                 print(f"[CHAT] Created message: {message.id}")  # DEBUG
                 
@@ -348,12 +390,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     cache.set(session_key, conversation.id, 86400)
                     logger.info(f"Locked WhatsApp session for client {conversation.client.id} to conversation {conversation.id}")
 
-                    if conversation.client.phone_number:
+                    # If the client is a sub-account with no phone, fall back to the
+                    # main (parent) account's verified phone number.
+                    notify_phone = conversation.client.phone_number
+                    if not notify_phone and conversation.client.parent_account_id:
+                        notify_phone = conversation.client.parent_account.phone_number
+
+                    if notify_phone:
                         # Send message to client's WhatsApp securely via Meta API using Celery
                         from notifications.tasks import send_whatsapp_text_task
                         
                         # Ensure phone number is formatted correctly
-                        client_phone = conversation.client.phone_number.replace('+', '').replace(' ', '')
+                        client_phone = notify_phone.replace('+', '').replace(' ', '')
                         
                         # Offload to Celery background task with message_id for status tracking
                         send_whatsapp_text_task.delay(
@@ -362,7 +410,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             message_id=message.id
                         )
                         logger.info(f"Queued outbound WhatsApp message to {client_phone[-4:]} via Celery")
+                    else:
+                        logger.warning(f"No phone number for client {conversation.client.id} or their main account — WhatsApp skipped")
                 # ------------------------------
+
 
                 return {
                     'id': message.id,
