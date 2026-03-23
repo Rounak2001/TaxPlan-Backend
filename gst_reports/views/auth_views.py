@@ -29,6 +29,7 @@ def generate_otp(request):
         return Response({"error": "GST Portal username is required"}, status=400)
 
     # Security: If user is a consultant, ensure this GSTIN belongs to an assigned client
+    client_id_param = request.data.get("client_id")
     if request.user.role == 'CONSULTANT':
         from core_auth.models import ClientProfile
         from consultants.models import ClientServiceRequest
@@ -37,14 +38,56 @@ def generate_otp(request):
             assigned_consultant__user=request.user,
         ).exclude(status__in=['completed', 'cancelled']).values_list('client_id', flat=True)
         
-        is_assigned = ClientProfile.objects.filter(
-            user_id__in=service_client_ids,
-            gstin__iexact=gstin.strip()
-        ).exists()
+        if client_id_param:
+            try:
+                client_id_val = int(client_id_param)
+                if client_id_val not in service_client_ids:
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied("You are not assigned to this client.")
+                
+                # Fetch profile and verify/update GSTIN
+                client_profile = ClientProfile.objects.get(user_id=client_id_val)
+                if not client_profile.gstin:
+                    client_profile.gstin = gstin.strip().upper()
+                    if username:
+                        client_profile.gst_username = username
+                    client_profile.save(update_fields=['gstin', 'gst_username'])
+                    is_assigned = True
+                elif client_profile.gstin.strip().upper() != gstin.strip().upper():
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied(f"GSTIN {gstin} does not match client's saved GSTIN ({client_profile.gstin}).")
+                else:
+                    is_assigned = True
+            except (ValueError, ClientProfile.DoesNotExist):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Invalid client specified.")
+        else:
+            is_assigned = ClientProfile.objects.filter(
+                user_id__in=service_client_ids,
+                gstin__iexact=gstin.strip()
+            ).exists()
+            
+            if not is_assigned:
+                # Fallback: if they have any assigned clients with a blank GSTIN, allow it.
+                blank_profiles = ClientProfile.objects.filter(
+                    user_id__in=service_client_ids
+                ).filter(gstin__isnull=True) | ClientProfile.objects.filter(
+                    user_id__in=service_client_ids, gstin=""
+                )
+                
+                if blank_profiles.exists():
+                    is_assigned = True
+                    # Auto assign if there's exactly one such client
+                    if blank_profiles.count() == 1:
+                        p = blank_profiles.first()
+                        p.gstin = gstin.strip().upper()
+                        if username:
+                            p.gst_username = username
+                        p.save(update_fields=['gstin', 'gst_username'])
         
         if not is_assigned:
             # Debugging check: list available GSTINs for this consultant
-            available_gstins = list(ClientProfile.objects.filter(user_id__in=service_client_ids).values_list('gstin', flat=True))
+            available_gstins = list(ClientProfile.objects.filter(user_id__in=service_client_ids).exclude(gstin__isnull=True).exclude(gstin="").values_list('gstin', flat=True))
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied(f"You are not authorized for GSTIN {gstin}. Your assigned GSTINs: {available_gstins}")
 
@@ -60,10 +103,15 @@ def generate_otp(request):
         headers=get_gst_headers(access_token)
     )
     
+    if status_code != 200:
+        error_msg = otp_data.get("message") or otp_data.get("error", {}).get("message") or str(otp_data)
+        return Response({"error": f"Sandbox API Error ({status_code}): {error_msg}"}, status=400)
+    
     data = otp_data.get("data", {})
-    if data.get("status_cd") == "0":
+    if data.get("status_cd") == "0" or not data:
+        error_msg = data.get("message", otp_data.get("message", "Failed to send OTP"))
         return Response({
-            "error": data.get("message", "Failed to send OTP"),
+            "error": error_msg,
             "error_code": data.get("error", {}).get("error_cd", "")
         }, status=400)
     
@@ -125,6 +173,9 @@ def verify_otp(request):
         headers=get_gst_headers(session.access_token)
     )
 
+    if status_code != 200:
+        error_msg = verify_data.get("message") or verify_data.get("error", {}).get("message") or str(verify_data)
+        return Response({"error": f"Sandbox API Error ({status_code}): {error_msg}"}, status=400)
     
     data = verify_data.get("data", {})
     taxpayer_token = data.get("access_token")

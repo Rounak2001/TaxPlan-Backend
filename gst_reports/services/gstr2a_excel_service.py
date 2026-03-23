@@ -69,7 +69,7 @@ class GSTR2AExcelService:
         all_other = []
 
         for y, m in periods:
-            period_data = self._fetch_all_sections(gstin, y, m, taxpayer_token)
+            period_data = self._fetch_all_sections(user, gstin, y, m, taxpayer_token)
             period_str = f"{m:02d}-{y}"
             b2b, cdnr, other = self._extract_data(period_data, period_str)
             all_b2b.extend(b2b)
@@ -95,30 +95,25 @@ class GSTR2AExcelService:
 
         return output, filename
 
-    def _fetch_all_sections(self, gstin, year, month, taxpayer_token):
-        headers = get_gst_headers(taxpayer_token)
+    def _fetch_all_sections(self, user, gstin, year, month, taxpayer_token):
+        from gst_reports.services.gst_data_service import GSTDataService
         period_data = {section: [] for section in self.sections}
         period = f"{month:02d}{year}"
 
         for section in self.sections:
-            api_url = f"{self.BASE_URL}/gst/compliance/tax-payer/gstrs/gstr-2a/{section}/{year}/{month:02d}"
-            status_code, response_data = safe_api_call("GET", api_url, headers=headers, params={"gstin": gstin})
+            data = GSTDataService.get_gstr2a_section(user, gstin, section, year, month, taxpayer_token)
 
-            if status_code == 200:
-                from gst_reports.utils import unwrap_sandbox_data
-                data = unwrap_sandbox_data(response_data)
+            records = []
+            if isinstance(data, dict):
+                if section in data:
+                    records = data[section]
+                elif "data" in data and isinstance(data["data"], dict) and section in data["data"]:
+                    records = data["data"][section]
 
-                records = []
-                if isinstance(data, dict):
-                    if section in data:
-                        records = data[section]
-                    elif "data" in data and isinstance(data["data"], dict) and section in data["data"]:
-                        records = data["data"][section]
+            if records:
+                period_data[section] = records
 
-                if records:
-                    period_data[section] = records
-
-            time.sleep(0.3)
+            time.sleep(0.1)
 
         return period_data
 
@@ -292,7 +287,8 @@ class GSTR2AExcelService:
 
         search_url = f"{self.BASE_URL}/gst/compliance/public/gstin/search"
 
-        for idx, gstin in enumerate(unique_gstins[:20]):
+        # Fetch up to 100 suppliers to balance completeness and performance.
+        for idx, gstin in enumerate(unique_gstins[:100]):
             try:
                 status_code, resp_data = safe_api_call("POST", search_url, headers=headers, json={"gstin": gstin})
                 if status_code == 200:
@@ -302,7 +298,7 @@ class GSTR2AExcelService:
                         gstin_map[gstin] = name
             except:
                 pass
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         return gstin_map
 

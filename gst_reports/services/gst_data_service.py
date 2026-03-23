@@ -92,6 +92,24 @@ class GSTDataService:
         )
     
     # =========================================================================
+    # GSTR-2A FETCHERS
+    # =========================================================================
+    @staticmethod
+    def get_gstr2a_section(user, gstin, section, year, month, taxpayer_token, force_refresh=False):
+        """Fetch a specific GSTR-2A section (b2b, cdn, isd, etc.)."""
+        return GSTDataService._fetch_with_cache(
+            user=user,
+            gstin=gstin,
+            return_type="GSTR2A",
+            section=section,
+            year=year,
+            month=month,
+            taxpayer_token=taxpayer_token,
+            api_url=f"{SANDBOX_BASE_URL}/gstrs/gstr-2a/{section}/{year}/{month:02d}",
+            force_refresh=force_refresh
+        )
+
+    # =========================================================================
     # GSTR-2B FETCHERS
     # =========================================================================
     @staticmethod
@@ -168,24 +186,40 @@ class GSTDataService:
                         print(f"[GST_CACHE] HIT: {return_type}/{section} for {gstin} (Period: {month}/{year})")
                         return data
         
-        headers = get_gst_headers(taxpayer_token)
-        status_code, response_data = safe_api_call("GET", api_url, headers=headers)
-        
-        if status_code != 200:
-            return None
-        
-        # Check for Sandbox errors within 200 response
-        if isinstance(response_data, dict):
-            sc = response_data.get("status_cd")
-            err_obj = response_data.get("error") if isinstance(response_data.get("error"), dict) else {}
-            msg = str(response_data.get("message", "") or err_obj.get("message", "")).lower()
+        import time
+        for attempt in range(2):
+            status_code, response_data = safe_api_call("GET", api_url, headers=get_gst_headers(taxpayer_token))
             
-            # If it's a "No data found" success-error, we process it as successful but empty
-            if (sc == "0" or sc == 0) and ("no data found" in msg or "no document found" in msg):
-                pass # Allow it to be unwrapped and saved as empty
-            elif sc == "0" or sc == 0 or "error" in response_data:
-                print(f"[GST_CACHE] ERROR in response for {gstin}")
+            if status_code != 200:
+                if attempt == 0 and status_code in [429, 503, 504]:
+                    time.sleep(2.0)
+                    continue
+                # If it's still failing after retry, raise an exception so the download interrupts cleanly 
+                # instead of silently missing months.
+                if status_code == 429:
+                    raise Exception("Sandbox API Rate Limit Hit. The data successfully fetched so far is cached safely. Please click Download again in 1 minute to resume.")
                 return None
+            
+            # Check for Sandbox errors within 200 response
+            if isinstance(response_data, dict):
+                sc = response_data.get("status_cd")
+                err_obj = response_data.get("error") if isinstance(response_data.get("error"), dict) else {}
+                msg = str(response_data.get("message", "") or err_obj.get("message", "")).lower()
+                
+                # If it's a "No data found" success-error, we process it as successful but empty
+                if (sc == "0" or sc == 0) and ("no data found" in msg or "no document found" in msg):
+                    pass # Allow it to be unwrapped and saved as empty
+                elif sc == "0" or sc == 0 or "error" in response_data:
+                    is_rate_limit = "rate" in msg or "too many" in msg or "limit" in msg
+                    if attempt == 0 and is_rate_limit:
+                        print(f"[GST_CACHE] Rate limited for {gstin}. Retrying...")
+                        time.sleep(2.0)
+                        continue
+                    elif is_rate_limit:
+                        raise Exception("Sandbox API Rate Limit Hit. The data successfully fetched so far is cached safely. Please click Download again in 1 minute to resume.")
+                    print(f"[GST_CACHE] ERROR in response for {gstin}")
+                    return None
+            break
 
         from gst_reports.utils import unwrap_sandbox_data
         data = unwrap_sandbox_data(response_data)
