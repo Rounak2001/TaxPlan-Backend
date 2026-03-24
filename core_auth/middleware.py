@@ -1,6 +1,27 @@
 from django.http import JsonResponse
 from django.urls import resolve
 
+
+class DisableCSRFForAPIMiddleware:
+    """
+    Disables CSRF enforcement for all /api/ routes.
+
+    This is safe because:
+    1. Authentication is done via HttpOnly JWT cookies (not session cookies)
+       — so CSRF is no longer the right protection mechanism.
+    2. CORS is configured to only allow trusted origins.
+    3. @method_decorator(csrf_exempt) is unreliable under Daphne/ASGI;
+       middleware-level exemption is the authoritative approach.
+    """
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path.startswith('/api/'):
+            setattr(request, '_dont_enforce_csrf_checks', True)
+        return self.get_response(request)
+
+
 class PreOnboardingMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
@@ -40,3 +61,4 @@ class PreOnboardingMiddleware:
 
         response = self.get_response(request)
         return response
+

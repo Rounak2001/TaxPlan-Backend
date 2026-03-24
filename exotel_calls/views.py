@@ -50,11 +50,10 @@ class InitiateCallView(APIView):
         from consultants.models import ClientServiceRequest
         from django.db.models import Q
 
-        # Security: Verify this client is assigned to the requesting consultant (Primary or Service)
-        is_primary = ClientProfile.objects.filter(user_id=client_id, assigned_consultant=user).exists()
+        # Security: Verify this client is assigned to the requesting consultant via active service
         is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
         
-        if not (is_primary or is_service):
+        if not is_service:
             return Response(
                 {'error': 'Client not found or not assigned to you'}, 
                 status=status.HTTP_404_NOT_FOUND
@@ -669,12 +668,7 @@ def _get_client_and_consultants(caller_phone_raw, logger=None):
     # Track unique consultants and their services
     consultants_map = {}
     
-    # 1. Check primary assigned consultant from ClientProfile
-    primary_consultant_user = None
-    if hasattr(client, 'client_profile') and client.client_profile:
-        primary_consultant_user = client.client_profile.assigned_consultant
-        
-    # 2. Add consultants from active ClientServiceRequests
+    # Add consultants from active ClientServiceRequests
     # We include 'pending' as well because the admin might have just assigned them
     # but the status hasn't moved to 'assigned' yet.
     active_statuses = list(ClientServiceRequest.ACTIVE_STATUSES) + ['pending']
@@ -696,14 +690,6 @@ def _get_client_and_consultants(caller_phone_raw, logger=None):
         else:
             if service_name not in consultants_map[consultant_user.id]['services']:
                 consultants_map[consultant_user.id]['services'].append(service_name)
-    
-    # 3. Add primary consultant ONLY if they are NOT already in the map (working on a service)
-    # OR if the map is entirely empty (preventing failure)
-    if primary_consultant_user and primary_consultant_user.id not in consultants_map:
-        consultants_map[primary_consultant_user.id] = {
-            'consultant': primary_consultant_user,
-            'services': ['General Advisory']
-        }
                 
     # Format list with digits (max 9)
     consultants_list = []

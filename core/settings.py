@@ -76,7 +76,6 @@ INSTALLED_APPS = [
     'storages',
     'channels',
     'django_extensions',
-    'django_lumen',
     
     # Internal Apps
     'core_auth',
@@ -113,6 +112,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'core_auth.middleware.DisableCSRFForAPIMiddleware',  # Must be before CsrfViewMiddleware
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -271,6 +271,8 @@ CORS_ALLOWED_ORIGINS = [
     # Onboarding portal — Vercel deployment
     "https://partner-onboard.taxplanadvisor.in",
 ]
+
+
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8080",

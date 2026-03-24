@@ -16,6 +16,7 @@ from .serializers import (
     ConversationCreateSerializer,
     MessageSerializer,
 )
+from core_auth.utils import get_active_profile
 
 
 class MessagePagination(PageNumberPagination):
@@ -39,8 +40,10 @@ class ConversationListCreateView(generics.ListCreateAPIView):
     
     def get_queryset(self):
         user = self.request.user
+        # Use active profile (sub-account or main account) as the client identity
+        active_client = get_active_profile(self.request)
         return Conversation.objects.filter(
-            Q(consultant=user) | Q(client=user)
+            Q(consultant=user) | Q(client=active_client)
         ).select_related('consultant', 'client').prefetch_related('messages')
     
     def create(self, request, *args, **kwargs):
@@ -65,18 +68,33 @@ class ConversationListCreateView(generics.ListCreateAPIView):
             )
         
         elif user.role == 'CLIENT':
-            # Get consultant_id from request or fallback to primary consultant
+            # Resolve the active profile: could be a sub-account or the main account.
+            # Conversations are created FOR the active profile (sub-account gets its own thread).
+            active_client = get_active_profile(request)
+
+            # Get consultant_id from request or fallback to assigned consultant
             consultant_id = request.data.get('consultant_id')
             
             if not consultant_id:
-                # Get assigned consultant from client profile
+                # Try active profile's own client_profile first
                 try:
-                    assigned_consultant = user.client_profile.assigned_consultant
-                    if assigned_consultant:
-                        consultant_id = assigned_consultant.id
+                    assigned = active_client.client_profile.assigned_consultant
+                    if assigned:
+                        consultant_id = assigned.id
                 except AttributeError:
                     pass
             
+            if not consultant_id:
+                # Fall back to the main account's assigned consultant
+                # (sub-accounts might not have their own ClientProfile yet)
+                try:
+                    main_account = active_client.parent_account or active_client
+                    assigned = main_account.client_profile.assigned_consultant
+                    if assigned:
+                        consultant_id = assigned.id
+                except AttributeError:
+                    pass
+
             if not consultant_id:
                 return Response(
                     {'error': 'No consultant assigned to this client and no consultant_id provided'},
@@ -85,7 +103,7 @@ class ConversationListCreateView(generics.ListCreateAPIView):
             
             conversation, created = Conversation.objects.get_or_create(
                 consultant_id=consultant_id,
-                client=user
+                client=active_client
             )
         else:
             return Response(
@@ -110,8 +128,9 @@ class ConversationDetailView(generics.RetrieveAPIView):
     
     def get_queryset(self):
         user = self.request.user
+        active_client = get_active_profile(self.request)
         return Conversation.objects.filter(
-            Q(consultant=user) | Q(client=user)
+            Q(consultant=user) | Q(client=active_client)
         ).select_related('consultant', 'client')
 
 
@@ -127,10 +146,11 @@ class MessageListView(generics.ListAPIView):
     def get_queryset(self):
         conversation_id = self.kwargs['conversation_id']
         user = self.request.user
-        
-        # Validate user is participant
+        active_client = get_active_profile(self.request)
+
+        # Validate user is participant (checks both consultant role and active client profile)
         conversation = get_object_or_404(
-            Conversation.objects.filter(Q(consultant=user) | Q(client=user)),
+            Conversation.objects.filter(Q(consultant=user) | Q(client=active_client)),
             id=conversation_id
         )
         
@@ -147,10 +167,11 @@ class MarkMessagesReadView(APIView):
     
     def post(self, request, conversation_id):
         user = request.user
-        
+        active_client = get_active_profile(request)
+
         # Validate user is participant
         conversation = get_object_or_404(
-            Conversation.objects.filter(Q(consultant=user) | Q(client=user)),
+            Conversation.objects.filter(Q(consultant=user) | Q(client=active_client)),
             id=conversation_id
         )
         
@@ -158,7 +179,7 @@ class MarkMessagesReadView(APIView):
         updated_count = Message.objects.filter(
             conversation=conversation,
             is_read=False
-        ).exclude(sender=user).update(is_read=True)
+        ).exclude(sender=active_client).update(is_read=True)
         
         return Response({
             'marked_read': updated_count

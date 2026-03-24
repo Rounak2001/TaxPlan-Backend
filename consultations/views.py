@@ -21,6 +21,7 @@ import threading
 import logging
 from notifications.signals import create_and_push_notification
 from notifications.whatsapp_service import send_whatsapp_template
+from core_auth.utils import get_active_profile
 
 User = get_user_model()
 
@@ -89,7 +90,7 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
+        user = get_active_profile(self.request)
         if user.role == 'CONSULTANT':
             return ConsultationBooking.objects.filter(consultant=user)
         return ConsultationBooking.objects.filter(client=user)
@@ -213,7 +214,7 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
     @action(detail=True, methods=['post'])
     def reschedule(self, request, pk=None):
         booking = self.get_object()
-        user = request.user
+        user = get_active_profile(request)
         
         # Ensure user is part of the booking
         if user not in [booking.client, booking.consultant]:

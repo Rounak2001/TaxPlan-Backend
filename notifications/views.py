@@ -4,13 +4,15 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Notification
 from .serializers import NotificationSerializer
+from core_auth.utils import get_active_profile
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = NotificationSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Notification.objects.filter(recipient=self.request.user)
+        user = get_active_profile(self.request)
+        return Notification.objects.filter(recipient=user)
 
     @action(detail=False, methods=['get'], url_path='unread-count')
     def unread_count(self, request):

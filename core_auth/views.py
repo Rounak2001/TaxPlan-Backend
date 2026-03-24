@@ -16,6 +16,8 @@ from core_auth.services.whatsapp_otp import (
 )
 
 from django.conf import settings
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 import requests
 MAGIC_LINK_EXPIRY_MINUTES=15
 logger = logging.getLogger(__name__)
@@ -222,6 +224,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             )
         return response
 
+@method_decorator(csrf_exempt, name='dispatch')
 class GoogleAuthView(APIView):
     """
     Handles Google OAuth login for Clients.
@@ -359,6 +362,7 @@ class GoogleAuthView(APIView):
             return Response({'error': 'Failed to verify token'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class LogoutView(APIView):
     """
     Logout by clearing HttpOnly cookies.
@@ -376,6 +380,7 @@ class LogoutView(APIView):
         response.delete_cookie('refresh_token', samesite=samesite, domain=domain)
         return response
 
+@method_decorator(csrf_exempt, name='dispatch')
 class CustomTokenRefreshView(APIView):
     """
     Custom token refresh that reads refresh_token from HttpOnly cookies
@@ -452,30 +457,119 @@ class CustomTokenRefreshView(APIView):
             )
 
 
+@method_decorator(csrf_exempt, name='dispatch')
+class VerifySessionView(APIView):
+    """
+    Lightweight stateless session verification endpoint.
+    Called by React on every page reload to restore auth state.
+
+    Strategy: decode + cryptographically verify the JWT from the HttpOnly cookie.
+    No database hit — custom claims (role, full_name, is_phone_verified) are
+    embedded in the token payload by set_auth_cookies() at login time.
+    Only falls back to a DB fetch if those claims are somehow absent.
+    """
+    authentication_classes = []  # Manual cookie extraction — skip DRF middleware
+    permission_classes = []
+
+    def get(self, request):
+        access_token = request.COOKIES.get('access_token')
+
+        if not access_token:
+            return Response(
+                {'error': 'Unauthorized. No session cookie.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        try:
+            from rest_framework_simplejwt.authentication import JWTAuthentication
+            from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+
+            jwt_authenticator = JWTAuthentication()
+            # Cryptographic signature verification — fast, no DB required
+            validated_token = jwt_authenticator.get_validated_token(access_token)
+            payload = validated_token.payload
+
+            # Read custom claims embedded at login by set_auth_cookies()
+            user_role = payload.get('user_role')
+            full_name = payload.get('full_name')
+            is_phone_verified = payload.get('is_phone_verified')
+            user_id = payload.get('user_id')
+            email = payload.get('email')
+
+            # If any critical claim is missing, do a single targeted DB fetch
+            if not user_role or email is None:
+                user = jwt_authenticator.get_user(validated_token)
+                user_role = user.role
+                full_name = f"{user.first_name} {user.last_name}".strip() or user.username
+                is_phone_verified = user.is_phone_verified
+                user_id = user.id
+                email = user.email
+
+            return Response({
+                'isAuthenticated': True,
+                'user': {
+                    'id': user_id,
+                    'email': email,
+                    'role': user_role,
+                    'full_name': full_name,
+                    'is_phone_verified': is_phone_verified,
+                }
+            }, status=status.HTTP_200_OK)
+
+        except Exception:
+            # Token expired, tampered with, or invalid
+            return Response(
+                {'error': 'Session expired or invalid.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+
 class UserDashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
+        from .utils import get_active_profile
+        auth_user = request.user
+        active_user = get_active_profile(request)
+        
+        # Always use the main account (parent) to list sub-accounts
+        main_user = auth_user.parent_account if auth_user.parent_account else auth_user
+        
+        sub_accounts_data = [
+            {
+                "id": sub.id,
+                "first_name": sub.first_name,
+                "last_name": sub.last_name,
+                "username": sub.username
+            } for sub in main_user.sub_accounts.all()
+        ]
+        
         data = {
-            "id": user.id,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "full_name": f"{user.first_name} {user.last_name}".strip() or user.username,
-            "username": user.username,
-            "email": user.email,
-            "phone": user.phone_number,
-            "role": user.role,
-            "is_onboarded": user.is_onboarded,
-            "is_phone_verified": user.is_phone_verified,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "email": user.email,
-            "phone": user.phone_number,
+            "id": auth_user.id,
+            "first_name": auth_user.first_name,
+            "last_name": auth_user.last_name,
+            "full_name": f"{auth_user.first_name} {auth_user.last_name}".strip() or auth_user.username,
+            "username": auth_user.username,
+            "email": auth_user.email,
+            "phone": auth_user.phone_number,
+            "role": auth_user.role,
+            "is_onboarded": auth_user.is_onboarded,
+            "is_phone_verified": auth_user.is_phone_verified,
+            "sub_accounts": sub_accounts_data,
+            "active_profile": {
+                "id": active_user.id,
+                "first_name": active_user.first_name,
+                "last_name": active_user.last_name,
+                "full_name": f"{active_user.first_name} {active_user.last_name}".strip() or active_user.username,
+                "username": active_user.username,
+                "role": active_user.role,
+                "is_sub_account": active_user.id != auth_user.id,
+            }
         }
 
-        if user.role == "CONSULTANT":
+        if auth_user.role == "CONSULTANT":
             try:
+<<<<<<< HEAD
                 profile = user.consultant_service_profile
                 try:
                     from consultant_onboarding.models import ConsultantApplication
@@ -490,6 +584,9 @@ class UserDashboardView(APIView):
                         unlock_state = {}
                 except Exception:
                     unlock_state = {}
+=======
+                profile = auth_user.consultant_service_profile
+>>>>>>> main
                 from consultants.models import ConsultantServiceExpertise
                 services = list(
                     ConsultantServiceExpertise.objects.filter(consultant=profile)
@@ -513,13 +610,14 @@ class UserDashboardView(APIView):
                 }
             except Exception:
                 data["stats"] = None
-        if user.role == "CLIENT":
+        if auth_user.role == "CLIENT":
             try:
-                profile = user.client_profile
+                profile = auth_user.client_profile
                 data["pan"] = profile.pan_number
                 data["gst"] = profile.gstin
                 
-                advisor = profile.assigned_consultant
+                from consultants.utils import get_active_consultant_for_client
+                advisor = get_active_consultant_for_client(user)
                 advisor_data = None
                 
                 if advisor:
@@ -551,6 +649,66 @@ class UserDashboardView(APIView):
                 data["compliance"] = None
         
         return Response(data)
+
+
+class ActivateProfileView(APIView):
+    """
+    Netflix-style: Sets an HttpOnly 'active_profile' cookie for sub-account switching.
+    POST /api/auth/profiles/activate/  { "profile_id": 5 }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        profile_id = request.data.get('profile_id')
+        if not profile_id:
+            return Response({'error': 'profile_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            profile_user = User.objects.get(id=profile_id)
+        except User.DoesNotExist:
+            return Response({'error': 'Profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Security: only allow switching to own sub-accounts
+        is_own_subaccount = profile_user.parent_account == request.user
+        is_self = profile_user == request.user
+        if not (is_own_subaccount or is_self):
+            return Response({'error': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        response = Response({
+            'success': True,
+            'active_profile': {
+                'id': profile_user.id,
+                'first_name': profile_user.first_name,
+                'last_name': profile_user.last_name,
+                'full_name': f"{profile_user.first_name} {profile_user.last_name}".strip() or profile_user.username,
+                'username': profile_user.username,
+                'is_sub_account': is_own_subaccount,
+            }
+        })
+
+        # Set HttpOnly cookie — browser sends this automatically on every request
+        response.set_cookie(
+            key='active_profile',
+            value=str(profile_user.id),
+            httponly=True,
+            secure=True,
+            samesite='None',
+            max_age=43200,  # 12 hours, like Netflix
+        )
+        return response
+
+
+class DeactivateProfileView(APIView):
+    """
+    Clears the active_profile cookie, returning to the main account context.
+    POST /api/auth/profiles/deactivate/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        response = Response({'success': True, 'message': 'Switched back to main account.'})
+        response.delete_cookie('active_profile', samesite='None')
+        return response
 
 
 class WebSocketTokenView(APIView):
@@ -599,6 +757,8 @@ class ClientProfileView(APIView):
         
         try:
             profile = user.client_profile
+            from consultants.utils import get_active_consultant_for_client
+            active_consultant = get_active_consultant_for_client(user)
             data = {
                 'full_name': f"{user.first_name} {user.last_name}".strip(),
                 'email': user.email,
@@ -607,7 +767,7 @@ class ClientProfileView(APIView):
                 'gstin': profile.gstin,
                 'gst_username': profile.gst_username,
                 'is_onboarded': user.is_onboarded,
-                'assigned_consultant': profile.assigned_consultant.get_full_name() if profile.assigned_consultant else None,
+                'assigned_consultant': active_consultant.get_full_name() if active_consultant else None,
             }
             return Response(data)
         except ClientProfile.DoesNotExist:
@@ -667,18 +827,14 @@ class ConsultantClientsView(APIView):
         if user.role != User.CONSULTANT:
             return Response({'error': 'Only consultants can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
         
-        # Get clients assigned via ClientProfile (Primary Consultant)
-        primary_clients = ClientProfile.objects.filter(assigned_consultant=user).values_list('user_id', flat=True)
-        
-        # Get clients assigned via ClientServiceRequest (Service Consultant)
-        # Only include clients with active (non-terminal) service requests
+        # Get clients assigned via ClientServiceRequest (active services only)
         from consultants.models import ClientServiceRequest
         service_clients = ClientServiceRequest.objects.filter(
             assigned_consultant__user=user
         ).exclude(status__in=['completed', 'cancelled']).values_list('client_id', flat=True)
         
-        # Combine and get unique client IDs
-        client_ids = set(list(primary_clients) + list(service_clients))
+        # Unique client IDs
+        client_ids = set(service_clients)
         
         # Fetch profiles with user data
         assigned_clients = ClientProfile.objects.filter(user_id__in=client_ids).select_related('user')
@@ -820,6 +976,7 @@ def _generate_magic_token(user, purpose='LOGIN'):
     return magic_token
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ClientRegisterView(APIView):
     """
     Register a new Client with email + password.
@@ -929,6 +1086,7 @@ class ClientRegisterView(APIView):
         return set_auth_cookies(response, user)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ClientEmailLoginView(APIView):
     """
     Login a Client with email + password.
@@ -990,6 +1148,7 @@ class ClientEmailLoginView(APIView):
         return set_auth_cookies(response, authenticated_user)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class SendMagicLinkView(APIView):
     """
     Send a magic link login email.
@@ -1100,6 +1259,7 @@ class SendMagicLinkView(APIView):
         })
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class VerifyMagicLinkView(APIView):
     """
     Verify a magic link token and log the user in.
@@ -1149,6 +1309,7 @@ class VerifyMagicLinkView(APIView):
         return set_auth_cookies(response, user)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ForgotPasswordView(APIView):
     """
     Send a password reset email.
@@ -1232,6 +1393,7 @@ class ForgotPasswordView(APIView):
         return success_response
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ResetPasswordView(APIView):
     """
     Reset password using a token from the reset email.
@@ -1297,3 +1459,27 @@ class ResetPasswordView(APIView):
             'success': True,
             'message': 'Password has been reset successfully. You can now login with your new password.',
         })
+
+
+# ─── Sub-Account Management ─────────────────────────────────────────────────
+from rest_framework.viewsets import ModelViewSet
+from core_auth.serializers import SubAccountSerializer
+
+class SubAccountViewSet(ModelViewSet):
+    """
+    ViewSet for managing family sub-accounts.
+    - LIST: Returns sub-accounts owned by the authenticated user.
+    - CREATE: Creates a new sub-account linked to the authenticated user.
+    - UPDATE/PARTIAL_UPDATE: Edits a sub-account's name.
+    - DELETE: Removes a sub-account.
+    """
+    serializer_class = SubAccountSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return User.objects.filter(parent_account=self.request.user)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context

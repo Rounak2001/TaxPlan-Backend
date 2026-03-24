@@ -94,8 +94,9 @@ class ConsultationBookingSerializer(serializers.ModelSerializer):
         return data
     
     def create(self, validated_data):
+        from core_auth.utils import get_active_profile
         uploaded_attachments = validated_data.pop('uploaded_attachments', [])
-        validated_data['client'] = self.context['request'].user
+        validated_data['client'] = get_active_profile(self.context['request'])
         booking = super().create(validated_data)
         
         for file in uploaded_attachments:

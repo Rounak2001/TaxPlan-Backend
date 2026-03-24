@@ -41,10 +41,8 @@ if not admin.site.is_registered(ConsultantProfile):
 
 @admin.register(ClientProfile)
 class ClientProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'assigned_consultant', 'pan_number')
-    list_filter = ('assigned_consultant',)
+    list_display = ('user', 'pan_number')
     search_fields = ('user__username', 'user__email', 'pan_number')
-    autocomplete_fields = ['assigned_consultant']
 
 @admin.register(ContactSubmission)
 class ContactSubmissionAdmin(admin.ModelAdmin):

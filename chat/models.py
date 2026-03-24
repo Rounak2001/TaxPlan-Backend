@@ -41,6 +41,14 @@ class Message(models.Model):
     """
     Represents a single message within a conversation.
     """
+    DELIVERY_CHANNEL_CHOICES = [
+        ('dashboard', 'Dashboard Only'),
+        ('wa_pending', 'WhatsApp Pending'),
+        ('wa_text', 'WhatsApp Text Sent'),
+        ('wa_template', 'WhatsApp Template Fallback'),
+        ('wa_failed', 'WhatsApp Failed'),
+    ]
+
     conversation = models.ForeignKey(
         Conversation,
         on_delete=models.CASCADE,
@@ -54,6 +62,12 @@ class Message(models.Model):
     content = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
     is_read = models.BooleanField(default=False)
+    delivery_channel = models.CharField(
+        max_length=20,
+        choices=DELIVERY_CHANNEL_CHOICES,
+        default='dashboard',
+        help_text='How this message was delivered to the recipient'
+    )
 
     class Meta:
         ordering = ['timestamp']

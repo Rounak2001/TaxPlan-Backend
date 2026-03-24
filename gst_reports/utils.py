@@ -78,24 +78,22 @@ def get_valid_session(session_id, user=None):
     
     # Security: Validate session ownership or relationship if user is provided
     if user and session.user != user:
-        from core_auth.models import ClientProfile
+        from consultants.models import ClientServiceRequest
         is_authorized = False
         
         # Consultant accessing their client's session
         if user.role == 'CONSULTANT':
-            is_authorized = ClientProfile.objects.filter(
-                assigned_consultant=user, 
-                gstin=session.gstin,
-                user=session.user
-            ).exists()
+            is_authorized = ClientServiceRequest.objects.filter(
+                assigned_consultant__user=user,
+                client=session.user,
+            ).exclude(status__in=['completed', 'cancelled']).exists()
             
         # Client accessing their consultant's session
         elif user.role == 'CLIENT':
-            try:
-                profile = ClientProfile.objects.get(user=user)
-                is_authorized = (profile.assigned_consultant == session.user)
-            except ClientProfile.DoesNotExist:
-                pass
+            is_authorized = ClientServiceRequest.objects.filter(
+                client=user,
+                assigned_consultant__user=session.user,
+            ).exclude(status__in=['completed', 'cancelled']).exists()
                 
         if not is_authorized:
             return None, "Unauthorized access to this session"
@@ -122,7 +120,7 @@ def find_active_gst_session(user, gstin):
     - OR Owned by the consultant (if user is their assigned client)
     """
     from django.db.models import Q
-    from core_auth.models import ClientProfile
+    from consultants.models import ClientServiceRequest
     
     now = timezone.now()
     base_query = UnifiedGSTSession.objects.filter(
@@ -138,25 +136,23 @@ def find_active_gst_session(user, gstin):
 
     # 2. Check if user is a consultant and their client has a session
     if user.role == 'CONSULTANT':
-        client_ids = ClientProfile.objects.filter(
-            assigned_consultant=user, 
-            gstin=gstin
-        ).values_list('user_id', flat=True)
+        client_ids = ClientServiceRequest.objects.filter(
+            assigned_consultant__user=user,
+        ).exclude(status__in=['completed', 'cancelled']).values_list('client_id', flat=True)
         
-        session = base_query.filter(user_id__in=client_ids).first()
+        session = base_query.filter(user_id__in=client_ids, gstin=gstin).first()
         if session:
             return session
 
     # 3. Check if user is a client and their consultant has a session
     if user.role == 'CLIENT':
-        try:
-            profile = ClientProfile.objects.get(user=user)
-            if profile.assigned_consultant:
-                session = base_query.filter(user=profile.assigned_consultant).first()
-                if session:
-                    return session
-        except ClientProfile.DoesNotExist:
-            pass
+        consultant_ids = ClientServiceRequest.objects.filter(
+            client=user,
+        ).exclude(status__in=['completed', 'cancelled']).values_list('assigned_consultant__user_id', flat=True)
+        
+        session = base_query.filter(user_id__in=consultant_ids).first()
+        if session:
+            return session
 
     return None
 

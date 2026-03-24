@@ -73,56 +73,6 @@ def auto_remove_consultant_from_topic(sender, instance, **kwargs):
 
 
 
-@receiver(post_save, sender=ClientServiceRequest)
-def sync_consultant_to_client_profile(sender, instance, created, **kwargs):
-    """
-    When a consultant is assigned to a service request,
-    automatically update the client's profile with this consultant.
-    
-    Logic: Most recent assignment wins - the client's primary consultant
-    is always updated to the most recently assigned consultant.
-    """
-    if instance.assigned_consultant and instance.status not in ['completed', 'cancelled']:
-        try:
-            # Get or create the client profile
-            client_profile, _ = ClientProfile.objects.get_or_create(
-                user=instance.client,
-                defaults={'assigned_consultant': instance.assigned_consultant.user}
-            )
-            
-            # Update primary consultant if not set
-            if not client_profile.assigned_consultant:
-                client_profile.assigned_consultant = instance.assigned_consultant.user
-                client_profile.save()
-                print(f"✅ Set primary consultant: {instance.assigned_consultant.full_name} → Client: {instance.client.email}")
-            else:
-                # Even if already set, check if it's the same or if we should leave it
-                print(f"ℹ️ Consultant assignment sync for {instance.client.email}")
-                
-        except Exception as e:
-            print(f"Error syncing consultant assignment: {e}")
-    else:
-        # Service completed, cancelled, or consultant explicitly unassigned
-        # Check if we should clear the ClientProfile assignment
-        try:
-            client_profile = ClientProfile.objects.filter(user=instance.client).first()
-            if client_profile and client_profile.assigned_consultant:
-                # Check if there are ANY active (non-completed/cancelled) requests with THIS consultant
-                active_requests_exist = ClientServiceRequest.objects.filter(
-                    client=instance.client,
-                    assigned_consultant__user=client_profile.assigned_consultant
-                ).exclude(status__in=['completed', 'cancelled']).exists()
-                
-                if not active_requests_exist:
-                    # No more active services with this consultant - unassign from profile
-                    client_profile.assigned_consultant = None
-                    client_profile.save()
-                    print(f"✅ Cleared consultant from ClientProfile: {instance.client.email} (No more active services)")
-        except Exception as e:
-            print(f"Error clearing consultant assignment: {e}")
-
-
-
 
 @receiver(post_save, sender=ClientServiceRequest)
 def create_pending_document_requests(sender, instance, **kwargs):

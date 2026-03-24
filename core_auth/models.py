@@ -2,6 +2,7 @@ import uuid
 
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.utils import timezone
 
 class User(AbstractUser):
     ADMIN = 'ADMIN'
@@ -18,6 +19,14 @@ class User(AbstractUser):
     phone_number = models.CharField(max_length=15, unique=True, null=True, blank=True)
     is_phone_verified = models.BooleanField(default=False)
     is_onboarded = models.BooleanField(default=False)
+    parent_account = models.ForeignKey(
+        'self', 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True, 
+        related_name='sub_accounts',
+        help_text="If set, this user is a sub-account managed by the parent_account."
+    )
 
     def __str__(self):
         return f"{self.username} ({self.role})"
@@ -26,7 +35,6 @@ class ConsultantProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='consultant_profile')
     max_capacity = models.IntegerField(default=10)
     current_load = models.IntegerField(default=0)
-    current_load = models.IntegerField(default=0)
     consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.00)
 
     def __str__(self):
@@ -34,14 +42,6 @@ class ConsultantProfile(models.Model):
 
 class ClientProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='client_profile')
-    assigned_consultant = models.ForeignKey(
-        User, 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True, 
-        limit_choices_to={'role': User.CONSULTANT},
-        related_name='assigned_clients'
-    )
     pan_number = models.CharField(max_length=10, null=True, blank=True)
     gstin = models.CharField(max_length=15, null=True, blank=True)
     gst_username = models.CharField(max_length=255, null=True, blank=True)
@@ -106,7 +106,6 @@ class MagicLinkToken(models.Model):
 
     @property
     def is_expired(self):
-        from django.utils import timezone
         return timezone.now() > self.expires_at
 
     @property
