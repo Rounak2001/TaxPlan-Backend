@@ -93,6 +93,7 @@ class WhatsAppWebhookView(APIView):
         
         # Dispatch to async handler to avoid blocking the webhook response
         from django.core.cache import cache
+        from django.db.models import Q
         from core_auth.models import User
         from chat.models import Conversation, Message
         from asgiref.sync import async_to_sync
@@ -112,21 +113,33 @@ class WhatsAppWebhookView(APIView):
             self.send_whatsapp_text(phone_number, "Sorry, we couldn't find an account associated with this phone number. Please register first.")
             return
 
+        # Load ALL conversations for this family: main account + sub-accounts.
+        # This allows a sub-account's thread to be selected from the shared family number.
+        all_conversations = Conversation.objects.filter(
+            Q(client=client) | Q(client__parent_account=client)
+        ).select_related('client', 'consultant')
+
         # Handle #switch or #menu keyword
         session_key = f"wa_session_{client.id}"
         if content.lower() in ['#switch', '#menu', 'menu', 'switch']:
             cache.delete(session_key)
-            self.send_consultant_menu(client, phone_number)
+            self.send_consultant_menu(client, phone_number, all_conversations)
             return
             
-        # Is there a list_reply selection?
-        if msg_type == 'interactive' and content.startswith('select_consultant_'):
-            consultant_id = content.replace('select_consultant_', '')
+        # Is there a list_reply selection? (format: select_conv_<conv_id>)
+        if msg_type == 'interactive' and content.startswith('select_conv_'):
+            conv_id = content.replace('select_conv_', '')
             try:
-                # Verify conversation exists
-                conv = Conversation.objects.get(client=client, consultant_id=consultant_id)
+                conv = all_conversations.get(id=conv_id)
                 cache.set(session_key, conv.id, 86400)  # 24 hour session
-                self.send_whatsapp_text(phone_number, f"✅ You are now chatting with {conv.consultant.first_name or conv.consultant.username}. Send your message.")
+                member_label = (
+                    f" (for {conv.client.first_name or conv.client.username})"
+                    if conv.client_id != client.id else ""
+                )
+                self.send_whatsapp_text(
+                    phone_number,
+                    f"\u2705 Chatting with {conv.consultant.first_name or conv.consultant.username}{member_label}. Send your message."
+                )
             except Conversation.DoesNotExist:
                 self.send_whatsapp_text(phone_number, "Invalid selection. Please try again with #menu.")
             return
@@ -135,15 +148,12 @@ class WhatsAppWebhookView(APIView):
         active_conv_id = cache.get(session_key)
         
         if not active_conv_id:
-            # Need to pick a consultant
-            active_conversations = Conversation.objects.filter(client=client)
-            
-            if active_conversations.count() == 0:
-                # Fallback: Route to an Admin if the client has no consultants assigned
-                from core_auth.models import User
+            total = all_conversations.count()
+
+            if total == 0:
+                # Fallback: Route to an Admin if the family has no consultants assigned
                 first_admin = User.objects.filter(role=User.ADMIN, is_active=True).first()
                 if first_admin:
-                    # Create a default conversation with the admin
                     conv, created = Conversation.objects.get_or_create(
                         client=client,
                         consultant=first_admin
@@ -155,15 +165,15 @@ class WhatsAppWebhookView(APIView):
                     logger.warning(f"No active consultants or admins found for client {phone_number}")
                     self.send_whatsapp_text(phone_number, "We are currently unavailable. Please try again later.")
                     return
-            elif active_conversations.count() == 1:
+            elif total == 1:
                 # Auto-select the only conversation
-                conv = active_conversations.first()
+                conv = all_conversations.first()
                 cache.set(session_key, conv.id, 86400)
                 active_conv_id = conv.id
                 logger.info(f"Auto-routed message from {phone_number} to sole consultant {conv.consultant.username}")
             else:
-                # Multiple consultants, require selection
-                self.send_consultant_menu(client, phone_number)
+                # Multiple conversations (could span main + sub-accounts), require selection
+                self.send_consultant_menu(client, phone_number, all_conversations)
                 return
 
         # We have an active conversation, save the message
@@ -171,18 +181,17 @@ class WhatsAppWebhookView(APIView):
             conv = Conversation.objects.get(id=active_conv_id)
             
             if not content and msg_type not in ['text', 'interactive']:
-                # Handle images/docs later, just say acknowledged for now
                 content = f"[Sent a {msg_type} message outside dashboard]"
-                
-            # Create message in DB
+
+            # Sender is the conversation's client (could be a sub-account, not always `client`)
             msg = Message.objects.create(
                 conversation=conv,
-                sender=client,
+                sender=conv.client,
                 content=content
             )
             conv.save(update_fields=['updated_at'])
             
-            logger.info(f"Saved WhatsApp msg to DB: {msg.id}")
+            logger.info(f"Saved WhatsApp msg to DB: {msg.id} (sender={conv.client.username})")
             
             # Broadcast via Channels
             channel_layer = get_channel_layer()
@@ -191,8 +200,8 @@ class WhatsAppWebhookView(APIView):
                 {
                     'type': 'chat_message',
                     'id': msg.id,
-                    'sender_id': client.id,
-                    'sender_username': client.username,
+                    'sender_id': conv.client.id,
+                    'sender_username': conv.client.username,
                     'content': msg.content,
                     'timestamp': msg.timestamp.isoformat(),
                     'is_read': False,
@@ -201,7 +210,7 @@ class WhatsAppWebhookView(APIView):
             
         except Conversation.DoesNotExist:
             cache.delete(session_key)
-            self.send_consultant_menu(client, phone_number)
+            self.send_consultant_menu(client, phone_number, all_conversations)
 
     def send_whatsapp_text(self, phone_number, text):
         """Helper to send a free-form WhatsApp text message"""
@@ -239,24 +248,30 @@ class WhatsAppWebhookView(APIView):
             logger.error(f"Error sending WA text: {e}")
             return False, {'message': str(e), 'code': -1}
 
-    def send_consultant_menu(self, client, phone_number):
-        """Send an Interactive List Message to choose a consultant"""
+    def send_consultant_menu(self, client, phone_number, all_conversations=None):
+        """Send an Interactive List Message to choose a conversation (including sub-accounts)."""
         from chat.models import Conversation
+        from django.db.models import Q
+
+        if all_conversations is None:
+            all_conversations = Conversation.objects.filter(
+                Q(client=client) | Q(client__parent_account=client)
+            ).select_related('client', 'consultant')
         
-        active_conversations = Conversation.objects.filter(client=client).select_related('consultant')
-        
-        if active_conversations.count() == 0:
+        if not all_conversations.exists():
             self.send_whatsapp_text(phone_number, "You have no active consultant chats.")
             return
             
         rows = []
-        for conv in active_conversations:
-            name = conv.consultant.first_name or conv.consultant.username
-            role = "Consultant"
+        for conv in all_conversations:
+            consultant_name = conv.consultant.first_name or conv.consultant.username
+            # Show profile context: "Priya" for main, "Priya (for Meera)" for sub-account
+            is_sub = conv.client_id != client.id
+            member_label = f" (for {conv.client.first_name or conv.client.username})" if is_sub else ""
             rows.append({
-                "id": f"select_consultant_{conv.consultant.id}",
-                "title": name[:24],
-                "description": role[:72]
+                "id": f"select_conv_{conv.id}",          # conv ID, not consultant ID
+                "title": f"{consultant_name}{member_label}"[:24],
+                "description": ("Family member account" if is_sub else "Your account")[:72]
             })
             
         # Limit rows to 10 for interactive messages
