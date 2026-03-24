@@ -12,6 +12,7 @@ from .serializers import (
     TopicSerializer, WeeklyAvailabilitySerializer, DateOverrideSerializer,
     ConsultationBookingSerializer
 )
+from .topic_access import get_consultants_for_topic, resolve_topic
 from .utils import trigger_recording_bot
 from .google_meet import GoogleMeetService
 import razorpay
@@ -373,21 +374,11 @@ def consultants_by_date(request):
     else:
         day_of_week += 1
 
-    # Get all consultants
-    if topic_id:
-        if str(topic_id).isdigit():
-            consultants = User.objects.filter(role='CONSULTANT', topics__id=int(topic_id))
-        else:
-            # Fallback to name search if ID is not a number (handles frontend slugs)
-            from django.db import models
-            from consultations.models import Topic
-            topic = Topic.objects.filter(models.Q(name__iexact=topic_id) | models.Q(name__icontains=topic_id)).first()
-            if topic:
-                consultants = User.objects.filter(role='CONSULTANT', topics=topic)
-            else:
-                consultants = User.objects.none()
+    topic = resolve_topic(topic_id)
+    if topic_id and topic is None:
+        consultants = User.objects.none()
     else:
-        consultants = User.objects.filter(role='CONSULTANT')
+        consultants = get_consultants_for_topic(topic)
 
     available_consultants = []
 
@@ -639,11 +630,11 @@ def available_consultants(request):
     else:
         day_of_week += 1
 
-    # Get all consultants
-    if topic_id:
-        consultants = User.objects.filter(role='CONSULTANT', topics__id=topic_id)
+    topic = resolve_topic(topic_id)
+    if topic_id and topic is None:
+        consultants = User.objects.none()
     else:
-        consultants = User.objects.filter(role='CONSULTANT')
+        consultants = get_consultants_for_topic(topic)
     available_consultants = []
 
     for consultant in consultants:

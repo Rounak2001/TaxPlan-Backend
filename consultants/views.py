@@ -31,6 +31,8 @@ from consultant_onboarding.category_access import (
 )
 from consultant_onboarding.expertise_sync import sync_passed_sessions_to_consultant
 
+MANUAL_CONSULTATION_CATEGORY_NAME = "consultation"
+
 
 def _get_consultant_application(user):
     from consultant_onboarding.models import ConsultantApplication
@@ -57,6 +59,11 @@ def _get_unlock_state_for_user(user):
         'available_assessment_categories': assessment.get('available_assessment_categories', []),
         'can_start_assessment': assessment.get('can_start_assessment', False),
     }
+
+
+def _is_manual_consultation_service(service):
+    category_name = getattr(getattr(service, "category", None), "name", "") or ""
+    return category_name.strip().lower() == MANUAL_CONSULTATION_CATEGORY_NAME
 
 
 class ServiceCategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -91,7 +98,9 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         """
         unlock_state = _get_unlock_state_for_user(request.user)
         unlocked_categories = unlock_state['unlocked_categories']
-        categories = ServiceCategory.objects.filter(is_active=True).prefetch_related(
+        categories = ServiceCategory.objects.filter(is_active=True).exclude(
+            name__iexact=MANUAL_CONSULTATION_CATEGORY_NAME
+        ).prefetch_related(
             Prefetch(
                 'services',
                 queryset=Service.objects.filter(is_active=True),
@@ -562,6 +571,22 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
         unlock_state = _get_unlock_state_for_user(request.user)
         unlocked_categories = unlock_state['unlocked_categories']
         requested_services = list(Service.objects.filter(id__in=service_ids).select_related('category'))
+        consultation_services = [
+            {
+                'id': service.id,
+                'title': service.title,
+            }
+            for service in requested_services
+            if _is_manual_consultation_service(service)
+        ]
+        if consultation_services:
+            return Response(
+                {
+                    'error': 'Consultation topics are enabled automatically from the services you offer and cannot be selected separately.',
+                    'consultation_services': consultation_services,
+                },
+                status=400,
+            )
         locked_services = [
             {
                 'id': service.id,
@@ -654,6 +679,23 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
                 status=400,
             )
 
+        consultation_services = [
+            {
+                'id': service.id,
+                'title': service.title,
+            }
+            for service in requested_services
+            if _is_manual_consultation_service(service)
+        ]
+        if consultation_services:
+            return Response(
+                {
+                    'error': 'Consultation topics are enabled automatically from the services you offer and cannot be selected separately.',
+                    'consultation_services': consultation_services,
+                },
+                status=400,
+            )
+
         locked_services = [
             {
                 'id': service.id,
@@ -676,14 +718,15 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
         # Remove old ones
         ConsultantServiceExpertise.objects.filter(consultant=profile).delete()
         
-        # Add new ones
-        new_expertise = [
-            ConsultantServiceExpertise(consultant=profile, service_id=sid)
-            for sid in service_ids
-        ]
-        ConsultantServiceExpertise.objects.bulk_create(new_expertise)
+        created_count = 0
+        for service_id in service_ids:
+            ConsultantServiceExpertise.objects.create(
+                consultant=profile,
+                service_id=service_id,
+            )
+            created_count += 1
         
-        return Response({'success': True, 'count': len(new_expertise)})
+        return Response({'success': True, 'count': created_count})
 
 
 class ClientServiceRequestViewSet(viewsets.ModelViewSet):

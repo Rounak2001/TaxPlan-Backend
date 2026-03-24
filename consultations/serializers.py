@@ -3,6 +3,7 @@ from django.utils import timezone
 from django.db.models import Q
 from datetime import timedelta
 from .models import Topic, WeeklyAvailability, DateOverride, ConsultationBooking, ConsultationAttachment
+from .topic_access import get_consultants_for_topic
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -71,9 +72,17 @@ class ConsultationBookingSerializer(serializers.ModelSerializer):
         This prevents race conditions where two users book the same slot simultaneously.
         """
         consultant = data.get('consultant')
+        topic = data.get('topic')
         booking_date = data.get('booking_date')
         start_time = data.get('start_time')
         end_time = data.get('end_time')
+
+        if consultant and topic:
+            consultant_is_eligible = get_consultants_for_topic(topic).filter(pk=consultant.pk).exists()
+            if not consultant_is_eligible:
+                raise serializers.ValidationError({
+                    'consultant': 'This consultant does not offer consultation for the selected topic.'
+                })
 
         # Check for overlaps with confirmed or pending bookings
         # We explicitly check for collisions
