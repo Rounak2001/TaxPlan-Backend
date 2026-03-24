@@ -17,6 +17,7 @@ from .models import (
 )
 from core_auth.models import User
 from consultants.models import ConsultantServiceProfile
+from .expertise_sync import sync_passed_sessions_to_consultant
 
 @admin.action(description='Approve applications and create live Consultant users')
 def approve_applications(modeladmin, request, queryset):
@@ -39,7 +40,6 @@ def approve_applications(modeladmin, request, queryset):
                     'role': User.CONSULTANT,
                     'is_onboarded': True,
                     'is_phone_verified': True, 
-                    'google_id': app.google_id
                 }
             )
             
@@ -50,7 +50,7 @@ def approve_applications(modeladmin, request, queryset):
                  user.save()
 
             # 2. Create their live profile
-            ConsultantServiceProfile.objects.get_or_create(
+            consultant_profile, _profile_created = ConsultantServiceProfile.objects.get_or_create(
                 user=user,
                 defaults={
                     'qualification': app.qualification,
@@ -60,6 +60,7 @@ def approve_applications(modeladmin, request, queryset):
                     'is_active': True
                 }
             )
+            sync_passed_sessions_to_consultant(app, consultant_profile=consultant_profile)
             
             # 3. Mark approved
             app.status = 'APPROVED'

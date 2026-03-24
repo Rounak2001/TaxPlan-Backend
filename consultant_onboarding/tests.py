@@ -3,15 +3,18 @@ from datetime import date
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.test.utils import override_settings
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory
 
 from . import scrutiny as scrutiny_module
 from . import video_questions as video_questions_module
+from .assessment_outcome import get_application_assessment_outcome
 from .authentication import generate_applicant_token
 from .credential_service import check_and_auto_generate_credentials, get_auto_credential_blocker
-from .models import ConsultantApplication, ConsultantDocument, IdentityDocument, UserSession, VideoResponse
-from .views.admin_panel import delete_consultant
+from .expertise_sync import sync_passed_sessions_to_consultant
+from .models import ConsultantApplication, ConsultantCredential, ConsultantDocument, IdentityDocument, UserSession, VideoResponse
+from .views.admin_panel import _generate_and_send_credentials, delete_consultant, dev_bootstrap_consultant
 from .views.auth import accept_declaration
 from .views.test_engine import TestTypeViewSet, UserSessionViewSet
 from .utils.name_matching import first_last_name, first_last_names_match, get_latest_verified_identity_name
@@ -143,6 +146,67 @@ class AutoCredentialGenerationTests(TestCase):
         self.assertTrue(success)
         self.assertEqual(reason, "Auto-generated credentials successfully")
         mocked_generator.assert_called_once_with(application)
+
+    @patch("consultant_onboarding.views.admin_panel.send_mail")
+    def test_generate_credentials_creates_live_consultant_without_google_id_on_user(self, mocked_send_mail):
+        application = self.make_eligible_application(google_id="google-sub-123")
+        mocked_send_mail.return_value = 1
+
+        success, result = _generate_and_send_credentials(application)
+
+        self.assertTrue(success)
+        consultant_user = User.objects.get(email=application.email)
+        self.assertEqual(consultant_user.role, User.CONSULTANT)
+        self.assertFalse(hasattr(consultant_user, "google_id"))
+        self.assertTrue(ConsultantServiceProfile.objects.filter(user=consultant_user).exists())
+        self.assertEqual(
+            ConsultantCredential.objects.get(application=application).username,
+            result["username"],
+        )
+
+    def test_generate_credentials_rejects_phone_conflict_without_stale_credential_row(self):
+        application = self.make_eligible_application(phone_number="+919999999999")
+        User.objects.create_user(
+            username="existing_client_phone",
+            email="existing-client@example.com",
+            password="password",
+            role=User.CLIENT,
+            phone_number="+919999999999",
+        )
+
+        success, result = _generate_and_send_credentials(application)
+
+        self.assertFalse(success)
+        self.assertIn("phone number", str(result))
+        self.assertFalse(ConsultantCredential.objects.filter(application=application).exists())
+        self.assertFalse(User.objects.filter(email=application.email, role=User.CONSULTANT).exists())
+
+    @override_settings(DEBUG=True)
+    def test_dev_bootstrap_consultant_creates_predictable_debug_account(self):
+        request = APIRequestFactory().post(
+            "/api/admin-panel/dev/bootstrap-consultant/",
+            {"email": "dev-bootstrap@example.com"},
+            format="json",
+        )
+
+        response = dev_bootstrap_consultant(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["username"].startswith("dev_consultant"))
+        self.assertEqual(response.data["passed_categories"], ["itr"])
+        self.assertEqual(response.data["auto_unlocked_categories"], ["registrations"])
+
+        application = ConsultantApplication.objects.get(email="dev-bootstrap@example.com")
+        consultant_user = User.objects.get(email=application.email)
+        self.assertEqual(consultant_user.role, User.CONSULTANT)
+        self.assertTrue(
+            UserSession.objects.filter(
+                application=application,
+                status="completed",
+                score__gte=35,
+            ).exists()
+        )
+        self.assertTrue(ConsultantCredential.objects.filter(application=application).exists())
 
 
 class DeleteConsultantEndpointTests(TestCase):
@@ -284,6 +348,95 @@ class AssessmentDomainSelectionTests(TestCase):
             domain_counts[question["domain"]] = domain_counts.get(question["domain"], 0) + 1
 
         self.assertEqual(domain_counts, {"itr": 25, "registrations": 25})
+        session = UserSession.objects.get(id=response.data["id"])
+        self.assertEqual(
+            session.selected_test_details,
+            {},
+        )
+
+    def test_completed_itr_session_auto_unlocks_registrations_and_other_main_categories_remain_available(self):
+        session = UserSession.objects.create(
+            application=self.application,
+            selected_domains=["itr"],
+            selected_test_details={
+                "itr": {
+                    "selected_service_ids": ["itr_salary_filing", "itr_general_consultation"],
+                }
+            },
+            question_set=[{"id": 1}],
+            video_question_set=[],
+            score=35,
+            status="completed",
+            end_time=timezone.now(),
+        )
+
+        outcome = get_application_assessment_outcome(self.application)
+
+        self.assertEqual(session.selected_test_details["itr"]["selected_service_ids"][0], "itr_salary_filing")
+        self.assertTrue(outcome["has_passed_assessment"])
+        self.assertEqual(outcome["unlocked_categories"], ["itr", "registrations"])
+        self.assertEqual(outcome["available_assessment_categories"], ["gstr", "scrutiny"])
+        self.assertTrue(outcome["can_start_assessment"])
+
+    def test_additional_unlock_assessment_blocks_already_unlocked_categories(self):
+        UserSession.objects.create(
+            application=self.application,
+            selected_domains=["itr"],
+            selected_test_details={
+                "itr": {"selected_service_ids": ["itr_salary_filing"]},
+            },
+            question_set=[{"id": 1}],
+            video_question_set=[],
+            score=35,
+            status="completed",
+            end_time=timezone.now(),
+        )
+
+        view = UserSessionViewSet.as_view({"post": "create"})
+        response = view(
+            self.make_request(
+                "post",
+                "/assessment/sessions/",
+                {"selected_tests": ["itr"]},
+            )
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("already unlocked", response.data["error"])
+
+    def test_additional_unlock_assessment_allows_remaining_main_category(self):
+        UserSession.objects.create(
+            application=self.application,
+            selected_domains=["itr"],
+            selected_test_details={
+                "itr": {"selected_service_ids": ["itr_salary_filing"]},
+            },
+            question_set=[{"id": 1}],
+            video_question_set=[],
+            score=35,
+            status="completed",
+            end_time=timezone.now(),
+        )
+
+        view = UserSessionViewSet.as_view({"post": "create"})
+        response = view(
+            self.make_request(
+                "post",
+                "/assessment/sessions/",
+                {
+                    "selected_tests": ["gstr"],
+                    "selected_test_details": [
+                        {
+                            "slug": "gstr",
+                            "selected_service_ids": ["gstr_monthly"],
+                        }
+                    ],
+                },
+            )
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["selected_domains"], ["gstr"])
 
     def test_scrutiny_income_tax_selection_scopes_mcqs_and_videos(self):
         view = UserSessionViewSet.as_view({"post": "create"})
@@ -388,3 +541,62 @@ class AssessmentDomainSelectionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.application.refresh_from_db()
         self.assertTrue(self.application.has_accepted_declaration)
+
+
+class ExpertiseSyncTests(TestCase):
+    def test_passed_session_seeds_consultant_expertise_once(self):
+        application = ConsultantApplication.objects.create(
+            email="seeded-consultant@example.com",
+            first_name="Seeded",
+            last_name="Consultant",
+        )
+        session = UserSession.objects.create(
+            application=application,
+            selected_domains=["itr"],
+            selected_test_details={
+                "itr": {
+                    "selected_service_ids": ["itr_salary_filing", "itr_general_consultation"],
+                }
+            },
+            question_set=[{"id": 1}],
+            video_question_set=[],
+            score=35,
+            status="completed",
+            end_time=timezone.now(),
+        )
+
+        consultant_user = User.objects.create_user(
+            username="seeded_consultant",
+            email=application.email,
+            password="password",
+            role=User.CONSULTANT,
+        )
+        consultant_profile = ConsultantServiceProfile.objects.create(user=consultant_user, qualification="CA")
+        returns_category = ServiceCategory.objects.create(name="Returns", description="Returns", is_active=True)
+        consultation_category = ServiceCategory.objects.create(name="Consultation", description="Consultation", is_active=True)
+        Service.objects.create(
+            category=returns_category,
+            title="ITR Salary Filing",
+            tat="2 days",
+            documents_required="PAN",
+        )
+        Service.objects.create(
+            category=consultation_category,
+            title="Tax Consultation",
+            tat="Session based",
+            documents_required="Notes",
+        )
+
+        result = sync_passed_sessions_to_consultant(application, consultant_profile=consultant_profile)
+
+        self.assertTrue(result["profile_found"])
+        self.assertEqual(result["seeded_sessions"], 1)
+        self.assertEqual(
+            sorted(
+                ConsultantServiceExpertise.objects.filter(consultant=consultant_profile)
+                .values_list("service__title", flat=True)
+            ),
+            ["ITR Salary Filing", "Tax Consultation"],
+        )
+        session.refresh_from_db()
+        self.assertTrue(session.expertise_seeded)

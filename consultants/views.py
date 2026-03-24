@@ -23,6 +23,40 @@ from .serializers import (
     ConsultantReviewSerializer
 )
 from .services import assign_consultant_to_request, complete_service_request
+from consultant_onboarding.assessment_outcome import get_application_assessment_outcome
+from consultant_onboarding.category_access import (
+    ASSESSMENT_CATEGORY_ORDER,
+    get_unlock_category_slugs_for_service,
+    is_service_unlocked,
+)
+from consultant_onboarding.expertise_sync import sync_passed_sessions_to_consultant
+
+
+def _get_consultant_application(user):
+    from consultant_onboarding.models import ConsultantApplication
+
+    if not getattr(user, "email", None):
+        return None
+    return ConsultantApplication.objects.filter(email=user.email).first()
+
+
+def _get_unlock_state_for_user(user):
+    application = _get_consultant_application(user)
+    if not application:
+        return {
+            'application': None,
+            'unlocked_categories': list(ASSESSMENT_CATEGORY_ORDER),
+            'available_assessment_categories': [],
+            'can_start_assessment': False,
+        }
+
+    assessment = get_application_assessment_outcome(application)
+    return {
+        'application': application,
+        'unlocked_categories': assessment.get('unlocked_categories', []),
+        'available_assessment_categories': assessment.get('available_assessment_categories', []),
+        'can_start_assessment': assessment.get('can_start_assessment', False),
+    }
 
 
 class ServiceCategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -55,6 +89,8 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         Get all categories with their nested services.
         Uses Prefetch to avoid N+1 queries on the services relation.
         """
+        unlock_state = _get_unlock_state_for_user(request.user)
+        unlocked_categories = unlock_state['unlocked_categories']
         categories = ServiceCategory.objects.filter(is_active=True).prefetch_related(
             Prefetch(
                 'services',
@@ -65,11 +101,19 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         
         result = []
         for cat in categories:
+            services = []
+            for service in cat.active_services:
+                service_data = ServiceSerializer(service).data
+                unlock_category_slugs = get_unlock_category_slugs_for_service(service)
+                service_data['unlock_category_slugs'] = unlock_category_slugs
+                service_data['is_unlocked'] = is_service_unlocked(service, unlocked_categories)
+                services.append(service_data)
+
             result.append({
                 'id': cat.id,
                 'name': cat.name,
                 'description': cat.description,
-                'services': ServiceSerializer(cat.active_services, many=True).data
+                'services': services
             })
             
         return Response(result)
@@ -514,6 +558,28 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
                 {'error': 'service_ids is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        unlock_state = _get_unlock_state_for_user(request.user)
+        unlocked_categories = unlock_state['unlocked_categories']
+        requested_services = list(Service.objects.filter(id__in=service_ids).select_related('category'))
+        locked_services = [
+            {
+                'id': service.id,
+                'title': service.title,
+                'unlock_category_slugs': get_unlock_category_slugs_for_service(service),
+            }
+            for service in requested_services
+            if not is_service_unlocked(service, unlocked_categories)
+        ]
+        if locked_services:
+            return Response(
+                {
+                    'error': 'Some selected services are still locked for your account.',
+                    'locked_services': locked_services,
+                    'unlocked_categories': unlocked_categories,
+                },
+                status=400,
+            )
         
         created_count = 0
         for service_id in service_ids:
@@ -529,50 +595,6 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
             'total_services': ConsultantServiceExpertise.objects.filter(consultant=profile).count()
         })
     
-    @action(detail=False, methods=['get'])
-    def my_services(self, request):
-        """
-        Get current consultant's selected service IDs
-        """
-        try:
-            profile = ConsultantServiceProfile.objects.get(user=request.user)
-            expertise = ConsultantServiceExpertise.objects.filter(consultant=profile)
-            service_ids = list(expertise.values_list('service_id', flat=True))
-            return Response({'service_ids': service_ids})
-        except ConsultantServiceProfile.DoesNotExist:
-            return Response({'service_ids': []})
-    
-    @action(detail=False, methods=['post'])
-    def update_services(self, request):
-        """
-        Replace consultant's expertise with new service selection
-        Body: {"service_ids": [1, 2, 3, 5]}
-        """
-        try:
-            profile = ConsultantServiceProfile.objects.get(user=request.user)
-        except ConsultantServiceProfile.DoesNotExist:
-            return Response(
-                {'error': 'Consultant profile not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        service_ids = request.data.get('service_ids', [])
-        
-        # Delete all existing expertise
-        ConsultantServiceExpertise.objects.filter(consultant=profile).delete()
-        
-        # Add new selections
-        for service_id in service_ids:
-            ConsultantServiceExpertise.objects.create(
-                consultant=profile,
-                service_id=service_id
-            )
-        
-        return Response({
-            'message': f'Updated expertise with {len(service_ids)} services',
-            'service_ids': service_ids
-        })
-
     @action(detail=False, methods=['get'], url_path='my_services')
     def my_services(self, request):
         """
@@ -581,13 +603,30 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
         try:
             profile = ConsultantServiceProfile.objects.get(user=request.user)
         except ConsultantServiceProfile.DoesNotExist:
-            return Response({'service_ids': []})
+            return Response({
+                'service_ids': [],
+                'unlocked_categories': list(ASSESSMENT_CATEGORY_ORDER),
+                'available_assessment_categories': [],
+                'can_start_assessment': False,
+            })
+
+        unlock_state = _get_unlock_state_for_user(request.user)
+        if unlock_state['application'] is not None:
+            sync_passed_sessions_to_consultant(
+                unlock_state['application'],
+                consultant_profile=profile,
+            )
             
         service_ids = ConsultantServiceExpertise.objects.filter(
             consultant=profile
         ).values_list('service_id', flat=True)
         
-        return Response({'service_ids': list(service_ids)})
+        return Response({
+            'service_ids': list(service_ids),
+            'unlocked_categories': unlock_state['unlocked_categories'],
+            'available_assessment_categories': unlock_state['available_assessment_categories'],
+            'can_start_assessment': unlock_state['can_start_assessment'],
+        })
 
     @action(detail=False, methods=['post'], url_path='update_services')
     def update_services(self, request):
@@ -600,6 +639,39 @@ class ConsultantServiceExpertiseViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Profile not found'}, status=404)
             
         service_ids = request.data.get('service_ids', [])
+        unlock_state = _get_unlock_state_for_user(request.user)
+        unlocked_categories = unlock_state['unlocked_categories']
+
+        requested_services = list(Service.objects.filter(id__in=service_ids).select_related('category'))
+        known_service_ids = {service.id for service in requested_services}
+        unknown_service_ids = [
+            service_id for service_id in service_ids
+            if service_id not in known_service_ids
+        ]
+        if unknown_service_ids:
+            return Response(
+                {'error': 'One or more selected services were not found.', 'service_ids': unknown_service_ids},
+                status=400,
+            )
+
+        locked_services = [
+            {
+                'id': service.id,
+                'title': service.title,
+                'unlock_category_slugs': get_unlock_category_slugs_for_service(service),
+            }
+            for service in requested_services
+            if not is_service_unlocked(service, unlocked_categories)
+        ]
+        if locked_services:
+            return Response(
+                {
+                    'error': 'Some selected services are still locked for your account.',
+                    'locked_services': locked_services,
+                    'unlocked_categories': unlocked_categories,
+                },
+                status=400,
+            )
         
         # Remove old ones
         ConsultantServiceExpertise.objects.filter(consultant=profile).delete()

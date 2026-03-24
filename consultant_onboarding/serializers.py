@@ -192,11 +192,14 @@ class UserSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserSession
         fields = [
-            'id', 'application', 'test_type', 'selected_domains', 
+            'id', 'application', 'test_type', 'selected_domains', 'selected_test_details',
             'score', 'start_time', 'end_time', 'status', 
-            'violation_count', 'violation_counters', 'violations'
+            'violation_count', 'violation_counters', 'violations', 'expertise_seeded'
         ]
-        read_only_fields = ['id', 'application', 'score', 'start_time', 'end_time', 'status', 'violation_count', 'violation_counters']
+        read_only_fields = [
+            'id', 'application', 'score', 'start_time', 'end_time', 'status',
+            'violation_count', 'violation_counters', 'expertise_seeded'
+        ]
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)

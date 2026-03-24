@@ -1,5 +1,8 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.utils import timezone
+from rest_framework.test import APIRequestFactory, force_authenticate
+from consultant_onboarding.models import ConsultantApplication, UserSession
 from consultants.models import (
     ConsultantServiceProfile,
     ConsultantServiceExpertise,
@@ -10,6 +13,7 @@ from consultants.models import (
 )
 from core_auth.models import ClientProfile
 from consultations.models import Topic
+from consultants.views import ConsultantServiceExpertiseViewSet
 
 User = get_user_model()
 
@@ -150,3 +154,96 @@ class ConsultantCascadeDeleteSignalTestCase(TestCase):
         )
         self.assertEqual(self.precise_topic.consultants.count(), 0)
         self.assertEqual(self.broad_topic.consultants.count(), 0)
+
+
+class ConsultantServiceAccessLockTests(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.consultant_user = User.objects.create_user(
+            username="consultant_access",
+            email="consultant-access@test.com",
+            password="password",
+            role="CONSULTANT",
+        )
+        self.consultant_profile = ConsultantServiceProfile.objects.create(
+            user=self.consultant_user,
+            qualification="CA",
+        )
+        self.application = ConsultantApplication.objects.create(
+            email=self.consultant_user.email,
+            first_name="Access",
+            last_name="Consultant",
+        )
+        UserSession.objects.create(
+            application=self.application,
+            selected_domains=["itr"],
+            selected_test_details={
+                "itr": {"selected_service_ids": ["itr_salary_filing"]},
+            },
+            question_set=[{"id": 1}],
+            video_question_set=[],
+            score=35,
+            status="completed",
+            end_time=timezone.now(),
+        )
+
+        self.returns_category = ServiceCategory.objects.create(
+            name="Returns",
+            description="Returns",
+            is_active=True,
+        )
+        self.registrations_category = ServiceCategory.objects.create(
+            name="Registrations",
+            description="Registrations",
+            is_active=True,
+        )
+        self.itr_service = Service.objects.create(
+            category=self.returns_category,
+            title="ITR Salary Filing",
+            tat="2 days",
+            documents_required="PAN",
+        )
+        self.gstr_service = Service.objects.create(
+            category=self.returns_category,
+            title="GSTR-1 & GSTR-3B (Monthly)",
+            tat="2 days",
+            documents_required="GST data",
+        )
+        self.registration_service = Service.objects.create(
+            category=self.registrations_category,
+            title="PAN Application",
+            tat="2 days",
+            documents_required="PAN",
+        )
+
+    def test_update_services_rejects_locked_category_services(self):
+        view = ConsultantServiceExpertiseViewSet.as_view({"post": "update_services"})
+        request = self.factory.post(
+            "/consultants/expertise/update_services/",
+            {"service_ids": [self.itr_service.id, self.gstr_service.id]},
+            format="json",
+        )
+        force_authenticate(request, user=self.consultant_user)
+
+        response = view(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("locked", response.data["error"].lower())
+        self.assertEqual(response.data["locked_services"][0]["title"], self.gstr_service.title)
+
+    def test_update_services_allows_registrations_after_any_main_category_pass(self):
+        view = ConsultantServiceExpertiseViewSet.as_view({"post": "update_services"})
+        request = self.factory.post(
+            "/consultants/expertise/update_services/",
+            {"service_ids": [self.itr_service.id, self.registration_service.id]},
+            format="json",
+        )
+        force_authenticate(request, user=self.consultant_user)
+
+        response = view(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            ConsultantServiceExpertise.objects.filter(consultant=self.consultant_profile).count(),
+            2,
+        )

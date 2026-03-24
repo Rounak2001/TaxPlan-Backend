@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
+from .category_access import apply_registration_auto_unlock, get_available_assessment_categories
 from .models import UserSession, VideoResponse
 
 MCQ_PASS_THRESHOLD = 30
@@ -117,11 +118,16 @@ def get_application_assessment_outcome(application):
 
     failed_attempts = 0
     flagged = False
+    passed_categories = set()
+    has_any_passed_session = False
     for session in sessions:
         outcome = get_session_assessment_outcome(session)
         if outcome['flagged']:
             flagged = True
             break
+        if outcome['passed']:
+            has_any_passed_session = True
+            passed_categories.update(session.selected_domains or [])
         if outcome['failed']:
             failed_attempts += 1
 
@@ -154,6 +160,18 @@ def get_application_assessment_outcome(application):
         and not retry_locked
     )
 
+    unlocked_categories = apply_registration_auto_unlock(passed_categories)
+    available_assessment_categories = get_available_assessment_categories(unlocked_categories)
+    can_start_assessment = (
+        not latest['review_pending']
+        and not disqualified
+        and (
+            (not has_any_passed_session)
+            or bool(available_assessment_categories)
+        )
+        and not retry_locked
+    )
+
     latest.update({
         'disqualified': disqualified,
         'failed_attempts': failed_attempts,
@@ -163,6 +181,10 @@ def get_application_assessment_outcome(application):
         'retry_in_seconds': retry_in_seconds,
         'can_retry_now': can_retry_now,
         'has_completed_session': latest_session is not None,
-        'has_passed_assessment': latest['passed'],
+        'has_passed_assessment': has_any_passed_session,
+        'passed_categories': [slug for slug in unlocked_categories if slug != 'registrations'],
+        'unlocked_categories': unlocked_categories,
+        'available_assessment_categories': available_assessment_categories,
+        'can_start_assessment': can_start_assessment,
     })
     return latest

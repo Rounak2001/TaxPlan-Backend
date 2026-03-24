@@ -214,10 +214,12 @@ class UserSession(models.Model):
     test_type = models.ForeignKey(TestType, on_delete=models.SET_NULL, null=True, blank=True)
     
     selected_domains = models.JSONField(default=list) 
+    selected_test_details = models.JSONField(default=dict, blank=True)
     question_set = models.JSONField(default=list)
     video_question_set = models.JSONField(default=list) 
     mcq_answers = models.JSONField(default=dict, blank=True)
     score = models.FloatField(default=0.0)
+    expertise_seeded = models.BooleanField(default=False)
 
     start_time = models.DateTimeField(auto_now_add=True)
     end_time = models.DateTimeField(null=True, blank=True)

@@ -32,6 +32,7 @@ from ..proctoring_policy import (
 )
 from ..risk import compute_proctoring_risk_summary
 from ..assessment_outcome import get_application_assessment_outcome
+from ..category_access import REGISTRATIONS_CATEGORY
 
 
 def normalize_question_identifier(value):
@@ -410,12 +411,6 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        if assessment['passed']:
-            return Response(
-                {'error': 'You have already passed the assessment.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
         if assessment.get('retry_locked'):
             return Response(
                 {
@@ -425,6 +420,13 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                     'retry_in_seconds': assessment.get('retry_in_seconds', 0),
                     'attempts_remaining': assessment.get('attempts_remaining', 0),
                 },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        available_assessment_categories = assessment.get('available_assessment_categories', [])
+        if assessment.get('has_passed_assessment') and not available_assessment_categories:
+            return Response(
+                {'error': 'All currently supported assessment categories are already unlocked for your account.'},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -444,11 +446,26 @@ class UserSessionViewSet(viewsets.ModelViewSet):
         if not valid_domains:
             return Response({'error': 'No valid domains selected'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if valid_domains == ['registrations']:
+        if (not assessment.get('has_passed_assessment')) and valid_domains == [REGISTRATIONS_CATEGORY]:
             return Response(
                 {'error': 'Registrations can only be selected along with at least one other category.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        if assessment.get('has_passed_assessment'):
+            disallowed_domains = [
+                slug for slug in valid_domains
+                if slug not in available_assessment_categories
+            ]
+            if disallowed_domains:
+                return Response(
+                    {
+                        'error': 'One or more selected categories are already unlocked or unavailable for reassessment.',
+                        'disallowed_categories': disallowed_domains,
+                        'available_assessment_categories': available_assessment_categories,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         total_mcqs = 50
         num_domains = len(valid_domains)
@@ -502,6 +519,7 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             application=request.application,
             test_type=test_type_obj, 
             selected_domains=valid_domains,
+            selected_test_details=selected_test_details,
             question_set=final_question_set,
             video_question_set=final_video_questions,
             status='ongoing'
@@ -651,9 +669,13 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             'can_retry_now': assessment.get('can_retry_now', False),
             'review_pending': assessment['review_pending'],
             'passed': assessment['passed'],
+            'has_passed_assessment': assessment['has_passed_assessment'],
             'failed': assessment['failed'],
             'status': assessment['status'],
             'failure_reasons': assessment['failure_reasons'],
+            'unlocked_categories': assessment.get('unlocked_categories', []),
+            'available_assessment_categories': assessment.get('available_assessment_categories', []),
+            'can_start_assessment': assessment.get('can_start_assessment', False),
         }
 
         session = assessment.get('session')

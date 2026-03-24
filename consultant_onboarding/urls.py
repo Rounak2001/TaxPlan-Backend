@@ -40,6 +40,7 @@ urlpatterns = [
 
     # Admin Panel API
     path('admin-panel/login/', admin_panel.admin_login, name='admin_panel_login'),
+    path('admin-panel/dev/bootstrap-consultant/', admin_panel.dev_bootstrap_consultant, name='admin_panel_dev_bootstrap_consultant'),
     path('admin-panel/consultants/', admin_panel.consultant_list, name='admin_panel_consultant_list'),
     path('admin-panel/consultants/<int:app_id>/', admin_panel.consultant_detail, name='admin_panel_consultant_detail'),
     path('admin-panel/consultants/<int:app_id>/generate-credentials/', admin_panel.generate_credentials, name='admin_panel_generate_credentials'),

@@ -570,6 +570,19 @@ class UserDashboardView(APIView):
         if auth_user.role == "CONSULTANT":
             try:
                 profile = auth_user.consultant_service_profile
+                try:
+                    from consultant_onboarding.models import ConsultantApplication
+                    from consultant_onboarding.assessment_outcome import get_application_assessment_outcome
+                    from consultant_onboarding.expertise_sync import sync_passed_sessions_to_consultant
+
+                    application = ConsultantApplication.objects.filter(email=auth_user.email).first()
+                    if application:
+                        sync_passed_sessions_to_consultant(application, consultant_profile=profile)
+                        unlock_state = get_application_assessment_outcome(application)
+                    else:
+                        unlock_state = {}
+                except Exception:
+                    unlock_state = {}
                 from consultants.models import ConsultantServiceExpertise
                 services = list(
                     ConsultantServiceExpertise.objects.filter(consultant=profile)
@@ -588,6 +601,8 @@ class UserDashboardView(APIView):
                     "experience_years": profile.experience_years,
                     "certifications": profile.certifications,
                     "services": services,
+                    "unlocked_categories": unlock_state.get("unlocked_categories", []),
+                    "available_assessment_categories": unlock_state.get("available_assessment_categories", []),
                 }
             except Exception:
                 data["stats"] = None
