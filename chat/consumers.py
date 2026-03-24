@@ -369,9 +369,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 
                 # Update conversation timestamp
                 conversation.save(update_fields=['updated_at'])
-                # Prefix message with Consultant's name to avoid confusion
+                # Build WhatsApp message with clear sender + recipient context
                 consultant_name = self.user.first_name or self.user.username
-                wa_message = f"[{consultant_name}]: {content}"
+
+                # If chatting with a sub-account, prefix with their name so the
+                # main account holder (who gets the WA notification) knows who it's for.
+                client = conversation.client
+                is_sub_account = bool(client.parent_account_id)
+                if is_sub_account:
+                    member_name = client.first_name or client.username
+                    wa_message = f"[For: {member_name}]\n{consultant_name}: {content}"
+                else:
+                    wa_message = f"{consultant_name}: {content}"
+
                 
                 # --- WhatsApp Outbound Sync & Session Locking ---
                 if self.user.role == 'CONSULTANT':
