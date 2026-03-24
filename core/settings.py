@@ -417,6 +417,11 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': True,
         },
+        'gst_reports': {
+            'handlers': ['file', 'console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
     },
 }
 

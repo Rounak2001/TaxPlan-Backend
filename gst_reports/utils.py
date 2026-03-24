@@ -10,10 +10,12 @@ def safe_api_call(method, url, **kwargs):
     try:
         kwargs["timeout"] = kwargs.get("timeout", 20)
         res = requests.request(method, url, **kwargs)
+        if res.status_code >= 400:
+            print(f"DEBUG: Sandbox API Error {res.status_code} at {url}: {res.text}")
         try:
             data = res.json()
         except:
-            data = {}
+            data = {"raw_response": res.text}
         return res.status_code, data
     except requests.Timeout:
         return 504, {"error": "timeout"}
@@ -121,7 +123,7 @@ def find_active_gst_session(user, gstin):
     """
     from django.db.models import Q
     from consultants.models import ClientServiceRequest
-    
+                            
     now = timezone.now()
     base_query = UnifiedGSTSession.objects.filter(
         gstin=gstin,
