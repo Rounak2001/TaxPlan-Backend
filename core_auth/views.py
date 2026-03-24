@@ -569,14 +569,13 @@ class UserDashboardView(APIView):
 
         if auth_user.role == "CONSULTANT":
             try:
-<<<<<<< HEAD
-                profile = user.consultant_service_profile
+                profile = auth_user.consultant_service_profile
                 try:
                     from consultant_onboarding.models import ConsultantApplication
                     from consultant_onboarding.assessment_outcome import get_application_assessment_outcome
                     from consultant_onboarding.expertise_sync import sync_passed_sessions_to_consultant
 
-                    application = ConsultantApplication.objects.filter(email=user.email).first()
+                    application = ConsultantApplication.objects.filter(email=auth_user.email).first()
                     if application:
                         sync_passed_sessions_to_consultant(application, consultant_profile=profile)
                         unlock_state = get_application_assessment_outcome(application)
@@ -584,9 +583,6 @@ class UserDashboardView(APIView):
                         unlock_state = {}
                 except Exception:
                     unlock_state = {}
-=======
-                profile = auth_user.consultant_service_profile
->>>>>>> main
                 from consultants.models import ConsultantServiceExpertise
                 services = list(
                     ConsultantServiceExpertise.objects.filter(consultant=profile)
