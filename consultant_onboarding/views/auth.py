@@ -107,6 +107,10 @@ def get_profile_response_data(application):
         'assessment_retry_available_at': assessment.get('retry_available_at'),
         'assessment_retry_in_seconds': assessment.get('retry_in_seconds', 0),
         'assessment_can_retry_now': assessment.get('can_retry_now', False),
+        'assessment_can_start': assessment.get('can_start_assessment', False),
+        'passed_categories': assessment.get('passed_categories', []),
+        'unlocked_categories': assessment.get('unlocked_categories', []),
+        'available_assessment_categories': assessment.get('available_assessment_categories', []),
         'has_accepted_declaration': application.has_accepted_declaration,
         'has_documents': has_documents,
     }

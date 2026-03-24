@@ -15,6 +15,7 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.core.files.storage import default_storage
 from django.db import transaction
+from django.utils import timezone as dj_timezone
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -78,6 +79,137 @@ _ALLOW_INSECURE_ADMIN = (
     and str(os.getenv("ALLOW_INSECURE_ADMIN", "")).strip().lower() in {"1", "true", "yes", "y"}
 )
 ADMIN_AUTH_CLASSES = [] if _ALLOW_INSECURE_ADMIN else [AdminJWTAuthentication]
+
+DEV_BOOTSTRAP_EMAIL = os.getenv('DEV_CONSULTANT_EMAIL', 'dev.consultant@local.test').strip().lower()
+DEV_BOOTSTRAP_USERNAME = os.getenv('DEV_CONSULTANT_USERNAME', 'dev_consultant').strip() or 'dev_consultant'
+DEV_BOOTSTRAP_PASSWORD = os.getenv('DEV_CONSULTANT_PASSWORD', 'DevConsultant@123').strip() or 'DevConsultant@123'
+
+
+def _require_debug_mode():
+    return bool(getattr(settings, 'DEBUG', False))
+
+
+def _build_live_user_defaults(app, username):
+    return {
+        'username': username,
+        'first_name': app.first_name,
+        'last_name': app.last_name,
+        'phone_number': app.phone_number,
+        'role': User.CONSULTANT,
+        'is_onboarded': True,
+        'is_phone_verified': True,
+    }
+
+
+def _find_phone_conflict(app, *, existing_user=None):
+    phone_number = (app.phone_number or '').strip()
+    if not phone_number:
+        return None
+
+    conflicts = User.objects.filter(phone_number=phone_number)
+    if existing_user is not None:
+        conflicts = conflicts.exclude(id=existing_user.id)
+
+    return conflicts.first()
+
+
+def _ensure_unique_consultant_username(base_username, *, existing_user=None):
+    candidate = (base_username or 'consultant').strip() or 'consultant'
+    suffix = 0
+
+    while True:
+        username = candidate if suffix == 0 else f"{candidate}_{suffix}"
+        credential_taken = ConsultantCredential.objects.filter(username=username)
+        user_taken = User.objects.filter(username=username)
+
+        if existing_user is not None:
+            credential_taken = credential_taken.exclude(application__email=existing_user.email)
+            user_taken = user_taken.exclude(id=existing_user.id)
+
+        if not credential_taken.exists() and not user_taken.exists():
+            return username
+
+        suffix += 1
+
+
+def _ensure_live_consultant_user(app, username, password=None):
+    """
+    Create or refresh the live consultant account/profile from an onboarding application.
+    """
+    from consultants.models import ConsultantServiceProfile
+
+    existing_user = User.objects.filter(email=app.email).first()
+    if existing_user and existing_user.role == User.CLIENT:
+        raise ValueError(
+            f"Cannot generate credentials: {app.email} is already registered as a Client. "
+            "Ask the applicant to use a different email address for their consultant account."
+        )
+
+    phone_conflict = _find_phone_conflict(app, existing_user=existing_user)
+    if phone_conflict:
+        raise ValueError(
+            f"Cannot generate credentials: phone number {app.phone_number} is already used by "
+            f"{phone_conflict.email} ({phone_conflict.role})."
+        )
+
+    resolved_username = _ensure_unique_consultant_username(username, existing_user=existing_user)
+
+    user, created = User.objects.get_or_create(
+        email=app.email,
+        defaults=_build_live_user_defaults(app, resolved_username),
+    )
+
+    if not created:
+        user.username = resolved_username
+        user.role = User.CONSULTANT
+        user.is_onboarded = True
+        user.is_phone_verified = True
+        user.first_name = app.first_name or user.first_name
+        user.last_name = app.last_name or user.last_name
+        user.phone_number = app.phone_number or user.phone_number
+
+    if password:
+        user.set_password(password)
+    user.save()
+
+    consultant_profile, _profile_created = ConsultantServiceProfile.objects.get_or_create(
+        user=user,
+        defaults={
+            'qualification': app.qualification,
+            'experience_years': app.experience_years or 0,
+            'certifications': app.certifications,
+            'bio': app.bio,
+            'is_active': True,
+        }
+    )
+
+    from ..expertise_sync import sync_passed_sessions_to_consultant
+    sync_passed_sessions_to_consultant(app, consultant_profile=consultant_profile)
+
+    return user, consultant_profile
+
+
+def _ensure_dev_bootstrap_assessment(application):
+    """
+    In DEBUG mode, create a minimal passed assessment session if the application has none.
+    """
+    if UserSession.objects.filter(application=application, status='completed', score__gte=35).exists():
+        return
+
+    UserSession.objects.create(
+        application=application,
+        selected_domains=['itr'],
+        selected_test_details={
+            'itr': {
+                'selected_service_ids': ['itr_salary_filing', 'itr_general_consultation'],
+            }
+        },
+        question_set=[{'id': 1, 'domain': 'itr'}],
+        video_question_set=[],
+        score=35,
+        status='completed',
+        end_time=dj_timezone.now(),
+    )
 
 
 # ------------------------------------------------------------------
@@ -414,7 +546,24 @@ def _generate_and_send_credentials(app):
     Generate unique credentials for a consultant application,
     create the live User + ConsultantServiceProfile, and email the creds.
     """
-    if ConsultantCredential.objects.filter(application=app).exists():
+    existing_credential = ConsultantCredential.objects.filter(application=app).first()
+    existing_live_user = User.objects.filter(email=app.email, role=User.CONSULTANT).first()
+    if existing_credential:
+        if existing_live_user or _require_debug_mode():
+            user, consultant_profile = _ensure_live_consultant_user(
+                app,
+                existing_credential.username,
+                password=existing_credential.password,
+            )
+            app.status = 'APPROVED'
+            app.save(update_fields=['status', 'updated_at'])
+            return True, {
+                'username': user.username,
+                'password': existing_credential.password,
+                'message': 'Existing credentials restored',
+                'email': app.email,
+                'profile_id': consultant_profile.id,
+            }
         return False, "Credentials already generated for this applicant"
 
     # DEBUG: Check if email settings are loaded
@@ -435,12 +584,64 @@ def _generate_and_send_credentials(app):
         for _ in range(10):
             random_digits = ''.join(random.choices(string.digits, k=4))
             candidate = f"taxplanadvisor_{first_name_clean}_{random_digits}"
-            if not ConsultantCredential.objects.filter(username=candidate).exists():
+            if (
+                not ConsultantCredential.objects.filter(username=candidate).exists()
+                and not User.objects.filter(username=candidate).exists()
+            ):
                 username = candidate
                 break
 
         if not username:
             return False, "Failed to generate unique username"
+
+        chars = string.ascii_letters + string.digits + "!@#$%^&*"
+        password = ''.join(random.choices(chars, k=10))
+
+        with transaction.atomic():
+            ConsultantCredential.objects.create(
+                application=app,
+                username=username,
+                password=password,
+            )
+
+            _ensure_live_consultant_user(app, username, password=password)
+
+            app.status = 'APPROVED'
+            app.save()
+
+        subject = "Your TaxPlan Advisor Consultant Credentials"
+        message = (
+            f"Hello {app.get_full_name()},\n\n"
+            f"Congratulations! Your verification is complete.\n"
+            f"Here are your login credentials for the consultant portal:\n\n"
+            f"Username: {username}\n"
+            f"Password: {password}\n\n"
+            f"Login at: https://main.taxplanadvisor.co\n\n"
+            f"Please keep these credentials safe and do not share them.\n\n"
+            f"Best regards,\nTaxPlan Advisor Team"
+        )
+
+        try:
+            from_email = settings.DEFAULT_FROM_EMAIL or 'admin@taxplanadvisor.com'
+            send_mail(
+                subject,
+                message,
+                from_email,
+                [app.email],
+                fail_silently=False,
+            )
+            logger.info(f"Credentials email sent successfully to {app.email}")
+        except Exception as email_err:
+            logger.error(
+                f"CRITICAL: Credentials were generated for {app.email} but email FAILED to send. "
+                f"Error: {email_err}. Username: {username} | Password saved in ConsultantCredential record."
+            )
+
+        return True, {
+            "username": username,
+            "password": password,
+            "message": "Credentials generated and sent successfully",
+        }
 
         # Generate random password
         chars = string.ascii_letters + string.digits + "!@#$%^&*"
@@ -453,57 +654,9 @@ def _generate_and_send_credentials(app):
             password=password,
         )
 
-        # Create the live User and ConsultantServiceProfile
-        from core_auth.models import User
-        from consultants.models import ConsultantServiceProfile
-
-        # OPTION A ENFORCEMENT: If a CLIENT already exists with this email, block credential
-        # generation. The admin must ask the applicant to re-apply with a different email.
-        existing_user = User.objects.filter(email=app.email).first()
-        if existing_user and existing_user.role == User.CLIENT:
-            return False, (
-                f"Cannot generate credentials: {app.email} is already registered as a Client. "
-                "Ask the applicant to use a different email address for their consultant account."
-            )
-
-        user, created = User.objects.get_or_create(
-            email=app.email,
-            defaults={
-                'username': username,
-                'first_name': app.first_name,
-                'last_name': app.last_name,
-                'phone_number': app.phone_number,
-                'role': User.CONSULTANT,
-                'is_onboarded': True,
-                'is_phone_verified': True,
-                'google_id': app.google_id,
-            }
-        )
+        _ensure_live_consultant_user(app, username, password=password)
 
         # Update existing CONSULTANT user (safe — same role, just refresh fields)
-        if not created:
-            user.username = username
-            user.role = User.CONSULTANT
-            user.is_onboarded = True
-            user.first_name = app.first_name or user.first_name
-            user.last_name = app.last_name or user.last_name
-            user.phone_number = app.phone_number or user.phone_number
-
-        user.set_password(password)
-        user.save()
-
-        # Create consultant service profile
-        ConsultantServiceProfile.objects.get_or_create(
-            user=user,
-            defaults={
-                'qualification': app.qualification,
-                'experience_years': app.experience_years or 0,
-                'certifications': app.certifications,
-                'bio': app.bio,
-                'is_active': True,
-            }
-        )
-
         # Mark application as approved
         app.status = 'APPROVED'
         app.save()
@@ -546,6 +699,92 @@ def _generate_and_send_credentials(app):
 
 
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def dev_bootstrap_consultant(request):
+    """
+    DEBUG-only helper to spin up a consultant account with predictable credentials.
+    """
+    if not _require_debug_mode():
+        return Response({'error': 'Not available outside DEBUG mode.'}, status=status.HTTP_404_NOT_FOUND)
+
+    email = str(request.data.get('email') or DEV_BOOTSTRAP_EMAIL).strip().lower()
+    first_name = str(request.data.get('first_name') or 'Dev').strip() or 'Dev'
+    last_name = str(request.data.get('last_name') or 'Consultant').strip() or 'Consultant'
+    username_seed = str(request.data.get('username') or DEV_BOOTSTRAP_USERNAME).strip() or DEV_BOOTSTRAP_USERNAME
+    password = str(request.data.get('password') or DEV_BOOTSTRAP_PASSWORD)
+    phone_number = str(request.data.get('phone_number') or '+919876543210').strip() or '+919876543210'
+
+    existing_user = User.objects.filter(email=email).first()
+    if existing_user and existing_user.role == User.CLIENT:
+        return Response(
+            {'error': f'{email} is already registered as a client. Use a different dev email.'},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    application, _created = ConsultantApplication.objects.get_or_create(
+        email=email,
+        defaults={
+            'first_name': first_name,
+            'last_name': last_name,
+            'phone_number': phone_number,
+            'is_phone_verified': True,
+            'is_verified': True,
+            'has_accepted_declaration': True,
+            'status': 'APPROVED',
+            'qualification': 'CA',
+            'experience_years': 3,
+            'city': 'Pune',
+            'state': 'Maharashtra',
+            'pincode': '411001',
+            'address_line1': 'Dev Mode Address',
+        }
+    )
+
+    application.first_name = first_name
+    application.last_name = last_name
+    application.phone_number = phone_number
+    application.is_phone_verified = True
+    application.is_verified = True
+    application.has_accepted_declaration = True
+    application.status = 'APPROVED'
+    application.qualification = application.qualification or 'CA'
+    application.experience_years = application.experience_years or 3
+    application.city = application.city or 'Pune'
+    application.state = application.state or 'Maharashtra'
+    application.pincode = application.pincode or '411001'
+    application.address_line1 = application.address_line1 or 'Dev Mode Address'
+    application.save()
+
+    _ensure_dev_bootstrap_assessment(application)
+
+    username = _ensure_unique_consultant_username(username_seed, existing_user=existing_user)
+    credential, _credential_created = ConsultantCredential.objects.update_or_create(
+        application=application,
+        defaults={'username': username, 'password': password},
+    )
+    user, consultant_profile = _ensure_live_consultant_user(
+        application,
+        credential.username,
+        password=password,
+    )
+
+    return Response(
+        {
+            'message': 'DEBUG consultant ready',
+            'email': application.email,
+            'application_id': application.id,
+            'username': user.username,
+            'password': password,
+            'profile_id': consultant_profile.id,
+            'passed_categories': ['itr'],
+            'auto_unlocked_categories': ['registrations'],
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
 @authentication_classes(ADMIN_AUTH_CLASSES)
 @permission_classes([AllowAny])
 def generate_credentials(request, app_id):
@@ -558,7 +797,12 @@ def generate_credentials(request, app_id):
     success, result = _generate_and_send_credentials(app)
 
     if success:
-        return Response(result, status=status.HTTP_201_CREATED)
+        response_status = (
+            status.HTTP_200_OK
+            if "Existing credentials returned" in str(result.get('message', ''))
+            else status.HTTP_201_CREATED
+        )
+        return Response(result, status=response_status)
     else:
         status_code = status.HTTP_400_BAD_REQUEST if "already generated" in str(result) else status.HTTP_500_INTERNAL_SERVER_ERROR
         return Response({'error': result}, status=status_code)
