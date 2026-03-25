@@ -117,7 +117,7 @@ def verify_face(request, user_id=None):
         if matches:
             similarity = matches[0]["Similarity"]
             confidence = similarity
-            is_match = similarity >= 80.0
+            is_match = similarity >= 50.0
         
         verification.is_match = is_match
         verification.confidence = confidence
