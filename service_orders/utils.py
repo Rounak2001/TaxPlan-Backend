@@ -33,7 +33,7 @@ def create_service_requests_from_order(order):
     if existing_count > 0:
         return [] # Already processed
     
-    for item in order.items.all():
+    for item in order.items.select_related('service', 'selected_consultant'):
         # Create service request using the actual DB service if available, else use custom title
         service_title_for_notes = item.service.title if item.service else getattr(item, 'service_title', 'Custom Service')
         

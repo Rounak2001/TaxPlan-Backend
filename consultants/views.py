@@ -174,10 +174,38 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
 
         auto_recommended = result[0] if result else None
 
+        familiar_data = None
+        if request.user.is_authenticated and result:
+            from .services import get_consultant_affinity
+            affinity_map = get_consultant_affinity(request.user)
+            
+            best_match = None
+            best_interaction_date = None
+            
+            for consultant_data in result:
+                cid = consultant_data['id']
+                if cid in affinity_map:
+                    interaction_date = affinity_map[cid]['last_interaction']
+                    if best_match is None or interaction_date > best_interaction_date:
+                        best_match = consultant_data
+                        best_interaction_date = interaction_date
+            
+            if best_match:
+                meta = affinity_map[best_match['id']]
+                if meta['relation'] == 'parent':
+                    message = f"This consultant has handled work for your main account ({meta['parent_name']}). Continuing with them ensures consistent service across all your accounts."
+                else:
+                    message = f"{best_match['full_name']} has worked with you before. Continuing with the same consultant ensures faster processing and smoother communication."
+                
+                familiar_data = {
+                    **best_match,
+                    'message': message
+                }
+
         return Response({
             'consultants': result,
             'auto_recommended': auto_recommended,
-            'familiar_consultant': None,
+            'familiar_consultant': familiar_data,
             'total': len(result),
             'matched_services': total_required
         })
@@ -199,9 +227,10 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         
         # Detect returning client — find a consultant they've worked with before
         familiar = None
+        familiar_relation = None
         familiar_data = None
         if request.user.is_authenticated:
-            familiar = find_familiar_consultant(request.user, service.id)
+            familiar, familiar_relation = find_familiar_consultant(request.user, service.id)
         
         # Build consultant data with reviews
         result = []
@@ -250,9 +279,14 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             
             # If this is the familiar consultant, build the suggestion
             if familiar and consultant.id == familiar.id:
+                if familiar_relation and familiar_relation['relation'] == 'parent':
+                    message = f"{consultant.full_name} has handled work for your main account ({familiar_relation['parent_name']}). Would you like to do this work with the same consultant?"
+                else:
+                    message = f"{consultant.full_name} has worked with you before and already understands your requirements. Continuing with the same consultant ensures faster processing and smoother communication."
+                
                 familiar_data = {
                     **consultant_data,
-                    'message': f"{consultant.full_name} has worked with you before and already understands your requirements. Continuing with the same consultant ensures faster processing and smoother communication."
+                    'message': message
                 }
         
         auto_recommended = result[0] if result else None
@@ -293,7 +327,7 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
             )
         
         # Get services offered by consultant
-        expertise = ConsultantServiceExpertise.objects.filter(consultant=profile).select_related('service')
+        expertise = ConsultantServiceExpertise.objects.filter(consultant=profile).select_related('service', 'service__category')
         services = [exp.service for exp in expertise]
         
         # Get assigned requests
