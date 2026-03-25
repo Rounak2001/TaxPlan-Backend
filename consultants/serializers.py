@@ -1,3 +1,5 @@
+import re
+
 from rest_framework import serializers
 from .models import (
     ConsultantServiceProfile,
@@ -7,6 +9,7 @@ from .models import (
     ClientServiceRequest,
     ConsultantReview
 )
+from service_orders.models import OrderItem
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -77,9 +80,32 @@ class ClientServiceRequestSerializer(serializers.ModelSerializer):
     # Flat fields for backward compatibility
     client_email = serializers.EmailField(source='client.email', read_only=True)
     client_name = serializers.SerializerMethodField()
+    order_variant_name = serializers.SerializerMethodField()
     
     def get_client_name(self, obj):
         return obj.client.get_full_name() or obj.client.username
+
+    def get_order_variant_name(self, obj):
+        match = re.search(r'order #(\d+)', obj.notes or '')
+        if not match:
+            return ''
+
+        order_id = match.group(1)
+        items = OrderItem.objects.filter(order_id=order_id)
+
+        if obj.service_id:
+            matched_item = items.filter(service_id=obj.service_id).order_by('-id').first()
+            if matched_item:
+                return matched_item.variant_name or ''
+
+        service_title = getattr(obj.service, 'title', '')
+        if service_title:
+            matched_item = items.filter(service_title=service_title).order_by('-id').first()
+            if matched_item:
+                return matched_item.variant_name or ''
+
+        fallback_item = items.order_by('-id').first()
+        return fallback_item.variant_name or '' if fallback_item else ''
     
     class Meta:
         model = ClientServiceRequest
@@ -88,6 +114,7 @@ class ClientServiceRequestSerializer(serializers.ModelSerializer):
             'service',  # Full service object
             'status', 
             'assigned_consultant',  # Full consultant object
+            'order_variant_name',
             'assigned_at', 'notes', 'revision_notes', 'priority',
             'has_review',
             'created_at', 'updated_at', 'completed_at'
