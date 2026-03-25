@@ -8,6 +8,28 @@ from django.utils import timezone
 from consultants.models import ClientServiceRequest
 from consultants.services import assign_consultant_to_request
 
+logger = logging.getLogger(__name__)
+
+
+def _resolve_contact(user):
+    """
+    Return the best (email, phone, name) for notification purposes.
+    Sub-accounts may not have their own email/phone — fall back to the parent account.
+    """
+    email = user.email or ''
+    phone = user.phone_number or ''
+    name = user.first_name or user.username
+
+    # If this is a sub-account and contact fields are missing, use parent's
+    if user.parent_account_id:
+        parent = user.parent_account
+        if not email:
+            email = parent.email or ''
+        if not phone:
+            phone = parent.phone_number or ''
+
+    return email, phone, name
+
 
 def create_service_requests_from_order(order):
     """
@@ -32,6 +54,9 @@ def create_service_requests_from_order(order):
     
     if existing_count > 0:
         return [] # Already processed
+
+    # Resolve contact details once for all items in this order
+    client_email, client_phone, client_name = _resolve_contact(order.user)
     
     for item in order.items.all():
         # Create service request using the actual DB service if available, else use custom title
@@ -67,23 +92,42 @@ def create_service_requests_from_order(order):
         # Refresh to get updated status
         request.refresh_from_db()
         
-        # Fire async email to client about the purchase and assignment
-        try:
-            from notifications.tasks import send_service_assignment_email_task
-            client_name = order.user.first_name or order.user.username
-            
-            # The service title fallback handles custom DB services or frontend string items
-            service_title_for_email = getattr(item.service, 'title', getattr(item, 'service_title', 'Custom Service'))
-            
-            send_service_assignment_email_task.delay(
-                client_email=order.user.email,
-                client_name=client_name,
-                service_title=service_title_for_email,
-                amount_paid=str(item.price)
-            )
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to queue assignment email task for order {order.id}: {e}")
+        service_title_for_email = getattr(item.service, 'title', getattr(item, 'service_title', 'Custom Service'))
+
+        # ── Email notification ──────────────────────────────────────────────
+        # Uses fallback email so sub-accounts whose email is blank get parent's email
+        if client_email:
+            try:
+                from notifications.tasks import send_service_assignment_email_task
+                send_service_assignment_email_task.delay(
+                    client_email=client_email,
+                    client_name=client_name,
+                    service_title=service_title_for_email,
+                    amount_paid=str(item.price)
+                )
+            except Exception as e:
+                logger.error(f"Failed to queue assignment email task for order {order.id}: {e}")
+        else:
+            logger.warning(f"Order {order.id}: no email found for user {order.user.id} or parent — skipping email.")
+
+        # ── WhatsApp notification ───────────────────────────────────────────
+        # Uses fallback phone so sub-accounts without their own number get parent's
+        if client_phone:
+            try:
+                from notifications.tasks import send_whatsapp_template_task
+                send_whatsapp_template_task.delay(
+                    phone_number=client_phone,
+                    template_name="service_order_confirmation",
+                    variables=[
+                        client_name,
+                        service_title_for_email,
+                        str(item.price),
+                    ]
+                )
+            except Exception as e:
+                logger.error(f"Failed to queue WhatsApp task for order {order.id}: {e}")
+        else:
+            logger.warning(f"Order {order.id}: no phone found for user {order.user.id} or parent — skipping WhatsApp.")
         
         created_requests.append({
             'request_id': request.id,
@@ -95,8 +139,7 @@ def create_service_requests_from_order(order):
                 'name': consultant.full_name if consultant else None,
                 'email': consultant.email if consultant else None,
                 'phone': consultant.phone if consultant else None
-            } if getattr(locals(), 'consultant', None) else None
+            } if consultant else None
         })
     
     return created_requests
-
