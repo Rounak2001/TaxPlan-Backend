@@ -158,6 +158,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not content:
             await self.send_error("Empty message")
             return
+
+        # Block messaging if there is no active (non-cancelled/completed) service
+        chat_allowed = await self.check_chat_allowed()
+        if not chat_allowed:
+            await self.send(text_data=json.dumps({
+                'type': 'chat_disabled',
+                'message': 'Chat is disabled because this service request has been cancelled.'
+            }))
+            return
         
         # Save message to database
         message = await self.save_message(content)
@@ -334,6 +343,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception:
             pass
         return self.user
+
+    @database_sync_to_async
+    def check_chat_allowed(self):
+        """
+        Returns True if there is at least one non-cancelled, non-completed
+        service request between the client and consultant of this conversation.
+        If all services are in a terminal state (cancelled/completed), chat is locked.
+        """
+        from .models import Conversation
+        from consultants.models import ClientServiceRequest
+        try:
+            conversation = Conversation.objects.get(id=self.conversation_id)
+            has_active = ClientServiceRequest.objects.filter(
+                client=conversation.client,
+                assigned_consultant__user=conversation.consultant,
+            ).exclude(status__in=['cancelled', 'completed']).exists()
+            return has_active
+        except Exception as e:
+            logger.exception(f"Error checking chat permission: {e}")
+            return True  # Fail-open: don't block on error
 
     @database_sync_to_async
     def check_participant(self):

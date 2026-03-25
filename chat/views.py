@@ -42,8 +42,23 @@ class ConversationListCreateView(generics.ListCreateAPIView):
         user = self.request.user
         # Use active profile (sub-account or main account) as the client identity
         active_client = get_active_profile(self.request)
+
+        # Only return conversations where at least one active (non-cancelled/completed)
+        # service request exists between client and consultant.
+        from consultants.models import ClientServiceRequest
+        from django.db.models import OuterRef, Exists
+
+        active_service_exists = ClientServiceRequest.objects.filter(
+            client=OuterRef('client'),
+            assigned_consultant__user=OuterRef('consultant'),
+        ).exclude(status__in=['cancelled', 'completed'])
+
         return Conversation.objects.filter(
             Q(consultant=user) | Q(client=active_client)
+        ).annotate(
+            has_active_service=Exists(active_service_exists)
+        ).filter(
+            has_active_service=True
         ).select_related('consultant', 'client').prefetch_related('messages')
     
     def create(self, request, *args, **kwargs):
@@ -99,6 +114,22 @@ class ConversationListCreateView(generics.ListCreateAPIView):
                 return Response(
                     {'error': 'No consultant assigned to this client and no consultant_id provided'},
                     status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Block chat creation if no active (non-cancelled) service exists
+            from consultants.models import ClientServiceRequest
+            has_active_service = ClientServiceRequest.objects.filter(
+                client=active_client,
+                assigned_consultant__user_id=consultant_id,
+            ).exclude(status__in=['cancelled', 'completed']).exists()
+
+            if not has_active_service:
+                return Response(
+                    {
+                        'error': 'Chat is unavailable because this service has been cancelled.',
+                        'chat_disabled': True,
+                    },
+                    status=status.HTTP_403_FORBIDDEN
                 )
             
             conversation, created = Conversation.objects.get_or_create(

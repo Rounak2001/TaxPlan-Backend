@@ -59,6 +59,17 @@ def cache_old_service_request_status(sender, instance, **kwargs):
 logger = logging.getLogger(__name__)
 
 
+def _resolve_phone(user):
+    """
+    Return the best phone number for WhatsApp notifications.
+    Sub-accounts may not have their own phone — fall back to parent account.
+    """
+    phone = getattr(user, 'phone_number', None)
+    if not phone and getattr(user, 'parent_account_id', None):
+        phone = getattr(user.parent_account, 'phone_number', None)
+    return phone
+
+
 # =====================================================================
 # Helper: Create + Push (reused by every signal below)
 # =====================================================================
@@ -181,9 +192,10 @@ def notify_document_activity(sender, instance, created, **kwargs):
                     link="/client/vault?tab=documents",
                 )
                 # Send WhatsApp Template
-                if getattr(instance.client, 'phone_number', None):
+                phone = _resolve_phone(instance.client)
+                if phone:
                     send_whatsapp_template_task.delay(
-                        phone_number=instance.client.phone_number,
+                        phone_number=phone,
                         template_name="doc_rejected_action_needed",
                         variables=[
                             instance.client.first_name or instance.client.username,
@@ -213,9 +225,10 @@ def notify_shared_report_activity(sender, instance, created, **kwargs):
                 link="/client/vault?tab=shared",
             )
             # Send WhatsApp Template
-            if getattr(instance.client, 'phone_number', None):
+            phone = _resolve_phone(instance.client)
+            if phone:
                 send_whatsapp_template_task.delay(
-                    phone_number=instance.client.phone_number,
+                    phone_number=phone,
                     template_name="new_document_shared",
                     variables=[
                         instance.client.first_name or instance.client.username,
@@ -244,9 +257,10 @@ def notify_legal_notice_activity(sender, instance, created, **kwargs):
                 link="/client/vault?tab=notices",
             )
             # Send WhatsApp Template
-            if getattr(instance.client, 'phone_number', None):
+            phone = _resolve_phone(instance.client)
+            if phone:
                 send_whatsapp_template_task.delay(
-                    phone_number=instance.client.phone_number,
+                    phone_number=phone,
                     template_name="new_document_shared",
                     variables=[
                         instance.client.first_name or instance.client.username,
@@ -296,9 +310,10 @@ def notify_service_activity(sender, instance, created, **kwargs):
                     link="/client/services",
                 )
                 # Send WhatsApp Template
-                if getattr(instance.client, 'phone_number', None):
+                phone = _resolve_phone(instance.client)
+                if phone:
                     send_whatsapp_template_task.delay(
-                        phone_number=instance.user.phone_number if hasattr(instance, 'user') else instance.client.phone_number, # safety
+                        phone_number=phone,
                         template_name="service_status_update",
                         variables=[
                             instance.client.first_name or instance.client.username,
@@ -372,9 +387,10 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                     link="/client/meetings",
                 )
                 # Send WhatsApp Template
-                if getattr(instance.client, 'phone_number', None):
+                phone = _resolve_phone(instance.client)
+                if phone:
                     send_whatsapp_template_task.delay(
-                        phone_number=instance.client.phone_number,
+                        phone_number=phone,
                         template_name="consultation_status_update",
                         variables=[
                             instance.client.first_name or instance.client.username,
@@ -394,9 +410,10 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                     link="/client/meetings",
                 )
                 # Send WhatsApp Template
-                if getattr(instance.client, 'phone_number', None):
+                phone = _resolve_phone(instance.client)
+                if phone:
                     send_whatsapp_template_task.delay(
-                        phone_number=instance.client.phone_number,
+                        phone_number=phone,
                         template_name="consultation_status_update",
                         variables=[
                             instance.client.first_name or instance.client.username,
@@ -446,10 +463,12 @@ def notify_payment_activity(sender, instance, created, **kwargs):
                     message=f"₹{instance.total_amount} paid for: {item_names}",
                     link="/client/services",
                 )
-                # Send WhatsApp Template
-                if getattr(instance.user, 'phone_number', None):
+                # Send WhatsApp Template for payment confirmation
+                # Use parent phone as fallback for sub-accounts without their own number
+                phone = _resolve_phone(instance.user)
+                if phone:
                     send_whatsapp_template_task.delay(
-                        phone_number=instance.user.phone_number,
+                        phone_number=phone,
                         template_name="payment_receipt_success",
                         variables=[
                             instance.user.first_name or instance.user.username,

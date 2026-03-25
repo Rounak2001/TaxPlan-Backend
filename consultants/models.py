@@ -113,6 +113,13 @@ class ClientServiceRequest(models.Model):
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     ]
+    # Statuses where the client can still cancel (work has NOT started yet)
+    CANCELLABLE_STATUSES = [
+        'pending',
+        'assigned',
+        'doc_pending',
+        'under_review',
+    ]
     # Centralized list of statuses considered "active" or "in-progress"
     # Services in these states should have active document synchronization and vault management.
     ACTIVE_STATUSES = [
@@ -147,6 +154,10 @@ User, on_delete=models.CASCADE, related_name='service_requests')
     revision_notes = models.TextField(blank=True, null=True)
     priority = models.IntegerField(default=0)  # Higher = more urgent
     
+    # Cancellation
+    cancellation_reason = models.CharField(max_length=255, blank=True, null=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

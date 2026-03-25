@@ -352,7 +352,7 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
         # Get assigned requests
         assigned_requests = ClientServiceRequest.objects.filter(
             assigned_consultant=profile
-        ).exclude(status='completed').order_by('-created_at')
+        ).exclude(status__in=['completed', 'cancelled']).order_by('-created_at')
         
         # Calculate stats — compute live client count from active requests
         total_completed = ClientServiceRequest.objects.filter(
@@ -898,6 +898,156 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
             'message': 'Revision requested. Consultant will be notified.',
             'request': ClientServiceRequestSerializer(service_request).data
         })
+
+    @action(detail=True, methods=['post'], url_path='cancel')
+    def cancel(self, request, pk=None):
+        """
+        Client cancels the service request and receives a full automatic refund
+        via Razorpay, provided work has not started (status is before 'wip').
+        Body: { "reason": "I changed my mind" }
+        """
+        from django.utils import timezone
+        import razorpay
+        from django.conf import settings
+        from service_orders.models import ServiceOrder, OrderItem
+
+        service_request = self.get_object()
+        user = request.user
+
+        # Permission: only the requesting client
+        if service_request.client != user:
+            return Response(
+                {'error': 'Only the client who placed this request can cancel it.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Already cancelled
+        if service_request.status == 'cancelled':
+            return Response(
+                {'error': 'This service request is already cancelled.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Gate: cancellation not allowed once work has started (wip or beyond)
+        from .models import ClientServiceRequest as CSR
+        if service_request.status not in CSR.CANCELLABLE_STATUSES:
+            return Response(
+                {
+                    'error': 'Cancellation is no longer allowed. Work has already started on your service request.',
+                    'current_status': service_request.status
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        reason = request.data.get('reason', '').strip()
+        if not reason:
+            return Response(
+                {'error': 'A cancellation reason is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # --- Razorpay Refund ---
+        refund_info = None
+        refund_error = None
+        try:
+            # Find OrderItem linked to this service_request's service
+            # The link: ServiceOrder → OrderItem (service_title matches) owned by same user
+            order_item = OrderItem.objects.select_related('order').filter(
+                order__user=service_request.client,
+                order__status='paid',
+                service_title=service_request.service.title,
+            ).order_by('-order__created_at').first()
+
+            if order_item and order_item.order.razorpay_payment_id:
+                rzp = razorpay.Client(
+                    auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
+                )
+                amount_paise = int(order_item.price * 100)
+                refund = rzp.payment.refund(
+                    order_item.order.razorpay_payment_id,
+                    {'amount': amount_paise}
+                )
+                refund_info = {
+                    'refund_id': refund.get('id'),
+                    'amount': float(order_item.price),
+                    'status': refund.get('status'),
+                }
+                # Mark the service order as cancelled
+                order_item.order.status = 'cancelled'
+                order_item.order.save(update_fields=['status'])
+        except Exception as exc:
+            # Log but do not block cancellation — admin can retry refund manually
+            import logging
+            logging.getLogger('consultants').error(
+                f"Razorpay refund failed for service_request {service_request.id}: {exc}",
+                exc_info=True
+            )
+            refund_error = str(exc)
+
+        # --- Cancel the service request ---
+        service_request.status = 'cancelled'
+        service_request.cancellation_reason = reason
+        service_request.cancelled_at = timezone.now()
+        service_request.save(update_fields=['status', 'cancellation_reason', 'cancelled_at'])
+
+        # --- Decrement consultant workload so their slot opens up immediately ---
+        if service_request.assigned_consultant:
+            from django.db.models import F, Case, When
+            from notifications.models import Notification
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            
+            consultant = service_request.assigned_consultant
+            consultant.current_client_count = Case(
+                When(current_client_count__gt=0, then=F('current_client_count') - 1),
+                default=0
+            )
+            consultant.save(update_fields=['current_client_count'])
+
+            # Send Notification to Consultant
+            consultant_user = consultant.user
+            client_name = service_request.client.first_name or service_request.client.username
+            service_name = service_request.service.title
+            
+            notif = Notification.objects.create(
+                recipient=consultant_user,
+                category='service',
+                title=f'Service Cancelled: {service_name}',
+                message=f"{client_name} has cancelled this service request. Reason: {reason}",
+                link='/dashboard'  # Redirects to dashboard
+            )
+            
+            # Send real-time websocket notification
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f"user_{consultant_user.id}",
+                {
+                    "type": "notification_message",
+                    "data": {
+                        "id": notif.id,
+                        "type": "NEW_NOTIFICATION",
+                        "category": notif.category,
+                        "title": notif.title,
+                        "message": notif.message,
+                        "link": notif.link,
+                        "created_at": notif.created_at.isoformat(),
+                        "is_read": False,
+                    }
+                }
+            )
+
+        response_data = {
+            'success': True,
+            'message': 'Service cancelled successfully.',
+            'refund': refund_info,
+        }
+        if refund_error:
+            response_data['refund_warning'] = (
+                'Refund could not be processed automatically. '
+                'Our team has been notified and will process it manually within 2 business days.'
+            )
+
+        return Response(response_data)
 
 class ConsultantReviewViewSet(viewsets.ModelViewSet):
     """API endpoint for client reviews (Feedback & Review)"""
