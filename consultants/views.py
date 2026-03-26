@@ -149,7 +149,10 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         from django.db.models import Q, Count
         title_q = Q()
         for title in titles:
-            title_q |= Q(title__iexact=title.strip())
+            t = title.strip()
+            # Try exact match first, then fallback to partial match
+            # This handles cases where the frontend sends "ITR salary" instead of "ITR Salary Filing"
+            title_q |= Q(title__iexact=t) | Q(title__icontains=t)
         
         matched_services = Service.objects.filter(title_q, is_active=True)
         # Get unique IDs to ensure we count correctly even if duplicate titles were sent
@@ -182,13 +185,13 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             id__in=consultant_ids
         ).annotate(
             live_client_count=Count(
-                'clientservicerequest',
-                filter=~Q(clientservicerequest__status__in=['completed', 'cancelled']),
+                'assigned_requests',
+                filter=~Q(assigned_requests__status__in=['completed', 'cancelled']),
                 distinct=True
             )
         ).prefetch_related(
             Prefetch(
-                'consultantreview_set',
+                'reviews',
                 queryset=ConsultantReview.objects.select_related(
                     'client', 'service_request__service'
                 ).order_by('-created_at'),
@@ -1153,3 +1156,34 @@ class ConsultantReviewViewSet(viewsets.ModelViewSet):
             raise serializers.ValidationError({"error": "No consultant was assigned to this service request."})
             
         serializer.save(client=self.request.user, consultant=consultant)
+
+    @action(detail=False, methods=['get'], url_path='by-consultant/(?P<consultant_id>\d+)')
+    def by_consultant(self, request, consultant_id=None):
+        """
+        Get paginated reviews for a specific consultant profile.
+        """
+        from rest_framework.pagination import PageNumberPagination
+        
+        # We query the model directly to bypass get_queryset restrictions
+        # which filter by the requested user
+        reviews = ConsultantReview.objects.filter(
+            consultant_id=consultant_id
+        ).select_related('client', 'service_request__service').order_by('-created_at')
+        
+        paginator = PageNumberPagination()
+        paginator.page_size = 10
+        result_page = paginator.paginate_queryset(reviews, request)
+        
+        data = []
+        for review in result_page:
+            data.append({
+                'id': review.id,
+                'rating': review.rating,
+                'review_text': review.review_text,
+                'client_name': review.client.get_full_name() or review.client.username or 'Anonymous',
+                'service_title': review.service_request.service.title if review.service_request and review.service_request.service else '',
+                'created_at': review.created_at.isoformat(),
+            })
+            
+        return paginator.get_paginated_response(data)
+

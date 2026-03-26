@@ -17,7 +17,7 @@ from celery.schedules import crontab
 app.conf.beat_schedule = {
     'process-exotel-scheduled-calls': {
         'task': 'exotel_calls.tasks.process_scheduled_calls',
-        'schedule': crontab(minute='*/5'),
+        'schedule': crontab(minute='*'),
     },
 }
 
