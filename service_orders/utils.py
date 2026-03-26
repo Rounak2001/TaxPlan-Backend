@@ -117,7 +117,7 @@ def create_service_requests_from_order(order):
                 from notifications.tasks import send_whatsapp_template_task
                 send_whatsapp_template_task.delay(
                     phone_number=client_phone,
-                    template_name="service_order_confirmation",
+                    template_name="payment_receipt_success",  # "service_order_confirmation" was removed from Meta BM
                     variables=[
                         client_name,
                         service_title_for_email,

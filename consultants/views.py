@@ -176,25 +176,36 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             expertise_count=total_required
         ).values_list('consultant_id', flat=True)
 
+        # Annotate live_client_count and prefetch recent reviews in bulk to avoid
+        # N+1 queries (one COUNT + one reviews query per consultant).
         consultants = ConsultantServiceProfile.objects.filter(
             id__in=consultant_ids
+        ).annotate(
+            live_client_count=Count(
+                'clientservicerequest',
+                filter=~Q(clientservicerequest__status__in=['completed', 'cancelled']),
+                distinct=True
+            )
+        ).prefetch_related(
+            Prefetch(
+                'consultantreview_set',
+                queryset=ConsultantReview.objects.select_related(
+                    'client', 'service_request__service'
+                ).order_by('-created_at'),
+                to_attr='recent_reviews_prefetched'
+            )
         ).order_by('current_client_count', 'last_assigned_at')
+
+        covered_titles = list(matched_services.values_list('title', flat=True))
 
         result = []
         for consultant in consultants:
-            live_client_count = ClientServiceRequest.objects.filter(
-                assigned_consultant=consultant
-            ).exclude(status__in=['completed', 'cancelled']).count()
-
+            live_client_count = consultant.live_client_count
             available_slots = consultant.max_concurrent_clients - live_client_count
             utilization = (live_client_count / consultant.max_concurrent_clients * 100) if consultant.max_concurrent_clients > 0 else 0
 
-            recent_reviews = ConsultantReview.objects.filter(
-                consultant=consultant
-            ).select_related('client', 'service_request__service').order_by('-created_at')[:3]
-
             reviews_data = []
-            for review in recent_reviews:
+            for review in consultant.recent_reviews_prefetched[:3]:
                 reviews_data.append({
                     'id': review.id,
                     'rating': review.rating,
@@ -203,9 +214,6 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
                     'service_title': review.service_request.service.title if review.service_request and review.service_request.service else '',
                     'created_at': review.created_at.isoformat(),
                 })
-
-            # Since these are full-coverage consultants, they cover all titles
-            covered_titles = list(matched_services.values_list('title', flat=True))
 
             result.append({
                 'id': consultant.id,
@@ -286,22 +294,35 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             familiar, familiar_relation = find_familiar_consultant(request.user, service.id)
         
         # Build consultant data with reviews
+        # Annotate live_client_count and prefetch reviews in bulk to eliminate
+        # N+1 queries (one per consultant for COUNT and one for reviews).
+        from django.db.models import Count, Q, Prefetch
+        consultants = ConsultantServiceProfile.objects.filter(
+            id__in=[c.id for c in consultants]
+        ).annotate(
+            live_client_count=Count(
+                'clientservicerequest',
+                filter=~Q(clientservicerequest__status__in=['completed', 'cancelled']),
+                distinct=True
+            )
+        ).prefetch_related(
+            Prefetch(
+                'consultantreview_set',
+                queryset=ConsultantReview.objects.select_related(
+                    'client', 'service_request__service'
+                ).order_by('-created_at'),
+                to_attr='recent_reviews_prefetched'
+            )
+        ).order_by('current_client_count', 'last_assigned_at')
+
         result = []
         for consultant in consultants:
-            live_client_count = ClientServiceRequest.objects.filter(
-                assigned_consultant=consultant
-            ).exclude(status__in=['completed', 'cancelled']).count()
-            
+            live_client_count = consultant.live_client_count
             available_slots = consultant.max_concurrent_clients - live_client_count
             utilization = (live_client_count / consultant.max_concurrent_clients * 100) if consultant.max_concurrent_clients > 0 else 0
-            
-            # Fetch recent reviews (up to 3)
-            recent_reviews = ConsultantReview.objects.filter(
-                consultant=consultant
-            ).select_related('client', 'service_request__service').order_by('-created_at')[:3]
-            
+
             reviews_data = []
-            for review in recent_reviews:
+            for review in consultant.recent_reviews_prefetched[:3]:
                 reviews_data.append({
                     'id': review.id,
                     'rating': review.rating,
@@ -310,7 +331,7 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
                     'service_title': review.service_request.service.title if review.service_request and review.service_request.service else '',
                     'created_at': review.created_at.isoformat(),
                 })
-            
+
             consultant_data = {
                 'id': consultant.id,
                 'full_name': consultant.full_name,
@@ -327,9 +348,9 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
                     'utilization': round(utilization, 1)
                 }
             }
-            
+
             result.append(consultant_data)
-            
+
             # If this is the familiar consultant, build the suggestion
             if familiar and consultant.id == familiar.id:
                 if familiar_relation and familiar_relation['relation'] == 'parent':
@@ -383,10 +404,12 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
         expertise = ConsultantServiceExpertise.objects.filter(consultant=profile).select_related('service', 'service__category')
         services = [exp.service for exp in expertise]
         
-        # Get assigned requests
+        # Get assigned requests — select_related eliminates per-row FK queries in the serializer
         assigned_requests = ClientServiceRequest.objects.filter(
             assigned_consultant=profile
-        ).exclude(status__in=['completed', 'cancelled']).order_by('-created_at')
+        ).exclude(status__in=['completed', 'cancelled']).select_related(
+            'client', 'service', 'service__category'
+        ).order_by('-created_at')
         
         # Calculate stats — compute live client count from active requests
         total_completed = ClientServiceRequest.objects.filter(
@@ -511,18 +534,30 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
         Get all consultants with their services for client dashboard
         Clients can see which consultants offer which services
         """
-        # Get all active consultants
-        consultants = ConsultantServiceProfile.objects.filter(is_active=True)
-        
+        from django.db.models import Count, Q, Prefetch
+
+        # Prefetch expertise in ONE query and annotate live_client_count to avoid
+        # N+1 queries (one per consultant) for both expertise and client counts.
+        consultants = ConsultantServiceProfile.objects.filter(is_active=True).prefetch_related(
+            Prefetch(
+                'consultantserviceexpertise_set',
+                queryset=ConsultantServiceExpertise.objects.select_related(
+                    'service', 'service__category'
+                ),
+                to_attr='prefetched_expertise'
+            )
+        ).annotate(
+            live_client_count=Count(
+                'clientservicerequest__client',
+                filter=~Q(clientservicerequest__status__in=['completed', 'cancelled']),
+                distinct=True
+            )
+        )
+
         result = []
         for consultant in consultants:
-            # Get services offered by this consultant
-            expertise = ConsultantServiceExpertise.objects.filter(
-                consultant=consultant
-            ).select_related('service', 'service__category')
-            
             services = []
-            for exp in expertise:
+            for exp in consultant.prefetched_expertise:
                 services.append({
                     'id': exp.service.id,
                     'title': exp.service.title,
@@ -530,15 +565,11 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
                     'price': str(exp.service.price) if exp.service.price else None,
                     'tat': exp.service.tat
                 })
-            
-            # Calculate availability — compute live client count from active requests
-            live_client_count = ClientServiceRequest.objects.filter(
-                assigned_consultant=consultant
-            ).exclude(status__in=['completed', 'cancelled']).values('client').distinct().count()
 
+            live_client_count = consultant.live_client_count
             available_slots = consultant.max_concurrent_clients - live_client_count
             availability_percentage = (available_slots / consultant.max_concurrent_clients * 100) if consultant.max_concurrent_clients > 0 else 0
-            
+
             result.append({
                 'id': consultant.id,
                 'full_name': consultant.full_name,
@@ -557,7 +588,7 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
                 'services': services,
                 'total_services': len(services)
             })
-        
+
         return Response({
             'consultants': result,
             'total_consultants': len(result)

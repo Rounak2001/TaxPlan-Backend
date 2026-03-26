@@ -4,12 +4,20 @@ import base64
 from celery import shared_task
 from django.utils import timezone
 from django.conf import settings
+from django.db import OperationalError
 from .models import ScheduledCall, CallLog
 
 logger = logging.getLogger(__name__)
 
-@shared_task
-def process_scheduled_calls():
+@shared_task(
+    bind=True,
+    autoretry_for=(OperationalError,),  # Neon cold-start OperationalError
+    max_retries=3,
+    retry_backoff=30,   # 30s, 60s, 120s
+    retry_backoff_max=120,
+    retry_jitter=False,
+)
+def process_scheduled_calls(self):
     """
     Query ScheduledCall records that are pending and run_at <= now()
     Make Exotel API calls to connect them to the specific applet.
