@@ -170,9 +170,21 @@ class GSTR2BExcelService:
         
         errors = []
         results = {}
+
+        # Pre-fetch all cached records for all periods in ONE query (fixes N+1)
+        pre_fetched_cache = GSTDataService.batch_cache_lookup(
+            user=user, gstin=gstin,
+            return_type="GSTR2B", section="",
+            periods=periods
+        ) if not force_refresh else None
+
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_to_period = {
-                executor.submit(GSTDataService.get_gstr2b, user, gstin, yr, mn, taxpayer_token, force_refresh): (yr, mn) 
+                executor.submit(
+                    GSTDataService.get_gstr2b,
+                    user, gstin, yr, mn, taxpayer_token, force_refresh,
+                    pre_fetched_cache  # <-- eliminates per-period cache SELECT
+                ): (yr, mn)
                 for yr, mn in periods
             }
             

@@ -32,6 +32,16 @@ ALLOWED_HOSTS = [
     '13.235.240.24',
 ]
 
+# =============================================================================
+# NOISE SUPPRESSION (PYTHON-DJANGO-3)
+# =============================================================================
+# Suppress Django's 404 logging for known bot/crawler paths (e.g., Cloudflare /cdn-cgi/*)
+import re
+IGNORABLE_404_URLS = [
+    re.compile(r'^/cdn-cgi/'),
+    re.compile(r'^/\.well-known/'),
+]
+
 # HTTPS/SSL Settings
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = True
@@ -99,9 +109,13 @@ DATABASES = {
     'default': dj_database_url.config(
         default=os.environ.get('DATABASE_URL'),
         conn_max_age=60,
+        conn_health_checks=True,   # Re-validate connections before use (fixes Neon idle timeouts)
         ssl_require=True
     )
 }
+# Neon PostgreSQL closes idle connections — tell psycopg2 to give up fast if unreachable
+DATABASES['default'].setdefault('OPTIONS', {})
+DATABASES['default']['OPTIONS']['connect_timeout'] = 10
 
 
 # =============================================================================
