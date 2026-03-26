@@ -144,12 +144,25 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
                 'familiar_consultant': None,
                 'total': 0
             })
+        normalized_titles = [
+            str(title).strip()
+            for title in titles
+            if str(title).strip()
+        ]
+        if not normalized_titles:
+            return Response({
+                'consultants': [],
+                'auto_recommended': None,
+                'familiar_consultant': None,
+                'total': 0,
+                'matched_services': 0
+            })
 
         # Find matching Service records by title (case-insensitive)
         from django.db.models import Q, Count
         title_q = Q()
-        for title in titles:
-            title_q |= Q(title__iexact=title.strip())
+        for title in normalized_titles:
+            title_q |= Q(title__iexact=title)
         
         matched_services = Service.objects.filter(title_q, is_active=True)
         # Get unique IDs to ensure we count correctly even if duplicate titles were sent
@@ -165,16 +178,12 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
                 'matched_services': 0
             })
 
-        # Find consultants who have expertise in ALL of the matched services
-        # We group by consultant and count how many of the required service IDs they have
+        # Find consultants who have expertise in ANY of the matched services.
+        # This keeps consultant discovery broad and aligns with the endpoint contract.
         consultant_ids = ConsultantServiceExpertise.objects.filter(
             service_id__in=required_service_ids,
             consultant__is_active=True,
-        ).values('consultant_id').annotate(
-            expertise_count=Count('service_id', distinct=True)
-        ).filter(
-            expertise_count=total_required
-        ).values_list('consultant_id', flat=True)
+        ).values_list('consultant_id', flat=True).distinct()
 
         # Annotate live_client_count and prefetch recent reviews in bulk to avoid
         # N+1 queries (one COUNT + one reviews query per consultant).
@@ -182,13 +191,13 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             id__in=consultant_ids
         ).annotate(
             live_client_count=Count(
-                'clientservicerequest',
-                filter=~Q(clientservicerequest__status__in=['completed', 'cancelled']),
+                'assigned_requests',
+                filter=~Q(assigned_requests__status__in=['completed', 'cancelled']),
                 distinct=True
             )
         ).prefetch_related(
             Prefetch(
-                'consultantreview_set',
+                'reviews',
                 queryset=ConsultantReview.objects.select_related(
                     'client', 'service_request__service'
                 ).order_by('-created_at'),
@@ -238,7 +247,10 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         familiar_data = None
         if request.user.is_authenticated and result:
             from .services import get_consultant_affinity
-            affinity_map = get_consultant_affinity(request.user)
+            try:
+                affinity_map = get_consultant_affinity(request.user)
+            except Exception:
+                affinity_map = {}
             
             best_match = None
             best_interaction_date = None
@@ -301,13 +313,13 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
             id__in=[c.id for c in consultants]
         ).annotate(
             live_client_count=Count(
-                'clientservicerequest',
-                filter=~Q(clientservicerequest__status__in=['completed', 'cancelled']),
+                'assigned_requests',
+                filter=~Q(assigned_requests__status__in=['completed', 'cancelled']),
                 distinct=True
             )
         ).prefetch_related(
             Prefetch(
-                'consultantreview_set',
+                'reviews',
                 queryset=ConsultantReview.objects.select_related(
                     'client', 'service_request__service'
                 ).order_by('-created_at'),
@@ -548,8 +560,8 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
             )
         ).annotate(
             live_client_count=Count(
-                'clientservicerequest__client',
-                filter=~Q(clientservicerequest__status__in=['completed', 'cancelled']),
+                'assigned_requests__client',
+                filter=~Q(assigned_requests__status__in=['completed', 'cancelled']),
                 distinct=True
             )
         )
