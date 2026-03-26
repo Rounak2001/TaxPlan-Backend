@@ -7,6 +7,7 @@ from django.db.models import F
 from django.utils import timezone
 from consultants.models import ClientServiceRequest
 from consultants.services import assign_consultant_to_request
+from activity_timeline.models import Activity
 
 logger = logging.getLogger(__name__)
 
@@ -141,5 +142,35 @@ def create_service_requests_from_order(order):
                 'phone': consultant.phone if consultant else None
             } if consultant else None
         })
+
+        if getattr(order, 'is_additional', False):
+            service_title = getattr(item.service, 'title', getattr(item, 'service_title', 'Custom Service'))
+            activity_actor = order.initiated_by or order.user
+
+            Activity.objects.create(
+                actor=activity_actor,
+                target_user=order.user,
+                activity_type='additional_payment_paid',
+                title=f"Payment of Rs {item.price} completed for {service_title}",
+                content_object=order,
+                metadata={
+                    'booking_id': order.from_booking_id,
+                    'service_title': service_title,
+                    'amount': str(item.price),
+                    'razorpay_payment_id': order.razorpay_payment_id,
+                },
+            )
+
+            Activity.objects.create(
+                actor=activity_actor,
+                target_user=order.user,
+                activity_type='additional_service_added',
+                title=f"Additional service '{service_title}' added to your account",
+                content_object=request,
+                metadata={
+                    'booking_id': order.from_booking_id,
+                    'assigned_consultant_id': consultant.id if consultant else None,
+                },
+            )
     
     return created_requests

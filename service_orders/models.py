@@ -21,6 +21,28 @@ class ServiceOrder(models.Model):
     razorpay_order_id = models.CharField(max_length=100, blank=True, null=True)
     razorpay_payment_id = models.CharField(max_length=100, blank=True, null=True)
     razorpay_signature = models.CharField(max_length=255, blank=True, null=True)
+
+    # Additional in-call service payment metadata
+    from_booking = models.ForeignKey(
+        'consultations.ConsultationBooking',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='additional_service_orders',
+        help_text='Set when this order was initiated during a live consultation call',
+    )
+    is_additional = models.BooleanField(
+        default=False,
+        help_text='True if this order was initiated by a consultant during a live consultation',
+    )
+    initiated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='initiated_additional_orders',
+        help_text='Consultant who requested this additional payment',
+    )
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -196,3 +196,29 @@ class LegalNotice(models.Model):
     class Meta:
         ordering = ['-created_at']
 
+
+class DocumentAccess(models.Model):
+    """
+    Explicit access grant — records which consultants a client has
+    allowed to view a specific document. No record = no access for consultant.
+    """
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.CASCADE,
+        related_name='access_grants'
+    )
+    consultant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='document_accesses'
+    )
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('document', 'consultant')
+        db_table = 'vault_document_access'
+        ordering = ['granted_at']
+
+    def __str__(self):
+        return f"{self.consultant.get_full_name()} -> {self.document.title}"
+

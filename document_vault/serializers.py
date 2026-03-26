@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import Document, SharedReport, LegalNotice, Folder
+from django.db.utils import OperationalError, ProgrammingError
+from .models import Document, SharedReport, LegalNotice, Folder, DocumentAccess
 
 class FolderSerializer(serializers.ModelSerializer):
     created_by_name = serializers.ReadOnlyField(source='created_by.get_full_name')
@@ -25,15 +26,23 @@ class DocumentSerializer(serializers.ModelSerializer):
     client_name = serializers.ReadOnlyField(source='client.get_full_name')
     consultant_name = serializers.ReadOnlyField(source='consultant.get_full_name')
     folder_name = serializers.ReadOnlyField(source='folder.name')
+    granted_consultant_ids = serializers.SerializerMethodField()
     
     class Meta:
         model = Document
         fields = [
             'id', 'client', 'client_name', 'consultant', 'consultant_name',
             'folder', 'folder_name', 'title', 'description', 'file', 'file_password', 'status', 
-            'created_at', 'uploaded_at'
+            'created_at', 'uploaded_at', 'granted_consultant_ids'
         ]
         read_only_fields = ['client', 'consultant', 'status', 'created_at', 'uploaded_at']
+
+    def get_granted_consultant_ids(self, obj):
+        try:
+            return list(obj.access_grants.values_list('consultant_id', flat=True))
+        except (ProgrammingError, OperationalError):
+            # Graceful fallback if migration for vault_document_access is not applied yet.
+            return []
 
 class DocumentUploadSerializer(serializers.ModelSerializer):
     class Meta:
