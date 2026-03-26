@@ -516,7 +516,7 @@ def _generate_and_send_credentials(app):
             f"Here are your login credentials for the consultant portal:\n\n"
             f"Username: {username}\n"
             f"Password: {password}\n\n"
-            f"Login at: https://main.taxplanadvisor.co\n\n"
+            f"Login at: https://api.taxplanadvisor.in\n\n"
             f"Please keep these credentials safe and do not share them.\n\n"
             f"Best regards,\nTaxPlan Advisor Team"
         )
