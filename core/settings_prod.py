@@ -113,9 +113,16 @@ DATABASES = {
         ssl_require=True
     )
 }
-# Neon PostgreSQL closes idle connections — tell psycopg2 to give up fast if unreachable
+# Neon PostgreSQL closes idle connections — increase timeout to survive cold starts
+# (Neon compute can take 15–30s to wake up from suspend; 10s was too short)
 DATABASES['default'].setdefault('OPTIONS', {})
-DATABASES['default']['OPTIONS']['connect_timeout'] = 10
+DATABASES['default']['OPTIONS']['connect_timeout'] = 30
+# TCP keepalive: mark idle connections as stale quickly so psycopg2 doesn't
+# attempt to reuse a server-closed connection
+DATABASES['default']['OPTIONS']['keepalives'] = 1
+DATABASES['default']['OPTIONS']['keepalives_idle'] = 60    # 60s idle before first probe
+DATABASES['default']['OPTIONS']['keepalives_interval'] = 10 # retry every 10s
+DATABASES['default']['OPTIONS']['keepalives_count'] = 5     # 5 failed probes = dead
 
 
 # =============================================================================
