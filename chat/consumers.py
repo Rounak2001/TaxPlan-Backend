@@ -191,25 +191,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }
             )
 
-            # Send real-time notification to the recipient's dashboard (if they are NOT in the chat room)
-            if self.user.role == 'CONSULTANT':
-                recipient_id = message.get('client_id')
-                if recipient_id:
-                    await self.channel_layer.group_send(
-                        f"user_{recipient_id}",
-                        {
-                            "type": "notification_message",
-                            "data": {
-                                "type": "NEW_MESSAGE",
-                                "category": "chat",
-                                "title": f"New message from {self.user.first_name or self.user.username}",
-                                "message": message['content'][:50] + ('...' if len(message['content']) > 50 else ''),
-                                "conversation_id": str(self.conversation_id),
-                                "sender_name": self.user.first_name or self.user.username,
-                            }
-                        }
-                    )
-                    logger.info(f"Sent real-time notification to client {recipient_id}")
+            logger.info(f"Sent real-time notification to client {message.get('client_id') if self.user.role == 'CONSULTANT' else 'N/A'}")
         else:
             print(f"[CHAT] FAILED to save message")  # DEBUG
             logger.error(f"Failed to save message from {self.user.username}")

@@ -46,15 +46,33 @@ def send_whatsapp_template(phone_number, template_name, variables=None):
         }
     }
     
-    # Add variables to body components if provided
+    # Add variables to body and button components if provided
     if variables:
-        body_parameters = [{"type": "text", "text": str(var)[:100]} for var in variables] # Meta limits string vars
-        payload["template"]["components"] = [
-            {
+        components = []
+        
+        # Special case for consultation_reminder_final which uses a dynamic URL button
+        if template_name == "consultation_reminder_final" and len(variables) >= 5:
+            # First 4 variables go to the BODY
+            components.append({
                 "type": "body",
-                "parameters": body_parameters
-            }
-        ]
+                "parameters": [{"type": "text", "text": str(var)[:100]} for var in variables[:4]]
+            })
+            # 5th variable goes to the BUTTON (Dynamic URL suffix)
+            # sub_type must be 'url', index is '0' for the first button
+            components.append({
+                "type": "button",
+                "sub_type": "url",
+                "index": "0",
+                "parameters": [{"type": "text", "text": str(variables[4])[:100]}]
+            })
+        else:
+            # Default: All variables go to the body
+            components.append({
+                "type": "body",
+                "parameters": [{"type": "text", "text": str(var)[:100]} for var in variables]
+            })
+            
+        payload["template"]["components"] = components
         
     try:
         print(f"\n[WHATSAPP DEBUG] Sending template '{template_name}' to {formatted_phone}")

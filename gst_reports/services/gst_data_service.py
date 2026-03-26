@@ -113,7 +113,7 @@ class GSTDataService:
     # GSTR-2B FETCHERS
     # =========================================================================
     @staticmethod
-    def get_gstr2b(user, gstin, year, month, taxpayer_token, force_refresh=False):
+    def get_gstr2b(user, gstin, year, month, taxpayer_token, force_refresh=False, pre_fetched_cache=None):
         """Fetch GSTR-2B data."""
         return GSTDataService._fetch_with_cache(
             user=user,
@@ -124,8 +124,24 @@ class GSTDataService:
             month=month,
             taxpayer_token=taxpayer_token,
             api_url=f"{SANDBOX_BASE_URL}/gstrs/gstr-2b/{year}/{month:02d}",
-            force_refresh=force_refresh
+            force_refresh=force_refresh,
+            pre_fetched_cache=pre_fetched_cache
         )
+
+    @staticmethod
+    def batch_cache_lookup(user, gstin, return_type, section, periods):
+        """
+        Fetch all matching CachedGSTResponse rows for the given periods in a
+        single SQL query instead of one query per period (eliminates N+1).
+
+        Returns a dict keyed by (return_type, section, year, month) -> CachedGSTResponse.
+        """
+        from django.db.models import Q
+        q = Q()
+        for year, month in periods:
+            q |= Q(return_type=return_type, section=section, year=year, month=month)
+        rows = CachedGSTResponse.objects.filter(user=user, gstin=gstin).filter(q)
+        return {(r.return_type, r.section, r.year, r.month): r for r in rows}
 
     # =========================================================================
     # TAXPAYER DETAILS FETCHERS
@@ -146,8 +162,13 @@ class GSTDataService:
         )
 
     @staticmethod
-    def _fetch_with_cache(user, gstin, return_type, section, year, month, taxpayer_token, api_url, force_refresh=False):
-        """Core method with cache-first strategy."""
+    def _fetch_with_cache(user, gstin, return_type, section, year, month, taxpayer_token, api_url, force_refresh=False, pre_fetched_cache=None):
+        """Core method with cache-first strategy.
+
+        Args:
+            pre_fetched_cache: Optional dict from batch_cache_lookup(). When supplied,
+                               avoids a per-period DB query (fixes N+1 on multi-period downloads).
+        """
         cache_key = {
             'user': user,
             'gstin': gstin,
@@ -156,9 +177,13 @@ class GSTDataService:
             'year': year,
             'month': month
         }
-        
+
         if not force_refresh:
-            cached = CachedGSTResponse.objects.filter(**cache_key).first()
+            # Use pre-fetched batch result if available, otherwise fall back to individual query
+            if pre_fetched_cache is not None:
+                cached = pre_fetched_cache.get((return_type, section, year, month))
+            else:
+                cached = CachedGSTResponse.objects.filter(**cache_key).first()
             if cached:
                 # SELF-HEALING: Validate cached content before serving
                 data = cached.raw_json

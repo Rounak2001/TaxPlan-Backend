@@ -49,71 +49,113 @@ def find_familiar_consultant(client, service_id):
     Returns:
         ConsultantServiceProfile or None
     """
+def get_consultant_affinity(client):
+    """
+    Returns a dictionary mapping ConsultantServiceProfile ID to interaction metadata:
+    {
+        profile_id: {
+            'last_interaction': datetime,
+            'relation': 'self' | 'parent',
+            'parent_name': str | None
+        }
+    }
+    """
     from consultations.models import ConsultationBooking
     from django.db.models import Max
     
-    # ─── Step 1: Build relationship map from Service Requests ───
-    # {ConsultantServiceProfile.id: latest_assigned_at}
-    past_from_services = (
-        ClientServiceRequest.objects.filter(
-            client=client,
-            assigned_consultant__isnull=False,
-            status__in=['assigned', 'completed'] + ClientServiceRequest.ACTIVE_STATUSES
+    def fetch_affinity(user, relation='self'):
+        # {ConsultantServiceProfile.id: latest_assigned_at}
+        past_from_services = (
+            ClientServiceRequest.objects.filter(
+                client=user,
+                assigned_consultant__isnull=False,
+                status__in=['assigned', 'completed'] + ClientServiceRequest.ACTIVE_STATUSES
+            )
+            .values('assigned_consultant')
+            .annotate(last_interaction=Max('assigned_at'))
         )
-        .values('assigned_consultant')
-        .annotate(last_interaction=Max('assigned_at'))
-    )
-    
-    # Map: consultant_profile_id -> last_interaction_date
-    affinity_map = {}
-    for record in past_from_services:
-        profile_id = record['assigned_consultant']
-        interaction_date = record['last_interaction']
-        if profile_id and interaction_date:
-            affinity_map[profile_id] = interaction_date
-    
-    # ─── Step 2: Build relationship map from Consultation Bookings ───
-    # ConsultationBooking.consultant is a User FK, so we need to map User -> ConsultantServiceProfile
-    past_from_consultations = (
-        ConsultationBooking.objects.filter(
-            client=client,
-            status='confirmed'
+        
+        local_map = {}
+        for record in past_from_services:
+            profile_id = record['assigned_consultant']
+            interaction_date = record['last_interaction']
+            if profile_id and interaction_date:
+                local_map[profile_id] = {
+                    'last_interaction': interaction_date,
+                    'relation': relation,
+                    'parent_name': user.get_full_name() if relation == 'parent' else None
+                }
+                
+        past_from_consultations = (
+            ConsultationBooking.objects.filter(
+                client=user,
+                status='confirmed'
+            )
+            .values('consultant')
+            .annotate(last_interaction=Max('booking_date'))
         )
-        .values('consultant')
-        .annotate(last_interaction=Max('booking_date'))
-    )
+        
+        for record in past_from_consultations:
+            user_id = record['consultant']
+            interaction_date = record['last_interaction']
+            if not user_id or not interaction_date:
+                continue
+                
+            try:
+                profile = ConsultantServiceProfile.objects.get(user_id=user_id)
+                interaction_datetime = timezone.make_aware(
+                    timezone.datetime.combine(interaction_date, timezone.datetime.min.time())
+                ) if not isinstance(interaction_date, timezone.datetime) else interaction_date
+                
+                if profile.id in local_map:
+                    if interaction_datetime > local_map[profile.id]['last_interaction']:
+                        local_map[profile.id]['last_interaction'] = interaction_datetime
+                else:
+                    local_map[profile.id] = {
+                        'last_interaction': interaction_datetime,
+                        'relation': relation,
+                        'parent_name': user.get_full_name() if relation == 'parent' else None
+                    }
+            except ConsultantServiceProfile.DoesNotExist:
+                continue
+        return local_map
+
+    # 1. Get user's own affinity
+    affinity_map = fetch_affinity(client, relation='self')
     
-    for record in past_from_consultations:
-        user_id = record['consultant']
-        interaction_date = record['last_interaction']
-        if not user_id or not interaction_date:
-            continue
+    # 2. If sub-account, get parent's affinity
+    if client.parent_account:
+        parent_affinity = fetch_affinity(client.parent_account, relation='parent')
+        # Merge: User's own affinity takes priority if same consultant
+        for profile_id, meta in parent_affinity.items():
+            if profile_id not in affinity_map:
+                affinity_map[profile_id] = meta
+            # If both exist, keep the 'self' one (already in map) unless parent one is much newer?
+            # User's own context is usually better even if slightly older.
             
-        # Map User ID -> ConsultantServiceProfile ID
-        try:
-            profile = ConsultantServiceProfile.objects.get(user_id=user_id)
-            # Convert date to datetime for comparison (booking_date is DateField)
-            interaction_datetime = timezone.make_aware(
-                timezone.datetime.combine(interaction_date, timezone.datetime.min.time())
-            ) if not isinstance(interaction_date, timezone.datetime) else interaction_date
-            
-            # Keep the most recent interaction date
-            if profile.id in affinity_map:
-                if interaction_datetime > affinity_map[profile.id]:
-                    affinity_map[profile.id] = interaction_datetime
-            else:
-                affinity_map[profile.id] = interaction_datetime
-        except ConsultantServiceProfile.DoesNotExist:
-            continue  # This consultant doesn't have a service profile
+    return affinity_map
+
+def find_familiar_consultant(client, service_id):
+    """
+    Find a consultant who has previously worked with this client (or their parent)
+    AND offers the requested service.
+    
+    Returns: (ConsultantServiceProfile, relation_meta) or (None, None)
+    """
+    affinity_map = get_consultant_affinity(client)
     
     if not affinity_map:
-        return None  # No past relationships
+        return None, None
     
-    # ─── Step 3: Sort by most recent interaction, keep top 5 ───
-    sorted_profiles = sorted(affinity_map.items(), key=lambda x: x[1], reverse=True)[:5]
+    # Sort by most recent interaction date
+    sorted_profiles = sorted(
+        affinity_map.items(), 
+        key=lambda x: x[1]['last_interaction'], 
+        reverse=True
+    )[:5]
     familiar_profile_ids = [profile_id for profile_id, _ in sorted_profiles]
     
-    # ─── Step 4: Filter to those who offer the requested service AND are available ───
+    # Filter to those who offer the requested service AND are available
     familiar_experts = ConsultantServiceExpertise.objects.filter(
         service_id=service_id,
         consultant_id__in=familiar_profile_ids,
@@ -122,32 +164,23 @@ def find_familiar_consultant(client, service_id):
     ).select_related('consultant')
     
     if not familiar_experts.exists():
-        return None  # No familiar consultant offers this service or is available
+        return None, None
     
-    # ─── Step 5: Among available familiar consultants, pick the best ───
-    # Sort: most recent interaction first, then least busy as tiebreaker
     best_match = None
     best_interaction_date = None
     
     for expertise in familiar_experts:
-        consultant = expertise.consultant
-        interaction_date = affinity_map.get(consultant.id)
-        
-        if best_match is None:
-            best_match = consultant
+        profile = expertise.consultant
+        meta = affinity_map.get(profile.id)
+        if not meta:
+            continue
+            
+        interaction_date = meta['last_interaction']
+        if best_match is None or interaction_date > best_interaction_date:
+            best_match = profile
             best_interaction_date = interaction_date
-        elif interaction_date and best_interaction_date:
-            # Prefer more recent interaction
-            if interaction_date > best_interaction_date:
-                best_match = consultant
-                best_interaction_date = interaction_date
-            # If same interaction date, prefer least busy
-            elif interaction_date == best_interaction_date:
-                if consultant.current_client_count < best_match.current_client_count:
-                    best_match = consultant
-                    best_interaction_date = interaction_date
-    
-    return best_match
+            
+    return best_match, affinity_map.get(best_match.id) if best_match else None
 
 
 def assign_consultant_to_request(request_id):

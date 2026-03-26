@@ -93,6 +93,38 @@ def process_scheduled_calls():
                 call_log.exotel_sid = exotel_sid
                 call_log.status = 'queued'
                 call_log.save()
+
+                # --- NEW: Trigger WhatsApp Reminder ---
+                # This template is sent exactly 1 hour before the meeting.
+                if client_phone:
+                    from notifications.tasks import send_whatsapp_template_task
+                    from urllib.parse import urlparse
+                    
+                    # Variables for Template: [Client Name, Consultant Name, Date, Time, Meeting Code]
+                    client_name = client.first_name or client.username
+                    consultant_name = booking.consultant.get_full_name() or booking.consultant.username
+                    booking_date = booking.booking_date.strftime('%d %b %Y')
+                    start_time = booking.start_time.strftime('%I:%M %p')
+                    
+                    # Extract meeting code from link (e.g. 'abc-defg-hij' from https://meet.google.com/abc-defg-hij)
+                    # This code is used as the dynamic suffix for the "Join Meeting" button
+                    meeting_code = ""
+                    if booking.meeting_link:
+                        path = urlparse(booking.meeting_link).path
+                        meeting_code = path.strip('/')
+                    
+                    send_whatsapp_template_task.delay(
+                        phone_number=client_phone,
+                        template_name="consultation_reminder_final",
+                        variables=[
+                            client_name,
+                            consultant_name,
+                            booking_date,
+                            start_time,
+                            meeting_code
+                        ]
+                    )
+                    logger.info(f"Queued WhatsApp consultation reminder for client {client.id} (Booking {booking.id})")
                 
             else:
                 scheduled_call.status = 'failed'
