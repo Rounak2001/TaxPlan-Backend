@@ -32,63 +32,67 @@ class InitiateCallView(APIView):
     def post(self, request):
         user = request.user
         
-        # Only consultants can make calls
-        if user.role != User.CONSULTANT:
+        from consultants.models import ClientServiceRequest
+        
+        is_consultant = (user.role == User.CONSULTANT)
+        is_client = (user.role == User.CLIENT)
+        
+        if not (is_consultant or is_client):
             return Response(
-                {'error': 'Only consultants can initiate calls'}, 
+                {'error': 'You do not have permission to initiate calls'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
+            
+        if is_consultant:
+            client_id = request.data.get('client_id')
+            if not client_id:
+                return Response({'error': 'client_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
+            if not is_service:
+                return Response({'error': 'Client not found or not assigned to you'}, status=status.HTTP_404_NOT_FOUND)
+                
+            callee_user = User.objects.get(id=client_id)
+            caller_phone = user.phone_number
+            callee_phone = callee_user.phone_number
+            
+        else: # is_client
+            consultant_id = request.data.get('consultant_id')
+            if not consultant_id:
+                return Response({'error': 'consultant_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+                
+            is_service = ClientServiceRequest.objects.filter(client_id=user.id, assigned_consultant__user_id=consultant_id).exists()
+            if not is_service:
+                return Response({'error': 'Consultant not found or not assigned to you'}, status=status.HTTP_404_NOT_FOUND)
+                
+            callee_user = User.objects.get(id=consultant_id)
+            caller_phone = user.phone_number
+            callee_phone = callee_user.phone_number
         
-        client_id = request.data.get('client_id')
-        if not client_id:
-            return Response(
-                {'error': 'client_id is required'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Move imports to appropriate scope or ensure they are at top
-        from consultants.models import ClientServiceRequest
-        from django.db.models import Q
-
-        # Security: Verify this client is assigned to the requesting consultant via active service
-        is_service = ClientServiceRequest.objects.filter(client_id=client_id, assigned_consultant__user=user).exists()
-        
-        if not is_service:
-            return Response(
-                {'error': 'Client not found or not assigned to you'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        client_user = User.objects.get(id=client_id)
-        
-        # Get phone numbers (securely, never exposing to frontend)
-        consultant_phone = user.phone_number
-        client_phone = client_user.phone_number
-        
-        if not consultant_phone:
+        if not caller_phone:
             return Response(
                 {'error': 'Your phone number is not configured. Please update your profile.'}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        if not client_phone:
+        if not callee_phone:
             return Response(
-                {'error': 'Client phone number is not available.'}, 
+                {'error': 'Counterpart phone number is not available.'}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         # Create CallLog entry
         call_log = CallLog.objects.create(
             caller=user,
-            callee=client_user,
+            callee=callee_user,
             status='initiated'
         )
         
         # Make Exotel API call
         try:
             exotel_response = self._make_exotel_call(
-                from_number=consultant_phone,
-                to_number=client_phone,
+                from_number=caller_phone,
+                to_number=callee_phone,
                 call_log_id=call_log.id
             )
             
@@ -99,7 +103,7 @@ class InitiateCallView(APIView):
                 
                 return Response({
                     'success': True,
-                    'message': f'Calling you now. Please pick up to connect with {client_user.get_full_name() or client_user.username}.',
+                    'message': f'Calling you now. Please pick up to connect with {callee_user.get_full_name() or callee_user.username}.',
                     'call_id': call_log.id
                 })
             else:
@@ -622,12 +626,12 @@ class RefreshCallDetailsView(APIView):
             }
 
 
-def _get_client_and_consultants(caller_phone_raw, logger=None):
+def _get_counterparts(caller_phone_raw, logger=None):
     """
-    Given a raw phone number from Exotel, find the client and their active consultants.
-    Returns: (client, consultants_list)
-    where consultants_list is a list of dicts: 
-    [{'digit': '1', 'consultant': UserObj, 'services': ['GST', 'ITR']}, ...]
+    Given a raw phone number from Exotel, find the user and their active counterparts.
+    Returns: (caller_user, counterparts_list)
+    where counterparts_list is a list of dicts: 
+    [{'digit': '1', 'user': UserObj, 'services': ['GST', 'ITR']}, ...]
     """
     import logging
     import re
@@ -650,61 +654,77 @@ def _get_client_and_consultants(caller_phone_raw, logger=None):
         f"0{caller_phone}",
     ]
     
-    client = None
+    caller_user = None
     for variant in phone_variants:
-        client = User.objects.filter(phone_number=variant, role=User.CLIENT).first()
-        if client:
+        caller_user = User.objects.filter(phone_number=variant).first()
+        if caller_user:
             break
             
-    if not client:
-        client = User.objects.filter(phone_number__icontains=caller_phone, role=User.CLIENT).first()
+    if not caller_user:
+        caller_user = User.objects.filter(phone_number__icontains=caller_phone).first()
         
-    if not client:
-        logger.info(f"Helper: No client found for phone variants {phone_variants}")
+    if not caller_user:
+        logger.info(f"Helper: No user found for phone variants {phone_variants}")
         return None, []
         
-    logger.info(f"Helper: Found client {client.id} - {client.get_full_name()}")
+    logger.info(f"Helper: Found user {caller_user.id} ({caller_user.role}) - {caller_user.get_full_name()}")
     
-    # Track unique consultants and their services
-    consultants_map = {}
-    
-    # Add consultants from active ClientServiceRequests
-    # We include 'pending' as well because the admin might have just assigned them
-    # but the status hasn't moved to 'assigned' yet.
+    counterparts_map = {}
     active_statuses = list(ClientServiceRequest.ACTIVE_STATUSES) + ['pending']
-    requests = ClientServiceRequest.objects.filter(
-        client=client, 
-        status__in=active_statuses,
-        assigned_consultant__isnull=False
-    ).select_related('assigned_consultant', 'assigned_consultant__user', 'service__category')
     
-    for req in requests:
-        consultant_user = req.assigned_consultant.user
-        service_name = req.service.category.name if req.service.category else req.service.title
+    if caller_user.role == User.CLIENT:
+        requests = ClientServiceRequest.objects.filter(
+            client=caller_user, 
+            status__in=active_statuses,
+            assigned_consultant__isnull=False
+        ).select_related('assigned_consultant', 'assigned_consultant__user', 'service__category')
         
-        if consultant_user.id not in consultants_map:
-            consultants_map[consultant_user.id] = {
-                'consultant': consultant_user,
-                'services': [service_name]
-            }
-        else:
-            if service_name not in consultants_map[consultant_user.id]['services']:
-                consultants_map[consultant_user.id]['services'].append(service_name)
+        for req in requests:
+            target_user = req.assigned_consultant.user
+            service_name = req.service.category.name if req.service.category else req.service.title
+            
+            if target_user.id not in counterparts_map:
+                counterparts_map[target_user.id] = {
+                    'user': target_user,
+                    'services': [service_name]
+                }
+            else:
+                if service_name not in counterparts_map[target_user.id]['services']:
+                    counterparts_map[target_user.id]['services'].append(service_name)
+                    
+    elif caller_user.role == User.CONSULTANT:
+        requests = ClientServiceRequest.objects.filter(
+            assigned_consultant__user=caller_user, 
+            status__in=active_statuses
+        ).select_related('client', 'service__category')
+        
+        for req in requests:
+            target_user = req.client
+            service_name = req.service.category.name if req.service.category else req.service.title
+            
+            if target_user.id not in counterparts_map:
+                counterparts_map[target_user.id] = {
+                    'user': target_user,
+                    'services': [service_name]
+                }
+            else:
+                if service_name not in counterparts_map[target_user.id]['services']:
+                    counterparts_map[target_user.id]['services'].append(service_name)
                 
     # Format list with digits (max 9)
-    consultants_list = []
+    counterparts_list = []
     digit = 1
-    for cid, data in consultants_map.items():
+    for cid, data in counterparts_map.items():
         if digit > 9: break
-        consultants_list.append({
+        counterparts_list.append({
             'digit': str(digit),
-            'consultant': data['consultant'],
+            'user': data['user'],
             'services': data['services']
         })
         digit += 1
         
-    logger.info(f"Helper: Found {len(consultants_list)} active unique consultants for client")
-    return client, consultants_list
+    logger.info(f"Helper: Found {len(counterparts_list)} active unique counterparts for user")
+    return caller_user, counterparts_list
 
 
 class IncomingCallRouteView(APIView):
@@ -755,45 +775,45 @@ class IncomingCallRouteView(APIView):
         sales_team_phone = getattr(settings, 'SALES_TEAM_PHONE', '+916393645999')
         
         try:
-            client, consultants_list = _get_client_and_consultants(caller_phone_raw, logger)
+            caller_user, counterparts_list = _get_counterparts(caller_phone_raw, logger)
             
-            if client and consultants_list:
-                selected_consultant = None
+            if caller_user and counterparts_list:
+                selected_counterpart = None
                 
-                # If digits provided from IVR, find the matching consultant
+                # If digits provided from IVR, find the matching counterpart
                 if digits:
-                    for c_data in consultants_list:
+                    for c_data in counterparts_list:
                         if c_data['digit'] == digits:
-                            selected_consultant = c_data['consultant']
+                            selected_counterpart = c_data['user']
                             break
-                    if not selected_consultant:
+                    if not selected_counterpart:
                         logger.warning(f"Invalid digit '{digits}' pressed. Falling back to default.")
-                        # Fallback to the first consultant if they pressed wrong key
-                        selected_consultant = consultants_list[0]['consultant']
+                        # Fallback to the first user if they pressed wrong key
+                        selected_counterpart = counterparts_list[0]['user']
                 else:
-                    # Default: direct call (usually 1 consultant, or user skipped IVR)
-                    selected_consultant = consultants_list[0]['consultant']
+                    # Default: direct call (usually 1 counterpart, or user skipped IVR)
+                    selected_counterpart = counterparts_list[0]['user']
                 
-                if selected_consultant and getattr(selected_consultant, 'phone_number', None):
-                    consultant_phone = selected_consultant.phone_number
-                    if not consultant_phone.startswith('+'):
-                        consultant_phone = f"+91{consultant_phone}"
+                if selected_counterpart and getattr(selected_counterpart, 'phone_number', None):
+                    counterpart_phone = selected_counterpart.phone_number
+                    if not counterpart_phone.startswith('+'):
+                        counterpart_phone = f"+91{counterpart_phone}"
                         
-                    logger.info(f"Routing to assigned consultant: {selected_consultant.get_full_name()} - {consultant_phone}")
+                    logger.info(f"Routing to assigned counterpart: {selected_counterpart.get_full_name()} - {counterpart_phone}")
                     
                     # Create CallLog entry so the Passthru endpoint can update it later
                     if call_sid and not CallLog.objects.filter(exotel_sid=call_sid).exists():
                         try:
                             # Normalize the incoming phones for the CallLog DB format
                             from_phone = caller_phone_raw
-                            to_phone = consultant_phone
+                            to_phone = counterpart_phone
                             if not from_phone.startswith('+') and len(from_phone) >= 10:
                                 from_phone = f"+91{from_phone[-10:]}"
                                 
                             CallLog.objects.create(
                                 exotel_sid=call_sid,
-                                caller=client,
-                                callee=selected_consultant,
+                                caller=caller_user,
+                                callee=selected_counterpart,
                                 from_number=from_phone,
                                 to_number=to_phone,
                                 status='in-progress'
@@ -802,11 +822,11 @@ class IncomingCallRouteView(APIView):
                         except Exception as create_e:
                             logger.error(f"Failed to create initial CallLog: {create_e}")
                             
-                    return HttpResponse(consultant_phone, content_type='text/plain')
+                    return HttpResponse(counterpart_phone, content_type='text/plain')
                 else:
-                    logger.warning(f"Selected consultant {selected_consultant} has no phone number, routing to sales team")
+                    logger.warning(f"Selected counterpart {selected_counterpart} has no phone number, routing to sales team")
             else:
-                logger.info(f"Client found but has no assigned consultant, routing to sales team" if client else f"No client found with phone {caller_phone_raw}, routing to sales team")
+                logger.info(f"User found but has no active assignments, routing to sales team" if caller_user else f"No user found with phone {caller_phone_raw}, routing to sales team")
             
         except Exception as e:
             logger.error(f"Error determining routing: {e}", exc_info=True)
@@ -973,14 +993,14 @@ class CheckConsultantCountView(APIView):
         caller_phone_raw = request.GET.get('From', '')
         
         try:
-            client, consultants = _get_client_and_consultants(caller_phone_raw, logger)
+            caller_user, counterparts = _get_counterparts(caller_phone_raw, logger)
             
-            if len(consultants) > 1:
-                logger.info(f"Client has {len(consultants)} consultants. Triggering IVR (404 Not Found to take other branch).")
+            if len(counterparts) > 1:
+                logger.info(f"User has {len(counterparts)} counterparts. Triggering IVR (404 Not Found to take other branch).")
                 # Exotel Passthru considers 200 as Success branch, 3xx/4xx as Failure branch.
                 # A 302 redirect causes Exotel to actually try and follow the redirect.
                 # A 404 will correctly tell Exotel to execute the "If undefined/failure" applet (Gather).
-                return HttpResponseNotFound("Multiple Consultants")
+                return HttpResponseNotFound("Multiple Counterparts")
         except Exception as e:
             logger.error(f"Error checking consultant count: {e}", exc_info=True)
             
@@ -1004,14 +1024,14 @@ class DynamicIVRView(APIView):
         caller_phone_raw = request.GET.get('From', '')
         
         try:
-            client, consultants = _get_client_and_consultants(caller_phone_raw, logger)
+            caller_user, counterparts = _get_counterparts(caller_phone_raw, logger)
             
-            if len(consultants) > 1:
+            if len(counterparts) > 1:
                 # Build the text prompt
                 prompt_parts = []
-                for c_data in consultants:
+                for c_data in counterparts:
                     digit = c_data['digit']
-                    name = c_data['consultant'].get_full_name() or c_data['consultant'].username
+                    name = c_data['user'].get_full_name() or c_data['user'].username
                     # Extract first name to sound better
                     first_name = name.split()[0]
                     services = " and ".join(c_data['services'][:2])

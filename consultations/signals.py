@@ -45,26 +45,30 @@ def handle_booking_scheduled_call(sender, instance, created, **kwargs):
     from django.utils import timezone
     from datetime import timedelta
     
-    # If the booking is cancelled, cancel any pending scheduled calls
+    # If the booking is cancelled, keep a record by marking pending calls as canceled
     if instance.status == 'cancelled':
         ScheduledCall.objects.filter(booking=instance, status='pending').update(status='canceled')
         return
 
     # If it's pending/confirmed and has a valid date and time, schedule/reschedule
     if instance.status in ['pending', 'confirmed'] and instance.booking_date and instance.start_time:
-        # Calculate exactly 1 hour before
         booking_datetime = timezone.make_aware(
             timezone.datetime.combine(instance.booking_date, instance.start_time)
         )
-        run_time = booking_datetime - timedelta(hours=1)
         
-        # Only schedule if it's in the future
-        if run_time > timezone.now():
-            call, _ = ScheduledCall.objects.update_or_create(
-                booking=instance,
-                status='pending',
-                defaults={'run_at': run_time}
-            )
-        else:
-            # If rescheduled to a past time, cancel pending ones so we don't accidentally call immediately
-            ScheduledCall.objects.filter(booking=instance, status='pending').update(status='canceled')
+        reminder_times = [
+            booking_datetime - timedelta(hours=1),
+            booking_datetime - timedelta(minutes=15),
+            booking_datetime
+        ]
+        
+        # Clear existing pending calls before creating new ones for the current schedule
+        ScheduledCall.objects.filter(booking=instance, status='pending').delete()
+        
+        for run_time in reminder_times:
+            if run_time > timezone.now():
+                ScheduledCall.objects.create(
+                    booking=instance,
+                    status='pending',
+                    run_at=run_time
+                )

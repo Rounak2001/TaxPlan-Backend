@@ -54,8 +54,21 @@ def process_scheduled_calls(self):
         caller_id = settings.EXOTEL_CALLER_ID
         subdomain = settings.EXOTEL_SUBDOMAIN
         
-        # Hardcoded Applet ID from user requirement
-        app_id = "1201422"
+        # Predict Applet ID based on the time difference from booking start
+        booking_datetime = timezone.make_aware(
+            timezone.datetime.combine(booking.booking_date, booking.start_time)
+        )
+        time_diff_minutes = (booking_datetime - scheduled_call.run_at).total_seconds() / 60
+        
+        if time_diff_minutes < 5:
+            # At the time of consultation (0 mins)
+            app_id = "1212575"
+        elif time_diff_minutes <= 20:
+            # 15 minutes before
+            app_id = "1212552"
+        else:
+            # 1 hour before
+            app_id = "1201422"
         # The URL for connecting to a flow
         applet_url = f"http://my.exotel.com/{sid}/exoml/start_voice/{app_id}"
         
@@ -73,7 +86,7 @@ def process_scheduled_calls(self):
             caller=booking.consultant,  # System is making it on behalf of the consultant
             callee=client,
             status='initiated',
-            notes=f"Automated 1-hour consultation reminder for booking {booking.id}"
+            notes=f"Automated consultation reminder for booking {booking.id}"
         )
         
         data = {
@@ -103,7 +116,7 @@ def process_scheduled_calls(self):
                 call_log.save()
 
                 # --- NEW: Trigger WhatsApp Reminder ---
-                # This template is sent exactly 1 hour before the meeting.
+                # This template is sent as a reminder before/at the meeting.
                 if client_phone:
                     from notifications.tasks import send_whatsapp_template_task
                     from urllib.parse import urlparse

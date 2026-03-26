@@ -23,9 +23,20 @@ def resolve_topic(topic_identifier) -> Topic | None:
 
     from django.db import models
 
-    return Topic.objects.filter(
-        models.Q(name__iexact=topic_lookup) | models.Q(name__icontains=topic_lookup)
-    ).first()
+    # 1. Try exact match (case-insensitive)
+    topic = Topic.objects.filter(name__iexact=topic_lookup).first()
+    if topic:
+        return topic
+        
+    # 2. Try matching by "slugified" name (replace underscores with spaces)
+    # This helps if the frontend sends "itr_salary" but the topic is "ITR Salary Filing"
+    query_as_name = topic_lookup.replace('_', ' ')
+    topic = Topic.objects.filter(name__icontains=query_as_name).first()
+    if topic:
+        return topic
+
+    # 3. Fallback to generic icontains
+    return Topic.objects.filter(name__icontains=topic_lookup).first()
 
 
 def get_consultants_for_topic(topic: Topic | None):
