@@ -1,12 +1,15 @@
 from rest_framework import viewsets, permissions, status, decorators
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db import models
-from .models import Document, SharedReport, LegalNotice, Folder
+from django.db import models, connection
+import logging
+from .models import Document, SharedReport, LegalNotice, Folder, DocumentAccess
 from .serializers import DocumentSerializer, DocumentUploadSerializer, SharedReportSerializer, LegalNoticeSerializer, FolderSerializer
 from core_auth.serializers import IsConsultantUser, IsClientUser
 from consultants.models import ClientServiceRequest
 from core_auth.utils import get_active_profile
+
+logger = logging.getLogger(__name__)
 
 def create_system_folders(client_user):
     """Creates default system folders for a client."""
@@ -17,6 +20,17 @@ def create_system_folders(client_user):
             name=folder_name,
             defaults={'is_system': True}
         )
+
+
+def _has_document_access_table():
+    """
+    Backward-compatible guard during rollout. If migration isn't applied yet,
+    we avoid crashing and default to safest behavior.
+    """
+    try:
+        return 'vault_document_access' in connection.introspection.table_names()
+    except Exception:
+        return False
 
 class FolderViewSet(viewsets.ModelViewSet):
     serializer_class = FolderSerializer
@@ -110,6 +124,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
             qs = Document.objects.select_related('client', 'consultant', 'folder').filter(
                 client_id__in=service_client_ids
             ).distinct()
+
+            if _has_document_access_table():
+                qs = qs.filter(access_grants__consultant=user).distinct()
+            else:
+                # Safe default: no explicit grants table means no consultant access.
+                qs = qs.none()
         else:
             # Clients see their own docs, but filter out PENDING requests from unassigned consultants
             # Get consultants assigned via active services
@@ -175,8 +195,11 @@ class DocumentViewSet(viewsets.ModelViewSet):
             
             # Validate folder belongs to target client
             self._validate_folder_client(folder_id, target_client)
-                
-            serializer.save(consultant=user, client=target_client, folder_id=folder_id, status='PENDING')
+
+            document = serializer.save(consultant=user, client=target_client, folder_id=folder_id, status='PENDING')
+            # Auto-grant: the requesting consultant can always see the request they created
+            if _has_document_access_table():
+                DocumentAccess.objects.get_or_create(document=document, consultant=user)
         else:
             # Client creating a proactive upload
             # Ensure system folders exist
@@ -185,6 +208,117 @@ class DocumentViewSet(viewsets.ModelViewSet):
             self._validate_folder_client(folder_id, user)
             
             serializer.save(client=user, folder_id=folder_id, status='UPLOADED', uploaded_at=timezone.now())
+
+    @decorators.action(detail=True, methods=['get'], url_path='access', permission_classes=[IsClientUser])
+    def list_access(self, request, pk=None):
+        """
+        Returns the list of all consultants assigned to this client,
+        with a flag indicating whether each has been granted access to this document.
+        """
+        try:
+            document = self.get_object()
+            active_user = get_active_profile(request)
+
+            if not _has_document_access_table():
+                return Response(
+                    {'error': 'Document access feature is not ready. Please run migrations.'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+
+            if document.client != active_user:
+                return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+            assigned = ClientServiceRequest.objects.filter(
+                client=active_user,
+                status__in=ClientServiceRequest.ACTIVE_STATUSES
+            ).select_related('assigned_consultant__user', 'service').exclude(
+                assigned_consultant__isnull=True
+            )
+
+            granted_ids = set(document.access_grants.values_list('consultant_id', flat=True))
+            seen_consultant_ids = set()
+            result = []
+
+            for req in assigned:
+                consultant_profile = req.assigned_consultant
+                if not consultant_profile or not consultant_profile.user:
+                    continue
+                consultant_user = consultant_profile.user
+                if consultant_user.id in seen_consultant_ids:
+                    continue
+
+                seen_consultant_ids.add(consultant_user.id)
+                result.append({
+                    'consultant_id': consultant_user.id,
+                    'name': consultant_user.get_full_name() or consultant_user.username,
+                    'email': consultant_user.email,
+                    'has_access': consultant_user.id in granted_ids,
+                    'service_title': req.service.title if req.service else '',
+                })
+
+            return Response(result)
+        except Exception:
+            logger.exception("Failed to list document access for document %s", pk)
+            return Response(
+                {'error': 'Failed to load consultant access list'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @decorators.action(detail=True, methods=['post'], url_path='grant-access', permission_classes=[IsClientUser])
+    def grant_access(self, request, pk=None):
+        """
+        Syncs access grants for this document.
+        Body: { "consultant_ids": [1, 2, 3] }
+        Adds missing grants and removes revoked ones atomically.
+        """
+        try:
+            document = self.get_object()
+            active_user = get_active_profile(request)
+
+            if not _has_document_access_table():
+                return Response(
+                    {'error': 'Document access feature is not ready. Please run migrations.'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+
+            if document.client != active_user:
+                return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+            consultant_ids = request.data.get('consultant_ids', [])
+            if not isinstance(consultant_ids, list):
+                return Response({'error': 'consultant_ids must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+
+            valid_ids = set(
+                ClientServiceRequest.objects.filter(
+                    client=active_user,
+                    status__in=ClientServiceRequest.ACTIVE_STATUSES
+                ).exclude(
+                    assigned_consultant__isnull=True
+                ).values_list('assigned_consultant__user_id', flat=True)
+            )
+
+            try:
+                requested_ids = set(int(i) for i in consultant_ids)
+            except (TypeError, ValueError):
+                return Response({'error': 'consultant_ids must contain valid numeric IDs'}, status=status.HTTP_400_BAD_REQUEST)
+
+            invalid = requested_ids - valid_ids
+            if invalid:
+                return Response({'error': f'Invalid consultant IDs: {sorted(list(invalid))}'}, status=status.HTTP_400_BAD_REQUEST)
+
+            for consultant_id in requested_ids:
+                DocumentAccess.objects.get_or_create(document=document, consultant_id=consultant_id)
+
+            DocumentAccess.objects.filter(document=document).exclude(consultant_id__in=requested_ids).delete()
+
+            granted_ids = list(document.access_grants.values_list('consultant_id', flat=True))
+            return Response({'granted_consultant_ids': granted_ids})
+        except Exception:
+            logger.exception("Failed to update document access for document %s", pk)
+            return Response(
+                {'error': 'Failed to update consultant access'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def perform_update(self, serializer):
         user = get_active_profile(self.request)
