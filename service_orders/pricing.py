@@ -1,3 +1,4 @@
+import math
 from decimal import Decimal
 
 # ITR Add-on Prices (Source of Truth)
@@ -13,7 +14,7 @@ ITR_ADDON_PRICES = {
     "partnership_income": Decimal("1.00"),
 }
 
-def calculate_itr_total(base_price, addons_list, house_property_count=1):
+def calculate_itr_total(base_price, addons_list, house_property_count=1, capital_gains_count=5):
     """
     Calculate total price for an ITR service item (PER YEAR).
     """
@@ -27,6 +28,10 @@ def calculate_itr_total(base_price, addons_list, house_property_count=1):
         
         if addon_id == "house_property":
             total += price * Decimal(str(house_property_count))
+        elif addon_id == "capital_gains":
+            cg_count = max(1, min(int(capital_gains_count or 5), 50))
+            multiplier = math.ceil(cg_count / 5.0)
+            total += price * Decimal(str(multiplier))
         else:
             total += price
             
@@ -47,12 +52,13 @@ def get_verified_price(service_obj, item_data):
         if "ITR" in service_obj.title:
             addons = item_data.get('addon_ids', [])
             hp_count = item_data.get('house_property_count', 1)
+            cg_count = item_data.get('capital_gains_count', 5)
             # In ReturnsCheckout.jsx, year_count is reflected in how many items are added?
             # Actually, ITR.jsx does `* selectedYearCount`. 
             # We should handle multiple years as quantity or a separate field.
             # For now, let's assume quantity handles it if sent correctly.
             
-            return calculate_itr_total(base_price, addons, hp_count)
+            return calculate_itr_total(base_price, addons, hp_count, cg_count)
             
     # Default: Return DB base price 
     # (quantity will be multiplied in the view)
