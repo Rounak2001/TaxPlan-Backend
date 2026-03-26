@@ -38,7 +38,7 @@ def _is_gemini_quota_error(exc):
 def evaluate_video_task(self, video_response_id, question_text):
     """
     Background task to evaluate a video response.
-    It transcribes the video using AWS Transcribe and evaluates the transcript via Gemini API.
+    It asks Gemini to transcribe and evaluate the video in one pass.
     """
     logger.info(f"Starting async evaluation for VideoResponse ID: {video_response_id}")
     
@@ -55,27 +55,31 @@ def evaluate_video_task(self, video_response_id, question_text):
             video_response.ai_status = 'processing'
             video_response.save(update_fields=['ai_status'])
 
-        # Avoid re-running AWS Transcribe on Gemini 429 retries.
-        transcript = (video_response.ai_transcript or '').strip()
-        if not transcript:
-            transcript = evaluator.transcribe_video(video_response)
-            video_response.ai_transcript = transcript
-            video_response.save(update_fields=['ai_transcript'])
-
         local_video_path = evaluator.download_video_to_temp(video_response)
         try:
-            evaluation = evaluator.evaluate_transcript(transcript, question_text, local_video_path)
+            evaluation = evaluator.evaluate_transcript('', question_text, local_video_path)
         finally:
             try:
                 os.remove(local_video_path)
             except OSError:
                 pass
+
+        if not isinstance(evaluation, dict):
+            raise ValueError("Gemini evaluation response must be a JSON object.")
+
+        transcript = evaluation.get('transcript', '')
+        if transcript is None:
+            transcript = ''
+        elif not isinstance(transcript, str):
+            transcript = str(transcript)
+        transcript = transcript.strip()
         
         # Save results
         video_response.ai_score = int(evaluation.get('score', 0) or 0)
+        video_response.ai_transcript = transcript
         video_response.ai_feedback = evaluation
         video_response.ai_status = 'completed'
-        video_response.save()
+        video_response.save(update_fields=['ai_score', 'ai_transcript', 'ai_feedback', 'ai_status'])
         logger.info(f"Successfully evaluated VideoResponse ID {video_response_id}")
 
         # After successful evaluation, check if all conditions are met for auto-credential generation

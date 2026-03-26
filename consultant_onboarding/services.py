@@ -134,26 +134,56 @@ class VideoEvaluator:
 
     def evaluate_transcript(self, transcript_text, question_text, local_video_path):
         """
-        Sends transcript and video to Gemini for evaluation.
+        Sends video to Gemini for native transcription + evaluation.
         """
         prompt = f"""
         You are an expert interviewer evaluating a candidate's video response.
         
-        Question: "{question_text}"
-        Candidate's Answer (Transcribed): "{transcript_text}"
-        
-        Task:
-        1. Watch and listen to the video carefully to evaluate the candidate's confidence, presentation skills, and body language.
-        2. Read the transcript to evaluate the answer based on relevance, clarity, and correctness.
-        3. Assign an overall score from 0 to 5 (integer) combining both content and presentation.
-        4. Provide brief, constructive feedback covering both the content of the answer and their presentation style.
-        
-        Output JSON format:
+        You will receive:
+        1. A video of the candidate answering an interview question
+        2. The interview question text
+
+        Your tasks are:
+        1. Watch and listen to the video carefully
+        2. Transcribe the candidate's spoken answer as faithfully as possible
+        3. Evaluate the response using both:
+           - the spoken/verbal content
+           - the candidate's visible delivery, confidence, clarity, and professionalism
+        4. Assign one overall integer score from 0 to 5
+        5. Provide concise, professional feedback
+        6. Provide brief reasoning for the assigned score
+
+        Scoring rubric:
+        - 0 = no meaningful usable answer, silence, fully irrelevant response, or unusable audio/video
+        - 1 = very weak answer with major gaps in understanding or communication
+        - 2 = partially correct answer but weak clarity, confidence, or substance
+        - 3 = acceptable answer with reasonable understanding and communication
+        - 4 = strong answer with good clarity, confidence, and correctness
+        - 5 = excellent answer with accurate, clear, confident, and well-structured delivery
+
+        Important rules:
+        - The transcript must reflect what the candidate actually said as closely as possible
+        - Do not invent or infer spoken content that is not present
+        - If some words are unclear, produce the best faithful transcript possible
+        - If the candidate is silent, inaudible, or the response cannot be understood, return the best possible transcript or an empty string
+        - In such cases, score appropriately and mention the issue briefly in feedback and reasoning
+        - Base the evaluation on both the content of the answer and the presentation in the video
+        - Keep feedback concise, constructive, and professional
+        - Keep reasoning short and evidence-based
+        - Return valid JSON only
+        - Do not wrap the JSON in markdown
+        - Do not include any text before or after the JSON
+
+        Return JSON in exactly this format:
         {{
+            "transcript": "<string>",
             "score": <int>,
             "feedback": "<string>",
             "reasoning": "<string>"
         }}
+
+        Interview question:
+        "{question_text}"
         """
         
         uploaded_file = None
@@ -178,6 +208,8 @@ class VideoEvaluator:
             )
             
             result = json.loads(response.text)
+            if not isinstance(result, dict):
+                raise ValueError("Gemini did not return a JSON object.")
             return result
             
         except Exception as e:
@@ -199,19 +231,18 @@ class VideoEvaluator:
         
         local_video_path = None
         try:
-            # 1. Transcribe
-            print(f"Starting transcription for video {video_response.id}...")
-            transcript = self.transcribe_video(video_response)
-            
-            # 2. Download Video to local temp file for Gemini
+            # 1. Download Video to local temp file for Gemini
             print("Downloading video from storage for Gemini analysis...")
             local_video_path = self.download_video_to_temp(video_response)
             
-            # 3. Evaluate with both Transcript and Video
+            # 2. Evaluate with native Gemini transcription + scoring
             print(f"Evaluating transcript and video...")
-            evaluation = self.evaluate_transcript(transcript, question_text, local_video_path)
+            evaluation = self.evaluate_transcript('', question_text, local_video_path)
+            transcript = evaluation.get('transcript', '') if isinstance(evaluation, dict) else ''
+            if not isinstance(transcript, str):
+                transcript = str(transcript or '')
             
-            # 4. Return results
+            # 3. Return results
             return {
                 "transcript": transcript,
                 "score": evaluation.get('score', 0),
