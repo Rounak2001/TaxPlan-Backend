@@ -4,12 +4,20 @@ import base64
 from celery import shared_task
 from django.utils import timezone
 from django.conf import settings
+from django.db import OperationalError
 from .models import ScheduledCall, CallLog
 
 logger = logging.getLogger(__name__)
 
-@shared_task
-def process_scheduled_calls():
+@shared_task(
+    bind=True,
+    autoretry_for=(OperationalError,),  # Neon cold-start OperationalError
+    max_retries=3,
+    retry_backoff=30,   # 30s, 60s, 120s
+    retry_backoff_max=120,
+    retry_jitter=False,
+)
+def process_scheduled_calls(self):
     """
     Query ScheduledCall records that are pending and run_at <= now()
     Make Exotel API calls to connect them to the specific applet.
@@ -93,6 +101,38 @@ def process_scheduled_calls():
                 call_log.exotel_sid = exotel_sid
                 call_log.status = 'queued'
                 call_log.save()
+
+                # --- NEW: Trigger WhatsApp Reminder ---
+                # This template is sent exactly 1 hour before the meeting.
+                if client_phone:
+                    from notifications.tasks import send_whatsapp_template_task
+                    from urllib.parse import urlparse
+                    
+                    # Variables for Template: [Client Name, Consultant Name, Date, Time, Meeting Code]
+                    client_name = client.first_name or client.username
+                    consultant_name = booking.consultant.get_full_name() or booking.consultant.username
+                    booking_date = booking.booking_date.strftime('%d %b %Y')
+                    start_time = booking.start_time.strftime('%I:%M %p')
+                    
+                    # Extract meeting code from link (e.g. 'abc-defg-hij' from https://meet.google.com/abc-defg-hij)
+                    # This code is used as the dynamic suffix for the "Join Meeting" button
+                    meeting_code = ""
+                    if booking.meeting_link:
+                        path = urlparse(booking.meeting_link).path
+                        meeting_code = path.strip('/')
+                    
+                    send_whatsapp_template_task.delay(
+                        phone_number=client_phone,
+                        template_name="consultation_reminder_final",
+                        variables=[
+                            client_name,
+                            consultant_name,
+                            booking_date,
+                            start_time,
+                            meeting_code
+                        ]
+                    )
+                    logger.info(f"Queued WhatsApp consultation reminder for client {client.id} (Booking {booking.id})")
                 
             else:
                 scheduled_call.status = 'failed'

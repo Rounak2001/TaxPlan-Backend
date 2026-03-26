@@ -174,7 +174,7 @@ class CallStatusCallbackView(APIView):
     Receives call status when call ends (terminal event).
     Immediately fetches Price from Call Details API since Price is not in callback.
     
-    Callback URL: https://main.taxplanadvisor.co/api/calls/status-callback/
+    Callback URL: https://api.taxplanadvisor.in/api/calls/status-callback/
     """
     permission_classes = []
     authentication_classes = []
@@ -715,7 +715,7 @@ class IncomingCallRouteView(APIView):
     the caller's phone number. We look up the client and return their 
     assigned consultant's phone number, or the sales team if unassigned.
     
-    URL: https://main.taxplanadvisor.co/api/calls/incoming-route/
+    URL: https://api.taxplanadvisor.in/api/calls/incoming-route/
     
     Exotel sends: GET /?CallSid=xxx&From=+919876543210&To=02246183032
     Response: Plain text phone number (e.g., +919123456789)
@@ -823,7 +823,7 @@ class IncomingCallPassthruView(APIView):
     This should be placed AFTER the Connect applet in the Exotel flow.
     Exotel will call this endpoint with call details after the Connect applet completes.
     
-    URL: https://main.taxplanadvisor.co/api/calls/incoming-passthru/
+    URL: https://api.taxplanadvisor.in/api/calls/incoming-passthru/
     
     Parameters received (GET):
     - CallSid: Unique call identifier

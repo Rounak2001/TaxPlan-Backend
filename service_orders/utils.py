@@ -59,7 +59,7 @@ def create_service_requests_from_order(order):
     # Resolve contact details once for all items in this order
     client_email, client_phone, client_name = _resolve_contact(order.user)
     
-    for item in order.items.all():
+    for item in order.items.select_related('service', 'selected_consultant'):
         # Create service request using the actual DB service if available, else use custom title
         service_title_for_notes = item.service.title if item.service else getattr(item, 'service_title', 'Custom Service')
         
@@ -118,7 +118,7 @@ def create_service_requests_from_order(order):
                 from notifications.tasks import send_whatsapp_template_task
                 send_whatsapp_template_task.delay(
                     phone_number=client_phone,
-                    template_name="service_order_confirmation",
+                    template_name="payment_receipt_success",  # "service_order_confirmation" was removed from Meta BM
                     variables=[
                         client_name,
                         service_title_for_email,

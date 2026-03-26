@@ -32,6 +32,16 @@ ALLOWED_HOSTS = [
     '13.235.240.24',
 ]
 
+# =============================================================================
+# NOISE SUPPRESSION (PYTHON-DJANGO-3)
+# =============================================================================
+# Suppress Django's 404 logging for known bot/crawler paths (e.g., Cloudflare /cdn-cgi/*)
+import re
+IGNORABLE_404_URLS = [
+    re.compile(r'^/cdn-cgi/'),
+    re.compile(r'^/\.well-known/'),
+]
+
 # HTTPS/SSL Settings
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = True
@@ -99,9 +109,20 @@ DATABASES = {
     'default': dj_database_url.config(
         default=os.environ.get('DATABASE_URL'),
         conn_max_age=60,
+        conn_health_checks=True,   # Re-validate connections before use (fixes Neon idle timeouts)
         ssl_require=True
     )
 }
+# Neon PostgreSQL closes idle connections — increase timeout to survive cold starts
+# (Neon compute can take 15–30s to wake up from suspend; 10s was too short)
+DATABASES['default'].setdefault('OPTIONS', {})
+DATABASES['default']['OPTIONS']['connect_timeout'] = 30
+# TCP keepalive: mark idle connections as stale quickly so psycopg2 doesn't
+# attempt to reuse a server-closed connection
+DATABASES['default']['OPTIONS']['keepalives'] = 1
+DATABASES['default']['OPTIONS']['keepalives_idle'] = 60    # 60s idle before first probe
+DATABASES['default']['OPTIONS']['keepalives_interval'] = 10 # retry every 10s
+DATABASES['default']['OPTIONS']['keepalives_count'] = 5     # 5 failed probes = dead
 
 
 # =============================================================================

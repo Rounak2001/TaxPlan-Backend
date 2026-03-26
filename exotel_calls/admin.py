@@ -66,3 +66,28 @@ class CallLogAdmin(admin.ModelAdmin):
     recording_link.short_description = 'Recording'
 
 
+from .models import ScheduledCall
+
+@admin.register(ScheduledCall)
+class ScheduledCallAdmin(admin.ModelAdmin):
+    list_display = ('id', 'booking_link', 'run_at', 'status', 'created_at')
+    list_filter = ('status', 'run_at', 'created_at')
+    search_fields = (
+        'booking__client__username', 
+        'booking__consultant__username',
+        'exotel_sid'
+    )
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('run_at',)
+    
+    def booking_link(self, obj):
+        """Display a link to the associated booking."""
+        if obj.booking:
+            return format_html(
+                '<a href="/admin/consultations/consultationbooking/{}/change/">Booking #{}</a>',
+                obj.booking.id, obj.booking.id
+            )
+        return "-"
+    booking_link.short_description = 'Booking'
+
+
