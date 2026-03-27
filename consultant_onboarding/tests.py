@@ -23,8 +23,8 @@ from .views.admin_panel import (
 from .views.auth import accept_declaration
 from .views.test_engine import TestTypeViewSet, UserSessionViewSet
 from .utils.name_matching import (
+    first_name_present,
     first_last_name,
-    first_last_name_parts_present,
     first_last_names_match,
     get_latest_verified_identity_name,
 )
@@ -41,10 +41,12 @@ class NameMatchingTests(TestCase):
         self.assertTrue(first_last_names_match("  JOHN   DOE ", "John A. Doe"))
         self.assertFalse(first_last_names_match("John Doe", "Jane Doe"))
 
-    def test_first_last_name_parts_present_allows_any_order_with_extra_tokens(self):
-        self.assertTrue(first_last_name_parts_present("John Michael Doe", "Doe John Fathername"))
-        self.assertTrue(first_last_name_parts_present("  JOHN   DOE ", "surname DOE and JOHN details"))
-        self.assertFalse(first_last_name_parts_present("John Doe", "John Smith Fathername"))
+    def test_first_name_present_matches_only_first_name_token(self):
+        self.assertTrue(first_name_present("John Michael Doe", "Doe John Fathername"))
+        self.assertTrue(first_name_present("  JOHN   DOE ", "surname DOE and JOHN details"))
+        self.assertTrue(first_name_present("John Doe", "John Smith Fathername"))
+        self.assertFalse(first_name_present("John Doe", "Doe Smith Fathername"))
+        self.assertFalse(first_name_present("John Doe", "Jane Smith Fathername"))
 
     def test_get_latest_verified_identity_name_reads_latest_verified_document(self):
         application = ConsultantApplication.objects.create(email="identity@example.com")

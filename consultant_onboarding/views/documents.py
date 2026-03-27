@@ -10,7 +10,7 @@ from ..authentication import ApplicantAuthentication, IsApplicant
 from ..credential_service import trigger_auto_credential_check
 from ..utils.name_matching import (
     first_last_name,
-    first_last_name_parts_present,
+    first_name_present,
     get_latest_verified_identity_name,
 )
 
@@ -133,13 +133,13 @@ class UploadDocumentView(APIView):
                             "verification_status": document.verification_status,
                             "details": {
                                 **(result or {}),
-                                "name_match_rule": "first_and_last_name_parts_any_order",
+                                "name_match_rule": "government_first_name_matches_any_document_name_part",
                             },
                         },
                         status=400,
                     )
 
-                if gov_id_name and not first_last_name_parts_present(gov_id_name, extracted_name):
+                if gov_id_name and not first_name_present(gov_id_name, extracted_name):
                     try:
                         if document.file_path:
                             default_storage.delete(str(document.file_path).lstrip('/'))
@@ -148,13 +148,15 @@ class UploadDocumentView(APIView):
                     document.delete()
                     return Response(
                         {
-                            "error": "First and last name parts on the Bachelor's degree must match the verified Government ID.",
+                            "error": "First name on the verified Government ID must match a name part on the Bachelor's degree.",
                             "document_type": document_type,
                             "verification_status": document.verification_status,
                             "details": {
                                 **(result or {}),
-                                "name_match_rule": "first_and_last_name_parts_any_order",
-                                "government_id_first_last_name": first_last_name(gov_id_name),
+                                "name_match_rule": "government_first_name_matches_any_document_name_part",
+                                "government_id_first_name": (
+                                    (str(gov_id_name).strip().split()[0]) if str(gov_id_name).strip() else ""
+                                ),
                                 "document_first_last_name": first_last_name(extracted_name),
                             },
                         },
@@ -167,8 +169,10 @@ class UploadDocumentView(APIView):
             response_data['name_match_rule'] = 'first_and_last_name_only'
             if claimed_doc_type == "bachelors_degree":
                 gov_id_name = get_latest_verified_identity_name(application) or f"{application.first_name or ''} {application.last_name or ''}".strip()
-                response_data['name_match_rule'] = 'first_and_last_name_parts_any_order'
-                response_data['government_id_first_last_name'] = first_last_name(gov_id_name)
+                response_data['name_match_rule'] = 'government_first_name_matches_any_document_name_part'
+                response_data['government_id_first_name'] = (
+                    (str(gov_id_name).strip().split()[0]) if str(gov_id_name).strip() else ""
+                )
                 response_data['document_first_last_name'] = first_last_name(extracted_name)
 
             trigger_auto_credential_check(application, f"qualification_upload:{document_type}")
