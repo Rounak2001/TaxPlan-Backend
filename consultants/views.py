@@ -912,10 +912,12 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
         from service_orders.models import ServiceOrder, OrderItem
 
         service_request = self.get_object()
-        user = request.user
+        # Use the active profile (sub-account or main account) — not just request.user
+        from core_auth.utils import get_active_profile
+        user = get_active_profile(request)
 
-        # Permission: only the requesting client
-        if service_request.client != user:
+        # Permission: only the requesting client (or their parent account)
+        if service_request.client != user and service_request.client != request.user:
             return Response(
                 {'error': 'Only the client who placed this request can cancel it.'},
                 status=status.HTTP_403_FORBIDDEN
@@ -950,13 +952,22 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
         refund_info = None
         refund_error = None
         try:
-            # Find OrderItem linked to this service_request's service
-            # The link: ServiceOrder → OrderItem (service_title matches) owned by same user
+            # Build candidate users to search for the order:
+            # The order may have been placed under the sub-account OR the parent account
+            candidate_users = [service_request.client]
+            parent = getattr(service_request.client, 'parent_account', None)
+            if parent:
+                candidate_users.append(parent)
+
+            # Find OrderItem: match service title + has a razorpay payment ID
+            # We don't restrict to 'paid' because the status may have already been
+            # changed to 'cancelled' by a previous run; the key requirement is a payment ID.
             order_item = OrderItem.objects.select_related('order').filter(
-                order__user=service_request.client,
-                order__status='paid',
+                order__user__in=candidate_users,
+                order__razorpay_payment_id__isnull=False,
                 service_title=service_request.service.title,
             ).order_by('-order__created_at').first()
+
 
             if order_item and order_item.order.razorpay_payment_id:
                 rzp = razorpay.Client(
