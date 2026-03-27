@@ -7,6 +7,7 @@ from .views import (
     additional_service_options,
     pending_additional_requests,
     decline_additional_request,
+    validate_coupon,
 )
 
 urlpatterns = [
@@ -21,4 +22,5 @@ urlpatterns = [
     ),
     path('pending-additional/', pending_additional_requests, name='pending-additional'),
     path('decline-additional/', decline_additional_request, name='decline-additional'),
+    path('validate-coupon/', validate_coupon, name='validate-coupon'),
 ]

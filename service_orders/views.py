@@ -3,13 +3,24 @@ import json
 from decimal import Decimal, InvalidOperation
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from .models import Coupon, ServiceOrder, OrderItem
-from consultants.models import Service, ClientServiceRequest, ConsultantServiceProfile
+from consultations.models import ConsultationBooking
+from consultants.models import (
+    Service, 
+    ClientServiceRequest, 
+    ConsultantServiceProfile,
+    ConsultantServiceExpertise,
+    ServiceCategory
+)
+from consultant_onboarding.category_access import (
+    ASSESSMENT_CATEGORY_ORDER,
+)
+from activity_timeline.models import Activity
 from .utils import create_service_requests_from_order
 from core_auth.utils import get_active_profile
 from .pricing import get_verified_price
@@ -20,6 +31,52 @@ import logging
 razorpay_client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
 
 logger = logging.getLogger('service_orders')
+REGISTRATIONS_SLUG = 'registrations'
+
+
+# --- Helper functions for Additional Services ---
+
+def _require_consultant(request):
+    """Utility to ensure user is a consultant."""
+    if request.user.role != 'CONSULTANT':
+        return Response({'error': 'Only consultants can perform this action.'}, status=status.HTTP_403_FORBIDDEN)
+    return None
+
+def _get_consultant_profile_or_404(user):
+    """Utility to get consultant profile."""
+    from core_auth.models import ConsultantProfile
+    try:
+        return ConsultantProfile.objects.get(user=user)
+    except ConsultantProfile.DoesNotExist:
+        return None
+
+def _is_registrations_service(service_obj):
+    """Check if service belongs to registrations category."""
+    if not service_obj or not service_obj.category:
+        return False
+    return service_obj.category.slug == REGISTRATIONS_SLUG
+
+def _parse_positive_decimal(value, field_name):
+    """Helper to parse decimal values safely."""
+    try:
+        decimal_val = Decimal(str(value))
+        if decimal_val <= 0:
+            return None, Response({'error': f'{field_name} must be greater than zero.'}, status=status.HTTP_400_BAD_REQUEST)
+        return decimal_val, None
+    except (InvalidOperation, ValueError, TypeError):
+        return None, Response({'error': f'Invalid {field_name}.'}, status=status.HTTP_400_BAD_REQUEST)
+
+def _get_unlocked_category_slugs_for_consultant(consultant_profile):
+    """Get list of category slugs consultant has passed exams for."""
+    return ConsultantServiceExpertise.objects.filter(
+        consultant=consultant_profile
+    ).values_list('service__category__slug', flat=True).distinct()
+
+def _is_itr_returns_item(service_obj, item_title='', item_category=''):
+    title = (service_obj.title if service_obj else item_title or '').strip().lower()
+    category = ((service_obj.category.name if service_obj and service_obj.category else item_category or '').strip().lower())
+    return category == 'returns' and 'itr' in title
+
 
 
 @api_view(['POST'])
@@ -374,3 +431,208 @@ def razorpay_webhook(request):
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}", exc_info=True)
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# --- Additional Service Views ---
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def additional_service_options(request):
+    """Return available services for a consultant to request additional payment."""
+    consultant_error = _require_consultant(request)
+    if consultant_error:
+        return consultant_error
+
+    consultant_profile = _get_consultant_profile_or_404(request.user)
+    if not consultant_profile:
+        return Response({'error': 'Consultant profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    expertise_services = ConsultantServiceExpertise.objects.filter(
+        consultant=consultant_profile,
+        service__is_active=True
+    ).select_related('service', 'service__category')
+
+    # Group by category
+    categories_dict = {}
+    unlocked_category_slugs = set()
+
+    for expertise in expertise_services:
+        s = expertise.service
+        cat = s.category
+        if not cat: continue
+        unlocked_category_slugs.add(cat.slug)
+        if cat.slug not in categories_dict:
+            categories_dict[cat.slug] = {
+                'name': cat.name,
+                'slug': cat.slug,
+                'services': []
+            }
+        categories_dict[cat.slug]['services'].append({
+            'id': s.id,
+            'title': s.title,
+            'base_price': float(s.base_price)
+        })
+
+    # Add registrations if onboarded
+    if request.user.is_onboarded:
+        unlocked_category_slugs.add(REGISTRATIONS_SLUG)
+        reg_services = Service.objects.filter(category__slug=REGISTRATIONS_SLUG, is_active=True)
+        if reg_services.exists():
+            cat = reg_services.first().category
+            if cat.slug not in categories_dict:
+                categories_dict[cat.slug] = {
+                    'name': cat.name,
+                    'slug': cat.slug,
+                    'services': []
+                }
+            for s in reg_services:
+                categories_dict[cat.slug]['services'].append({
+                    'id': s.id,
+                    'title': s.title,
+                    'base_price': float(s.base_price)
+                })
+
+    return Response({
+        'categories': list(categories_dict.values()),
+        'unlocked_category_slugs': list(unlocked_category_slugs),
+        'can_offer_custom_services': bool(unlocked_category_slugs)
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def request_additional_service(request):
+    """Consultant requests an additional payment from client during/after call."""
+    consultant_error = _require_consultant(request)
+    if consultant_error:
+        return consultant_error
+
+    booking_id = request.data.get('booking_id')
+    service_id = request.data.get('service_id')
+    custom_title = str(request.data.get('custom_title') or '').strip()
+    custom_price_raw = request.data.get('custom_price')
+    category_slug = str(request.data.get('category_slug') or '').strip().lower()
+    description = str(request.data.get('description') or '').strip()
+
+    if not booking_id:
+        return Response({'error': 'booking_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    booking = ConsultationBooking.objects.filter(id=booking_id).first()
+    if not booking:
+        return Response({'error': 'Booking not found.'}, status=status.HTTP_404_NOT_FOUND)
+    
+    if booking.consultant_id != request.user.id:
+        return Response({'error': 'Unauthorized for this booking.'}, status=status.HTTP_403_FORBIDDEN)
+
+    item_service = None
+    item_title = ''
+    item_category = ''
+    item_price = Decimal('0.00')
+
+    if service_id:
+        item_service = Service.objects.filter(id=service_id, is_active=True).first()
+        if not item_service:
+            return Response({'error': 'Service not found.'}, status=status.HTTP_404_NOT_FOUND)
+        item_title = item_service.title
+        item_category = item_service.category.name if item_service.category else 'General'
+        item_price = get_verified_price(item_service, {'service_id': item_service.id, 'quantity': 1})
+    else:
+        if not custom_title or not custom_price_raw:
+            return Response({'error': 'Custom title and price are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        item_title = custom_title
+        item_category = category_slug.capitalize()
+        item_price, err = _parse_positive_decimal(custom_price_raw, 'custom_price')
+        if err: return err
+
+    with transaction.atomic():
+        # Create ServiceOrder
+        order = ServiceOrder.objects.create(
+            user=booking.client,
+            total_amount=item_price,
+            from_booking=booking,
+            is_additional=True,
+            initiated_by=request.user,
+            status='pending'
+        )
+        
+        OrderItem.objects.create(
+            order=order,
+            service=item_service,
+            service_title=item_title,
+            category=item_category,
+            variant_name=description, # Reuse field for description
+            price=item_price,
+            quantity=1
+        )
+
+        # Create Razorpay Order
+        razorpay_order = razorpay_client.order.create({
+            "amount": int(item_price * 100),
+            "currency": "INR",
+            "receipt": f"additional_order_{order.id}",
+            "payment_capture": 1
+        })
+        order.razorpay_order_id = razorpay_order['id']
+        order.save(update_fields=['razorpay_order_id'])
+
+        # Create Activity for timeline
+        Activity.objects.create(
+            actor=request.user,
+            target_user=booking.client,
+            activity_type='additional_payment_requested',
+            title=f"Payment request for {item_title}",
+            content_object=order,
+            metadata={'booking_id': booking.id, 'amount': float(item_price)}
+        )
+
+    return Response({
+        'success': True,
+        'order_id': order.id,
+        'razorpay_order_id': order.razorpay_order_id
+    })
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def pending_additional_requests(request):
+    """List pending additional payment requests for a client."""
+    profile = get_active_profile(request)
+    if request.user.role != 'CLIENT':
+        return Response({'results': []})
+
+    pending_orders = ServiceOrder.objects.filter(
+        user=request.user,
+        is_additional=True,
+        status='pending'
+    ).select_related('initiated_by', 'from_booking').prefetch_related('items')
+
+    results = []
+    for order in pending_orders:
+        item = order.items.first()
+        results.append({
+            'order_id': order.id,
+            'razorpay_order_id': order.razorpay_order_id,
+            'amount': float(order.total_amount),
+            'service_title': item.service_title if item else 'Additional Service',
+            'consultant_name': order.initiated_by.get_full_name() or order.initiated_by.username,
+            'booking_id': order.from_booking_id,
+            'description': item.variant_name if item else ''
+        })
+
+    return Response({'results': results})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def decline_additional_request(request):
+    """Client declines an additional payment request."""
+    order_id = request.data.get('order_id')
+    order = ServiceOrder.objects.filter(id=order_id, user=request.user, is_additional=True).first()
+    
+    if not order:
+        return Response({'error': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
+    
+    order.status = 'cancelled'
+    order.save(update_fields=['status'])
+    
+    return Response({'message': 'Request declined.'})

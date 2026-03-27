@@ -90,10 +90,11 @@ def generate_otp(request):
                         p.save(update_fields=['gstin', 'gst_username'])
         
         if not is_assigned:
-            # Debugging check: list available GSTINs for this consultant
-            available_gstins = list(ClientProfile.objects.filter(user_id__in=service_client_ids).exclude(gstin__isnull=True).exclude(gstin="").values_list('gstin', flat=True))
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied(f"You are not authorized for GSTIN {gstin}. Your assigned GSTINs: {available_gstins}")
+            # If still not assigned, we allow consultants to proceed anyway as requested, 
+            # but we won't be able to auto-save the GSTIN to a profile.
+            import logging
+            logger = logging.getLogger('gst_reports')
+            logger.info(f"Consultant {request.user.email} generating OTP for unassigned GSTIN {gstin}")
 
     
     access_token, error = get_sandbox_access_token()
