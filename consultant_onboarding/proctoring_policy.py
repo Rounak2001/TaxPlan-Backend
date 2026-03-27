@@ -16,6 +16,7 @@ HEAD_POSE_PITCH_THRESHOLD = 18
 HEAD_POSE_ROLL_THRESHOLD = 15
 HEAD_POSE_SUSTAINED_WINDOW = 5
 HEAD_POSE_SUSTAINED_MIN_HITS = 3
+HEAD_POSE_ENFORCEMENT_ENABLED = False
 GAZE_SUSTAINED_WINDOW = 5
 GAZE_SUSTAINED_MIN_HITS = 3
 
@@ -86,6 +87,7 @@ def policy_payload():
             'head_pose_roll_threshold': HEAD_POSE_ROLL_THRESHOLD,
             'head_pose_sustained_window': HEAD_POSE_SUSTAINED_WINDOW,
             'head_pose_sustained_min_hits': HEAD_POSE_SUSTAINED_MIN_HITS,
+            'head_pose_enforcement_enabled': HEAD_POSE_ENFORCEMENT_ENABLED,
             'gaze_sustained_window': GAZE_SUSTAINED_WINDOW,
             'gaze_sustained_min_hits': GAZE_SUSTAINED_MIN_HITS,
         },

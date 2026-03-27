@@ -36,6 +36,24 @@ def first_last_names_match(left, right):
     return left_norm == right_norm
 
 
+def first_name_present(left, right):
+    """
+    Check whether the first-name token from `left` exists anywhere in `right`.
+    """
+    left_tokens = normalize_name(left).split()
+    candidate_parts = set(normalize_name(right).split())
+    if not left_tokens or not candidate_parts:
+        return False
+    return left_tokens[0] in candidate_parts
+
+
+def first_last_name_parts_present(left, right):
+    """
+    Backward-compatible alias for first-name-only matching used by bachelor's validation.
+    """
+    return first_name_present(left, right)
+
+
 def _load_json_object(raw_value):
     if isinstance(raw_value, dict):
         return raw_value

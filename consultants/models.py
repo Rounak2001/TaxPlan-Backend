@@ -135,7 +135,7 @@ class ClientServiceRequest(models.Model):
 
     client = models.ForeignKey(
 User, on_delete=models.CASCADE, related_name='service_requests')
-    service = models.ForeignKey(Service, on_delete=models.CASCADE)
+    service = models.ForeignKey(Service, on_delete=models.SET_NULL, null=True, blank=True)
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     
@@ -164,7 +164,8 @@ User, on_delete=models.CASCADE, related_name='service_requests')
     completed_at = models.DateTimeField(null=True, blank=True)
     
     def __str__(self):
-        return f"{self.client.email} - {self.service.title} ({self.status})"
+        service_label = self.service.title if self.service else 'Custom Service'
+        return f"{self.client.email} - {service_label} ({self.status})"
 
 
 class ConsultantReview(models.Model):
