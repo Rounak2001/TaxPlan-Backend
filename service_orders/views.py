@@ -733,7 +733,7 @@ def verify_payment(request):
                 # Lock the order row
                 order = ServiceOrder.objects.select_related(
                         'user', 'user__parent_account'
-                    ).select_for_update().get(razorpay_order_id=razorpay_order_id)
+                    ).select_for_update(of=('self',)).get(razorpay_order_id=razorpay_order_id)
             except ServiceOrder.DoesNotExist:
                  return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
             
