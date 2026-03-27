@@ -3,10 +3,12 @@ import json
 from decimal import Decimal, InvalidOperation
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
+from django.utils import timezone
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from .models import ServiceOrder, OrderItem
+from .models import Coupon, ServiceOrder, OrderItem
 from consultants.models import Service, ClientServiceRequest, ConsultantServiceProfile
 from .utils import create_service_requests_from_order
 from core_auth.utils import get_active_profile
@@ -19,17 +21,55 @@ razorpay_client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZOR
 
 logger = logging.getLogger('service_orders')
 
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def validate_coupon(request):
+    """Validate a coupon code and return the discount preview."""
+    code = (request.data.get('code') or '').strip().upper()
+    cart_total = Decimal(str(request.data.get('cart_total', 0)))
+
+    if not code:
+        return Response({'error': 'Coupon code is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        coupon = Coupon.objects.get(code__iexact=code)
+    except Coupon.DoesNotExist:
+        return Response({'valid': False, 'error': 'Invalid coupon code'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not coupon.is_valid:
+        return Response({'valid': False, 'error': 'This coupon has expired or is no longer available'})
+
+    discount = coupon.calculate_discount(cart_total)
+    if discount <= 0:
+        return Response({
+            'valid': False,
+            'error': f'Minimum purchase of ₹{coupon.min_purchase_amount} required'
+        })
+
+    return Response({
+        'valid': True,
+        'code': coupon.code,
+        'discount_type': coupon.discount_type,
+        'discount_value': float(coupon.discount_value),
+        'discount_amount': float(discount),
+        'new_total': float(cart_total - discount),
+    })
+
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def create_order(request):
     """
     1. Receive cart items.
     2. Fetch REAL prices from Service model (Security Fix).
-    3. Create a pending ServiceOrder.
-    4. Create Razorpay Order.
+    3. Apply coupon discount (if provided).
+    4. Create a pending ServiceOrder.
+    5. Create Razorpay Order.
     """
     user = get_active_profile(request)
     items_data = request.data.get('items', [])
+    coupon_code = (request.data.get('coupon_code') or '').strip().upper()
     
     logger.debug(f"create_order called by {user.email}")
     logger.debug(f"Razorpay Key ID: {settings.RAZORPAY_KEY_ID}")
@@ -108,11 +148,34 @@ def create_order(request):
         if total_amount <= 0:
             return Response({'error': 'Invalid total amount'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # --- Coupon logic ---
+        original_amount = total_amount
+        discount_amount = Decimal("0.00")
+        coupon = None
+
+        if coupon_code:
+            try:
+                coupon = Coupon.objects.get(code__iexact=coupon_code)
+            except Coupon.DoesNotExist:
+                return Response({'error': 'Invalid coupon code'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not coupon.is_valid:
+                return Response({'error': 'This coupon has expired or is no longer available'}, status=status.HTTP_400_BAD_REQUEST)
+
+            discount_amount = coupon.calculate_discount(total_amount)
+            total_amount = max(total_amount - discount_amount, Decimal("0.00"))
+
+            if total_amount <= 0:
+                return Response({'error': 'Discount makes total zero — please remove coupon or add more items'}, status=status.HTTP_400_BAD_REQUEST)
+
         with transaction.atomic():
             # 2. Create Order
             order = ServiceOrder.objects.create(
                 user=user,
+                original_amount=original_amount,
+                discount_amount=discount_amount,
                 total_amount=total_amount,
+                coupon=coupon,
                 status='pending'
             )
             
@@ -130,7 +193,11 @@ def create_order(request):
                     selection_mode=valid_item['selection_mode'],
                 )
 
-            # 4. Razorpay Order
+            # 4. Increment coupon usage
+            if coupon:
+                Coupon.objects.filter(id=coupon.id).update(used_count=F('used_count') + 1)
+
+            # 5. Razorpay Order
             razorpay_order = razorpay_client.order.create({
                 "amount": int((total_amount * Decimal("100")).quantize(Decimal("1"))), # paise
                 "currency": "INR",
@@ -145,6 +212,9 @@ def create_order(request):
                 'order_id': order.id,
                 'razorpay_order_id': razorpay_order['id'],
                 'amount': float(total_amount),
+                'original_amount': float(original_amount),
+                'discount_amount': float(discount_amount),
+                'coupon_code': coupon.code if coupon else None,
                 'amount_paise': razorpay_order['amount'],
                 'key_id': settings.RAZORPAY_KEY_ID
             })

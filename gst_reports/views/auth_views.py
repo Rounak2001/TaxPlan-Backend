@@ -1,4 +1,5 @@
 from datetime import timedelta
+from django.db import models
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -38,6 +39,7 @@ def generate_otp(request):
             assigned_consultant__user=request.user,
         ).exclude(status__in=['completed', 'cancelled']).values_list('client_id', flat=True)
         
+        is_assigned = False
         if client_id_param:
             try:
                 client_id_val = int(client_id_param)
@@ -45,23 +47,27 @@ def generate_otp(request):
                     from rest_framework.exceptions import PermissionDenied
                     raise PermissionDenied("You are not assigned to this client.")
                 
-                # Fetch profile and verify/update GSTIN
-                client_profile = ClientProfile.objects.get(user_id=client_id_val)
-                if not client_profile.gstin:
+                # Fetch profile and update GSTIN/Username (Consultants are trusted for assigned clients)
+                client_profile, created = ClientProfile.objects.get_or_create(user_id=client_id_val)
+                
+                # Update if blank or different
+                needs_save = False
+                if client_profile.gstin != gstin.strip().upper():
                     client_profile.gstin = gstin.strip().upper()
-                    if username:
-                        client_profile.gst_username = username
+                    needs_save = True
+                if username and client_profile.gst_username != username:
+                    client_profile.gst_username = username
+                    needs_save = True
+                
+                if needs_save:
                     client_profile.save(update_fields=['gstin', 'gst_username'])
-                    is_assigned = True
-                elif client_profile.gstin.strip().upper() != gstin.strip().upper():
-                    from rest_framework.exceptions import PermissionDenied
-                    raise PermissionDenied(f"GSTIN {gstin} does not match client's saved GSTIN ({client_profile.gstin}).")
-                else:
-                    is_assigned = True
+                
+                is_assigned = True
             except (ValueError, ClientProfile.DoesNotExist):
                 from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied("Invalid client specified.")
         else:
+            # If no client_id, check if GSTIN already exists for an assigned client
             is_assigned = ClientProfile.objects.filter(
                 user_id__in=service_client_ids,
                 gstin__iexact=gstin.strip()
@@ -71,9 +77,7 @@ def generate_otp(request):
                 # Fallback: if they have any assigned clients with a blank GSTIN, allow it.
                 blank_profiles = ClientProfile.objects.filter(
                     user_id__in=service_client_ids
-                ).filter(gstin__isnull=True) | ClientProfile.objects.filter(
-                    user_id__in=service_client_ids, gstin=""
-                )
+                ).filter(models.Q(gstin__isnull=True) | models.Q(gstin=""))
                 
                 if blank_profiles.exists():
                     is_assigned = True
