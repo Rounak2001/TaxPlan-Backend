@@ -36,6 +36,18 @@ def first_last_names_match(left, right):
     return left_norm == right_norm
 
 
+def first_last_name_parts_present(left, right):
+    """
+    Check if first and last name tokens from `left` exist anywhere in `right`,
+    regardless of order and while ignoring middle names.
+    """
+    required_parts = first_last_name(left).split()
+    candidate_parts = set(normalize_name(right).split())
+    if not required_parts or not candidate_parts:
+        return False
+    return all(part in candidate_parts for part in required_parts)
+
+
 def _load_json_object(raw_value):
     if isinstance(raw_value, dict):
         return raw_value

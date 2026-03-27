@@ -15,6 +15,7 @@ from ..authentication import ApplicantAuthentication, IsApplicant
 from ..proctoring_policy import (
     MAX_SESSION_VIOLATIONS,
     MAX_VIOLATIONS_PER_TYPE,
+    HEAD_POSE_ENFORCEMENT_ENABLED,
     HEAD_POSE_YAW_THRESHOLD,
     HEAD_POSE_PITCH_THRESHOLD,
     HEAD_POSE_ROLL_THRESHOLD,
@@ -939,11 +940,9 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                         mouth_state = 'open' if mouth_val else 'closed'
                         server_fallback_applied = True
 
+            # Pose detection is intentionally disabled for onboarding proctoring.
+            # Keep gaze enforcement only from explicit client signal.
             derived_gaze_violation = False
-            if pose_yaw is not None and abs(pose_yaw) > 20:
-                derived_gaze_violation = True
-            if pose_pitch is not None and abs(pose_pitch) > 15:
-                derived_gaze_violation = True
             gaze_violation = gaze_violation_input if gaze_violation_input is not None else derived_gaze_violation
             if gaze_violation_input is None:
                 server_fallback_applied = True
@@ -1037,55 +1036,61 @@ class UserSessionViewSet(viewsets.ModelViewSet):
                     'enforce_violation': True,
                 })
 
-            # Rule 3: Head pose check (sustained-window enforcement)
+            # Rule 3: Head pose check is disabled by product decision.
             head_pose_triggered = False
-            if pose_yaw is not None and abs(pose_yaw) > HEAD_POSE_YAW_THRESHOLD:
-                head_pose_triggered = True
-            if pose_pitch is not None and abs(pose_pitch) > HEAD_POSE_PITCH_THRESHOLD:
-                head_pose_triggered = True
-            if pose_roll is not None and abs(pose_roll) > HEAD_POSE_ROLL_THRESHOLD:
-                head_pose_triggered = True
+            sustained_hits = 0
+            sustained_window_count = 0
+            sustained_head_pose_triggered = False
+            if HEAD_POSE_ENFORCEMENT_ENABLED:
+                # Reserved for future re-enable without breaking API contract.
+                if pose_yaw is not None and abs(pose_yaw) > HEAD_POSE_YAW_THRESHOLD:
+                    head_pose_triggered = True
+                if pose_pitch is not None and abs(pose_pitch) > HEAD_POSE_PITCH_THRESHOLD:
+                    head_pose_triggered = True
+                if pose_roll is not None and abs(pose_roll) > HEAD_POSE_ROLL_THRESHOLD:
+                    head_pose_triggered = True
 
-            # Reset sustained-window counting after a pose violation is raised, so older samples don't keep re-triggering.
-            last_pose_violation_at = (
-                Violation.objects
-                .filter(session=session, violation_type='pose')
-                .order_by('-timestamp')
-                .values_list('timestamp', flat=True)
-                .first()
-            )
-            recent_snapshots_qs = ProctoringSnapshot.objects.filter(session=session)
-            if last_pose_violation_at:
-                recent_snapshots_qs = recent_snapshots_qs.filter(timestamp__gt=last_pose_violation_at)
-            recent_snapshots = recent_snapshots_qs.order_by('-timestamp')[:HEAD_POSE_SUSTAINED_WINDOW - 1]
-            historical_hits = 0
-            historical_count = 0
-            for snap in recent_snapshots:
-                if snap.pose_yaw is None and snap.pose_pitch is None:
-                    continue
-                historical_count += 1
-                if (
-                    (snap.pose_yaw is not None and abs(snap.pose_yaw) > HEAD_POSE_YAW_THRESHOLD)
-                    or (snap.pose_pitch is not None and abs(snap.pose_pitch) > HEAD_POSE_PITCH_THRESHOLD)
-                    or (snap.pose_roll is not None and abs(snap.pose_roll) > HEAD_POSE_ROLL_THRESHOLD)
-                ):
-                    historical_hits += 1
+                # Reset sustained-window counting after a pose violation is raised, so older samples don't keep re-triggering.
+                last_pose_violation_at = (
+                    Violation.objects
+                    .filter(session=session, violation_type='pose')
+                    .order_by('-timestamp')
+                    .values_list('timestamp', flat=True)
+                    .first()
+                )
+                recent_snapshots_qs = ProctoringSnapshot.objects.filter(session=session)
+                if last_pose_violation_at:
+                    recent_snapshots_qs = recent_snapshots_qs.filter(timestamp__gt=last_pose_violation_at)
+                recent_snapshots = recent_snapshots_qs.order_by('-timestamp')[:HEAD_POSE_SUSTAINED_WINDOW - 1]
+                historical_hits = 0
+                historical_count = 0
+                for snap in recent_snapshots:
+                    if snap.pose_yaw is None and snap.pose_pitch is None:
+                        continue
+                    historical_count += 1
+                    if (
+                        (snap.pose_yaw is not None and abs(snap.pose_yaw) > HEAD_POSE_YAW_THRESHOLD)
+                        or (snap.pose_pitch is not None and abs(snap.pose_pitch) > HEAD_POSE_PITCH_THRESHOLD)
+                        or (snap.pose_roll is not None and abs(snap.pose_roll) > HEAD_POSE_ROLL_THRESHOLD)
+                    ):
+                        historical_hits += 1
 
-            sustained_hits = historical_hits + (1 if head_pose_triggered else 0)
-            sustained_window_count = historical_count + (1 if (pose_yaw is not None or pose_pitch is not None) else 0)
-            sustained_head_pose_triggered = (
-                sustained_hits >= HEAD_POSE_SUSTAINED_MIN_HITS
-                and sustained_window_count >= HEAD_POSE_SUSTAINED_MIN_HITS
-            )
+                sustained_hits = historical_hits + (1 if head_pose_triggered else 0)
+                sustained_window_count = historical_count + (1 if (pose_yaw is not None or pose_pitch is not None) else 0)
+                sustained_head_pose_triggered = (
+                    sustained_hits >= HEAD_POSE_SUSTAINED_MIN_HITS
+                    and sustained_window_count >= HEAD_POSE_SUSTAINED_MIN_HITS
+                )
 
-            if head_pose_triggered:
-                structured_reasons.append({
-                    'rule': 'head_pose',
-                    'severity': 'medium',
-                    'message': f"Suspicious head pose detected (yaw={pose_yaw}, pitch={pose_pitch}, sustained_hits={sustained_hits})",
-                    'enforce_violation': sustained_head_pose_triggered,
-                })
+                if head_pose_triggered:
+                    structured_reasons.append({
+                        'rule': 'head_pose',
+                        'severity': 'medium',
+                        'message': f"Suspicious head pose detected (yaw={pose_yaw}, pitch={pose_pitch}, sustained_hits={sustained_hits})",
+                        'enforce_violation': sustained_head_pose_triggered,
+                    })
             rule_outcomes['head_pose'] = {
+                'enabled': bool(HEAD_POSE_ENFORCEMENT_ENABLED),
                 'triggered': head_pose_triggered,
                 'sustained_triggered': sustained_head_pose_triggered,
                 'yaw': pose_yaw,

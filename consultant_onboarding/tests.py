@@ -14,10 +14,20 @@ from .authentication import generate_applicant_token
 from .credential_service import check_and_auto_generate_credentials, get_auto_credential_blocker
 from .expertise_sync import sync_passed_sessions_to_consultant
 from .models import ConsultantApplication, ConsultantCredential, ConsultantDocument, IdentityDocument, UserSession, VideoResponse
-from .views.admin_panel import _generate_and_send_credentials, delete_consultant, dev_bootstrap_consultant
+from .views.admin_panel import (
+    _ensure_live_consultant_user,
+    _generate_and_send_credentials,
+    delete_consultant,
+    dev_bootstrap_consultant,
+)
 from .views.auth import accept_declaration
 from .views.test_engine import TestTypeViewSet, UserSessionViewSet
-from .utils.name_matching import first_last_name, first_last_names_match, get_latest_verified_identity_name
+from .utils.name_matching import (
+    first_last_name,
+    first_last_name_parts_present,
+    first_last_names_match,
+    get_latest_verified_identity_name,
+)
 from consultants.models import ClientServiceRequest, ConsultantServiceExpertise, ConsultantServiceProfile, Service, ServiceCategory
 from consultations.models import Topic
 from core_auth.models import ClientProfile, User
@@ -30,6 +40,11 @@ class NameMatchingTests(TestCase):
         self.assertTrue(first_last_names_match("John Michael Doe", "John Doe"))
         self.assertTrue(first_last_names_match("  JOHN   DOE ", "John A. Doe"))
         self.assertFalse(first_last_names_match("John Doe", "Jane Doe"))
+
+    def test_first_last_name_parts_present_allows_any_order_with_extra_tokens(self):
+        self.assertTrue(first_last_name_parts_present("John Michael Doe", "Doe John Fathername"))
+        self.assertTrue(first_last_name_parts_present("  JOHN   DOE ", "surname DOE and JOHN details"))
+        self.assertFalse(first_last_name_parts_present("John Doe", "John Smith Fathername"))
 
     def test_get_latest_verified_identity_name_reads_latest_verified_document(self):
         application = ConsultantApplication.objects.create(email="identity@example.com")
@@ -163,6 +178,22 @@ class AutoCredentialGenerationTests(TestCase):
             ConsultantCredential.objects.get(application=application).username,
             result["username"],
         )
+
+    def test_ensure_live_user_keeps_existing_application_username_without_suffix(self):
+        application = self.make_eligible_application(email="same-app-username@example.com")
+        ConsultantCredential.objects.create(
+            application=application,
+            username="taxplanadvisor_john_1536",
+            password="Password@123",
+        )
+
+        user, _profile = _ensure_live_consultant_user(
+            application,
+            "taxplanadvisor_john_1536",
+            password="Password@123",
+        )
+
+        self.assertEqual(user.username, "taxplanadvisor_john_1536")
 
     def test_generate_credentials_rejects_phone_conflict_without_stale_credential_row(self):
         application = self.make_eligible_application(phone_number="+919999999999")

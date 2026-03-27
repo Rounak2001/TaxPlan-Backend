@@ -8,7 +8,11 @@ from ..models import ConsultantDocument
 from ..serializers import ConsultantDocumentSerializer
 from ..authentication import ApplicantAuthentication, IsApplicant
 from ..credential_service import trigger_auto_credential_check
-from ..utils.name_matching import first_last_name, first_last_names_match, get_latest_verified_identity_name
+from ..utils.name_matching import (
+    first_last_name,
+    first_last_name_parts_present,
+    get_latest_verified_identity_name,
+)
 
 
 class GetDocumentUploadUrlView(APIView):
@@ -129,13 +133,13 @@ class UploadDocumentView(APIView):
                             "verification_status": document.verification_status,
                             "details": {
                                 **(result or {}),
-                                "name_match_rule": "first_and_last_name_only",
+                                "name_match_rule": "first_and_last_name_parts_any_order",
                             },
                         },
                         status=400,
                     )
 
-                if gov_id_name and not first_last_names_match(gov_id_name, extracted_name):
+                if gov_id_name and not first_last_name_parts_present(gov_id_name, extracted_name):
                     try:
                         if document.file_path:
                             default_storage.delete(str(document.file_path).lstrip('/'))
@@ -144,12 +148,12 @@ class UploadDocumentView(APIView):
                     document.delete()
                     return Response(
                         {
-                            "error": "First and last name on the Bachelor's degree must match the verified Government ID.",
+                            "error": "First and last name parts on the Bachelor's degree must match the verified Government ID.",
                             "document_type": document_type,
                             "verification_status": document.verification_status,
                             "details": {
                                 **(result or {}),
-                                "name_match_rule": "first_and_last_name_only",
+                                "name_match_rule": "first_and_last_name_parts_any_order",
                                 "government_id_first_last_name": first_last_name(gov_id_name),
                                 "document_first_last_name": first_last_name(extracted_name),
                             },
@@ -163,6 +167,7 @@ class UploadDocumentView(APIView):
             response_data['name_match_rule'] = 'first_and_last_name_only'
             if claimed_doc_type == "bachelors_degree":
                 gov_id_name = get_latest_verified_identity_name(application) or f"{application.first_name or ''} {application.last_name or ''}".strip()
+                response_data['name_match_rule'] = 'first_and_last_name_parts_any_order'
                 response_data['government_id_first_last_name'] = first_last_name(gov_id_name)
                 response_data['document_first_last_name'] = first_last_name(extracted_name)
 

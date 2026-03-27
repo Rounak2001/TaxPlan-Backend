@@ -113,7 +113,7 @@ def _find_phone_conflict(app, *, existing_user=None):
     return conflicts.first()
 
 
-def _ensure_unique_consultant_username(base_username, *, existing_user=None):
+def _ensure_unique_consultant_username(base_username, *, existing_user=None, application=None):
     candidate = (base_username or 'consultant').strip() or 'consultant'
     suffix = 0
 
@@ -121,6 +121,9 @@ def _ensure_unique_consultant_username(base_username, *, existing_user=None):
         username = candidate if suffix == 0 else f"{candidate}_{suffix}"
         credential_taken = ConsultantCredential.objects.filter(username=username)
         user_taken = User.objects.filter(username=username)
+
+        if application is not None:
+            credential_taken = credential_taken.exclude(application=application)
 
         if existing_user is not None:
             credential_taken = credential_taken.exclude(application__email=existing_user.email)
@@ -152,7 +155,11 @@ def _ensure_live_consultant_user(app, username, password=None):
             f"{phone_conflict.email} ({phone_conflict.role})."
         )
 
-    resolved_username = _ensure_unique_consultant_username(username, existing_user=existing_user)
+    resolved_username = _ensure_unique_consultant_username(
+        username,
+        existing_user=existing_user,
+        application=app,
+    )
 
     user, created = User.objects.get_or_create(
         email=app.email,
@@ -598,13 +605,21 @@ def _generate_and_send_credentials(app):
         password = ''.join(random.choices(chars, k=10))
 
         with transaction.atomic():
-            ConsultantCredential.objects.create(
+            credential = ConsultantCredential.objects.create(
                 application=app,
                 username=username,
                 password=password,
             )
 
-            _ensure_live_consultant_user(app, username, password=password)
+            user, _consultant_profile = _ensure_live_consultant_user(
+                app,
+                username,
+                password=password,
+            )
+            final_username = user.username
+            if credential.username != final_username:
+                credential.username = final_username
+                credential.save(update_fields=['username'])
 
             app.status = 'APPROVED'
             app.save()
@@ -614,7 +629,7 @@ def _generate_and_send_credentials(app):
             f"Hello {app.get_full_name()},\n\n"
             f"Congratulations! Your verification is complete.\n"
             f"Here are your login credentials for the consultant portal:\n\n"
-            f"Username: {username}\n"
+            f"Username: {final_username}\n"
             f"Password: {password}\n\n"
             f"Login at: https://main.taxplanadvisor.co\n\n"
             f"Please keep these credentials safe and do not share them.\n\n"
@@ -634,65 +649,15 @@ def _generate_and_send_credentials(app):
         except Exception as email_err:
             logger.error(
                 f"CRITICAL: Credentials were generated for {app.email} but email FAILED to send. "
-                f"Error: {email_err}. Username: {username} | Password saved in ConsultantCredential record."
+                f"Error: {email_err}. Username: {final_username} | Password saved in ConsultantCredential record."
             )
 
         return True, {
-            "username": username,
+            "username": final_username,
             "password": password,
             "message": "Credentials generated and sent successfully",
         }
 
-        # Generate random password
-        chars = string.ascii_letters + string.digits + "!@#$%^&*"
-        password = ''.join(random.choices(chars, k=10))
-
-        # Save credential record
-        ConsultantCredential.objects.create(
-            application=app,
-            username=username,
-            password=password,
-        )
-
-        _ensure_live_consultant_user(app, username, password=password)
-
-        # Update existing CONSULTANT user (safe — same role, just refresh fields)
-        # Mark application as approved
-        app.status = 'APPROVED'
-        app.save()
-
-        # Email credentials
-        subject = "Your TaxPlan Advisor Consultant Credentials"
-        message = (
-            f"Hello {app.get_full_name()},\n\n"
-            f"Congratulations! Your verification is complete.\n"
-            f"Here are your login credentials for the consultant portal:\n\n"
-            f"Username: {username}\n"
-            f"Password: {password}\n\n"
-            f"Login at: https://api.taxplanadvisor.in\n\n"
-            f"Please keep these credentials safe and do not share them.\n\n"
-            f"Best regards,\nTaxPlan Advisor Team"
-        )
-
-        try:
-            from_email = settings.DEFAULT_FROM_EMAIL or 'admin@taxplanadvisor.com'
-            send_mail(
-                subject,
-                message,
-                from_email,
-                [app.email],
-                fail_silently=False,  # Raise exception so we can log it
-            )
-            logger.info(f"Credentials email sent successfully to {app.email}")
-        except Exception as email_err:
-            # Log prominently but don't fail credential generation — creds are already saved
-            logger.error(
-                f"CRITICAL: Credentials were generated for {app.email} but email FAILED to send. "
-                f"Error: {email_err}. "
-                f"Username: {username} | Password saved in ConsultantCredential record."
-            )
-
-        return True, {"username": username, "password": password, "message": "Credentials generated and sent successfully"}
 
     except Exception as e:
         return False, str(e)
@@ -758,7 +723,11 @@ def dev_bootstrap_consultant(request):
 
     _ensure_dev_bootstrap_assessment(application)
 
-    username = _ensure_unique_consultant_username(username_seed, existing_user=existing_user)
+    username = _ensure_unique_consultant_username(
+        username_seed,
+        existing_user=existing_user,
+        application=application,
+    )
     credential, _credential_created = ConsultantCredential.objects.update_or_create(
         application=application,
         defaults={'username': username, 'password': password},

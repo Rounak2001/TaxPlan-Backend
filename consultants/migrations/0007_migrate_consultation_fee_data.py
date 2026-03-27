@@ -20,7 +20,7 @@ def copy_consultation_fees(apps, schema_editor):
         except ConsultantServiceProfile.DoesNotExist:
             pass
     
-    print(f"  → Migrated consultation_fee for {updated} consultants")
+    print(f"  -> Migrated consultation_fee for {updated} consultants")
 
 
 def noop(apps, schema_editor):
@@ -37,3 +37,4 @@ class Migration(migrations.Migration):
     operations = [
         migrations.RunPython(copy_consultation_fees, noop),
     ]
+
