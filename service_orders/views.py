@@ -14,29 +14,24 @@ from rest_framework.response import Response
 from .models import ServiceOrder, OrderItem, Coupon
 from consultations.models import ConsultationBooking
 from consultants.models import (
-    Service, 
-    ClientServiceRequest, 
+    Service,
+    ClientServiceRequest,
     ConsultantServiceProfile,
     ConsultantServiceExpertise,
-    ServiceCategory
+    ServiceCategory,
 )
-from consultant_onboarding.category_access import (
-    ASSESSMENT_CATEGORY_ORDER,
-)
-from activity_timeline.models import Activity
-from .utils import create_service_requests_from_order
-from core_auth.utils import get_active_profile
-from .pricing import get_verified_price
-from notifications.models import Notification
-from activity_timeline.models import Activity
-from consultations.models import ConsultationBooking
-from consultant_onboarding.assessment_outcome import get_application_assessment_outcome
 from consultant_onboarding.category_access import (
     ASSESSMENT_CATEGORY_ORDER,
     get_unlock_category_slugs_for_service,
     is_service_unlocked,
 )
+from consultant_onboarding.assessment_outcome import get_application_assessment_outcome
 from consultant_onboarding.expertise_sync import sync_passed_sessions_to_consultant
+from activity_timeline.models import Activity
+from notifications.models import Notification
+from .utils import create_service_requests_from_order
+from core_auth.utils import get_active_profile
+from .pricing import get_verified_price
 
 import logging
 
@@ -178,41 +173,6 @@ def _push_additional_payment_notification(order):
         },
     )
     return notification
-
-
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
-def validate_coupon(request):
-    """Validate a coupon code and return the discount preview."""
-    code = (request.data.get('code') or '').strip().upper()
-    cart_total = Decimal(str(request.data.get('cart_total', 0)))
-
-    if not code:
-        return Response({'error': 'Coupon code is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        coupon = Coupon.objects.get(code__iexact=code)
-    except Coupon.DoesNotExist:
-        return Response({'valid': False, 'error': 'Invalid coupon code'}, status=status.HTTP_404_NOT_FOUND)
-
-    if not coupon.is_valid:
-        return Response({'valid': False, 'error': 'This coupon has expired or is no longer available'})
-
-    discount = coupon.calculate_discount(cart_total)
-    if discount <= 0:
-        return Response({
-            'valid': False,
-            'error': f'Minimum purchase of ₹{coupon.min_purchase_amount} required'
-        })
-
-    return Response({
-        'valid': True,
-        'code': coupon.code,
-        'discount_type': coupon.discount_type,
-        'discount_value': float(coupon.discount_value),
-        'discount_amount': float(discount),
-        'new_total': float(cart_total - discount),
-    })
 
 
 @api_view(['POST'])
@@ -950,10 +910,8 @@ def verify_payment(request):
     try:
         with transaction.atomic():
             try:
-                # Lock the order row
-                order = ServiceOrder.objects.select_related(
-                        'user', 'user__parent_account'
-                    ).select_for_update().get(razorpay_order_id=razorpay_order_id)
+                # Lock the order row (no select_related on nullable FKs — PostgreSQL forbids FOR UPDATE on outer joins)
+                order = ServiceOrder.objects.select_for_update().get(razorpay_order_id=razorpay_order_id)
             except ServiceOrder.DoesNotExist:
                  return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
             
