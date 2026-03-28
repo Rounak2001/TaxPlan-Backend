@@ -1,9 +1,12 @@
 import razorpay
 import json
 from decimal import Decimal, InvalidOperation
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import F
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
@@ -24,6 +27,16 @@ from activity_timeline.models import Activity
 from .utils import create_service_requests_from_order
 from core_auth.utils import get_active_profile
 from .pricing import get_verified_price
+from notifications.models import Notification
+from activity_timeline.models import Activity
+from consultations.models import ConsultationBooking
+from consultant_onboarding.assessment_outcome import get_application_assessment_outcome
+from consultant_onboarding.category_access import (
+    ASSESSMENT_CATEGORY_ORDER,
+    get_unlock_category_slugs_for_service,
+    is_service_unlocked,
+)
+from consultant_onboarding.expertise_sync import sync_passed_sessions_to_consultant
 
 import logging
 
@@ -77,6 +90,94 @@ def _is_itr_returns_item(service_obj, item_title='', item_category=''):
     category = ((service_obj.category.name if service_obj and service_obj.category else item_category or '').strip().lower())
     return category == 'returns' and 'itr' in title
 
+
+ASSESSMENT_CATEGORY_LABELS = {
+    'itr': 'Income Tax',
+    'gstr': 'GST',
+    'scrutiny': 'Notices & Scrutiny',
+    'registrations': 'Registrations',
+}
+
+
+def _get_consultant_unlock_state(user):
+    from consultant_onboarding.models import ConsultantApplication
+
+    application = ConsultantApplication.objects.filter(email=getattr(user, 'email', None)).first()
+    if not application:
+        return {
+            'application': None,
+            'unlocked_categories': list(ASSESSMENT_CATEGORY_ORDER),
+            'available_assessment_categories': [],
+        }
+
+    assessment = get_application_assessment_outcome(application)
+    return {
+        'application': application,
+        'unlocked_categories': assessment.get('unlocked_categories', []),
+        'available_assessment_categories': assessment.get('available_assessment_categories', []),
+    }
+
+
+def _serialize_additional_service_order(order):
+    item = order.items.select_related('service').first()
+    service_title = 'Additional Service'
+    description = ''
+    amount = order.total_amount
+
+    if item:
+        service_title = item.service.title if item.service else (item.service_title or service_title)
+        description = item.variant_name or ''
+        amount = item.price or amount
+
+    consultant_name = ''
+    consultant = getattr(order, 'initiated_by', None)
+    if consultant:
+        consultant_name = consultant.get_full_name() or consultant.username
+
+    return {
+        'order_id': order.id,
+        'service_title': service_title,
+        'description': description,
+        'amount': float(amount or 0),
+        'consultant_name': consultant_name,
+        'razorpay_order_id': order.razorpay_order_id,
+        'razorpay_key_id': settings.RAZORPAY_KEY_ID,
+        'created_at': order.created_at.isoformat() if order.created_at else None,
+        'booking_id': order.from_booking_id,
+    }
+
+
+def _push_additional_payment_notification(order):
+    payload = _serialize_additional_service_order(order)
+    notification = Notification.objects.create(
+        recipient=order.user,
+        category='payment',
+        title=f"Payment requested for {payload['service_title']}",
+        message=payload['description'] or 'Your consultant requested an additional service payment.',
+        link='/client',
+    )
+
+    channel_layer = get_channel_layer()
+    if not channel_layer:
+        return notification
+
+    async_to_sync(channel_layer.group_send)(
+        f"user_{order.user_id}",
+        {
+            'type': 'notification_message',
+            'data': {
+                'id': notification.id,
+                'type': 'PAYMENT_REQUEST',
+                'category': 'payment',
+                'title': notification.title,
+                'message': notification.message,
+                'link': notification.link,
+                'is_read': False,
+                **payload,
+            },
+        },
+    )
+    return notification
 
 
 @api_view(['POST'])
@@ -433,206 +534,262 @@ def razorpay_webhook(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-# --- Additional Service Views ---
-
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def additional_service_options(request):
-    """Return available services for a consultant to request additional payment."""
-    consultant_error = _require_consultant(request)
-    if consultant_error:
-        return consultant_error
+    """
+    Return consultant-side catalog/category options for in-call additional payments.
+    """
+    user = request.user
+    if user.role != 'CONSULTANT':
+        return Response({'error': 'Only consultants can view additional service options.'}, status=status.HTTP_403_FORBIDDEN)
 
-    consultant_profile = _get_consultant_profile_or_404(request.user)
-    if not consultant_profile:
-        return Response({'error': 'Consultant profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+    unlock_state = _get_consultant_unlock_state(user)
+    application = unlock_state['application']
+    if application is not None:
+        try:
+            sync_passed_sessions_to_consultant(application)
+        except Exception:
+            logger.exception("Failed to sync consultant expertise before loading additional service options")
 
-    expertise_services = ConsultantServiceExpertise.objects.filter(
-        consultant=consultant_profile,
-        service__is_active=True
-    ).select_related('service', 'service__category')
+    unlocked_categories = set(unlock_state['unlocked_categories'])
+    services = Service.objects.filter(is_active=True).select_related('category').order_by('title')
 
-    # Group by category
-    categories_dict = {}
-    unlocked_category_slugs = set()
+    unlocked_services = []
+    locked_services = []
+    for service in services:
+        service_payload = {
+            'id': service.id,
+            'title': service.title,
+            'category_name': getattr(service.category, 'name', ''),
+            'price': float(service.price or 0),
+            'unlock_category_slugs': get_unlock_category_slugs_for_service(service),
+            'is_locked': not is_service_unlocked(service, unlocked_categories),
+        }
+        if service_payload['is_locked']:
+            locked_services.append(service_payload)
+        else:
+            unlocked_services.append(service_payload)
 
-    for expertise in expertise_services:
-        s = expertise.service
-        cat = s.category
-        if not cat: continue
-        unlocked_category_slugs.add(cat.slug)
-        if cat.slug not in categories_dict:
-            categories_dict[cat.slug] = {
-                'name': cat.name,
-                'slug': cat.slug,
-                'services': []
-            }
-        categories_dict[cat.slug]['services'].append({
-            'id': s.id,
-            'title': s.title,
-            'base_price': float(s.base_price)
-        })
-
-    # Add registrations if onboarded
-    if request.user.is_onboarded:
-        unlocked_category_slugs.add(REGISTRATIONS_SLUG)
-        reg_services = Service.objects.filter(category__slug=REGISTRATIONS_SLUG, is_active=True)
-        if reg_services.exists():
-            cat = reg_services.first().category
-            if cat.slug not in categories_dict:
-                categories_dict[cat.slug] = {
-                    'name': cat.name,
-                    'slug': cat.slug,
-                    'services': []
-                }
-            for s in reg_services:
-                categories_dict[cat.slug]['services'].append({
-                    'id': s.id,
-                    'title': s.title,
-                    'base_price': float(s.base_price)
-                })
+    categories = [
+        {
+            'slug': slug,
+            'label': ASSESSMENT_CATEGORY_LABELS.get(slug, slug.replace('_', ' ').title()),
+            'is_locked': slug not in unlocked_categories,
+        }
+        for slug in ASSESSMENT_CATEGORY_ORDER
+    ]
 
     return Response({
-        'categories': list(categories_dict.values()),
-        'unlocked_category_slugs': list(unlocked_category_slugs),
-        'can_offer_custom_services': bool(unlocked_category_slugs)
+        'unlocked_services': unlocked_services,
+        'locked_services': locked_services,
+        'categories': categories,
+        'unlocked_category_slugs': list(unlocked_categories),
+        'available_assessment_categories': unlock_state['available_assessment_categories'],
     })
 
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def request_additional_service(request):
-    """Consultant requests an additional payment from client during/after call."""
-    consultant_error = _require_consultant(request)
-    if consultant_error:
-        return consultant_error
+    """
+    Create a pending Razorpay order for an additional service during a consultation.
+    """
+    user = request.user
+    if user.role != 'CONSULTANT':
+        return Response({'error': 'Only consultants can request additional payments.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        consultant_profile = user.consultant_service_profile
+    except ConsultantServiceProfile.DoesNotExist:
+        return Response({'error': 'Consultant profile not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     booking_id = request.data.get('booking_id')
-    service_id = request.data.get('service_id')
-    custom_title = str(request.data.get('custom_title') or '').strip()
-    custom_price_raw = request.data.get('custom_price')
-    category_slug = str(request.data.get('category_slug') or '').strip().lower()
-    description = str(request.data.get('description') or '').strip()
-
     if not booking_id:
         return Response({'error': 'booking_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    booking = ConsultationBooking.objects.filter(id=booking_id).first()
-    if not booking:
-        return Response({'error': 'Booking not found.'}, status=status.HTTP_404_NOT_FOUND)
-    
-    if booking.consultant_id != request.user.id:
-        return Response({'error': 'Unauthorized for this booking.'}, status=status.HTTP_403_FORBIDDEN)
+    booking = get_object_or_404(ConsultationBooking, id=booking_id)
+    if booking.consultant_id != user.id:
+        return Response({'error': 'You are not authorized to request payment for this booking.'}, status=status.HTTP_403_FORBIDDEN)
+    if booking.status == 'cancelled' or booking.payment_status != 'paid':
+        return Response({'error': 'This booking is not active for additional payment requests.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    item_service = None
-    item_title = ''
-    item_category = ''
-    item_price = Decimal('0.00')
+    unlock_state = _get_consultant_unlock_state(user)
+    unlocked_categories = set(unlock_state['unlocked_categories'])
+
+    service = None
+    service_title = ''
+    category_name = ''
+    price = Decimal('0.00')
+    description = (request.data.get('description') or '').strip()
+
+    service_id = request.data.get('service_id')
+    custom_title = (request.data.get('custom_title') or '').strip()
+    custom_price = request.data.get('custom_price')
+    category_slug = (request.data.get('category_slug') or '').strip().lower()
 
     if service_id:
-        item_service = Service.objects.filter(id=service_id, is_active=True).first()
-        if not item_service:
-            return Response({'error': 'Service not found.'}, status=status.HTTP_404_NOT_FOUND)
-        item_title = item_service.title
-        item_category = item_service.category.name if item_service.category else 'General'
-        item_price = get_verified_price(item_service, {'service_id': item_service.id, 'quantity': 1})
+        service = get_object_or_404(Service.objects.select_related('category'), id=service_id, is_active=True)
+        if not is_service_unlocked(service, unlocked_categories):
+            return Response({'error': 'This service is still locked for your account.'}, status=status.HTTP_400_BAD_REQUEST)
+        service_title = service.title
+        category_name = getattr(service.category, 'name', 'General')
+        price = Decimal(str(service.price or 0))
+        if price <= 0:
+            return Response({'error': 'Selected service does not have a valid price.'}, status=status.HTTP_400_BAD_REQUEST)
     else:
-        if not custom_title or not custom_price_raw:
-            return Response({'error': 'Custom title and price are required.'}, status=status.HTTP_400_BAD_REQUEST)
-        item_title = custom_title
-        item_category = category_slug.capitalize()
-        item_price, err = _parse_positive_decimal(custom_price_raw, 'custom_price')
-        if err: return err
+        if not custom_title:
+            return Response({'error': 'custom_title is required when no service_id is provided.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(custom_title) > 255:
+            return Response({'error': 'Custom service title is too long.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not category_slug:
+            return Response({'error': 'category_slug is required for custom services.'}, status=status.HTTP_400_BAD_REQUEST)
+        if category_slug not in unlocked_categories:
+            return Response({'error': 'This category is still locked for your account.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            price = Decimal(str(custom_price))
+        except (InvalidOperation, TypeError, ValueError):
+            price = Decimal('0.00')
+        if price <= 0:
+            return Response({'error': 'Please enter a valid custom price.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        service_title = custom_title
+        category_name = ASSESSMENT_CATEGORY_LABELS.get(category_slug, category_slug.replace('_', ' ').title())
+
+    if len(description) > 255:
+        return Response({'error': 'Description must be 255 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
 
     with transaction.atomic():
-        # Create ServiceOrder
         order = ServiceOrder.objects.create(
             user=booking.client,
-            total_amount=item_price,
+            total_amount=price,
+            original_amount=price,
+            discount_amount=Decimal('0.00'),
+            status='pending',
             from_booking=booking,
             is_additional=True,
-            initiated_by=request.user,
-            status='pending'
-        )
-        
-        OrderItem.objects.create(
-            order=order,
-            service=item_service,
-            service_title=item_title,
-            category=item_category,
-            variant_name=description, # Reuse field for description
-            price=item_price,
-            quantity=1
+            initiated_by=user,
         )
 
-        # Create Razorpay Order
+        OrderItem.objects.create(
+            order=order,
+            service=service,
+            selected_consultant=consultant_profile,
+            selection_mode='manual',
+            category=category_name or 'General',
+            service_title=service_title,
+            variant_name=description or '',
+            price=price,
+            quantity=1,
+        )
+
         razorpay_order = razorpay_client.order.create({
-            "amount": int(item_price * 100),
-            "currency": "INR",
-            "receipt": f"additional_order_{order.id}",
-            "payment_capture": 1
+            'amount': int((price * Decimal('100')).quantize(Decimal('1'))),
+            'currency': 'INR',
+            'receipt': f'additional_order_{order.id}',
+            'payment_capture': 1,
         })
         order.razorpay_order_id = razorpay_order['id']
         order.save(update_fields=['razorpay_order_id'])
 
-        # Create Activity for timeline
         Activity.objects.create(
-            actor=request.user,
+            actor=user,
             target_user=booking.client,
             activity_type='additional_payment_requested',
-            title=f"Payment request for {item_title}",
+            title=f"Additional payment requested for {service_title}",
             content_object=order,
-            metadata={'booking_id': booking.id, 'amount': float(item_price)}
+            metadata={
+                'booking_id': booking.id,
+                'service_title': service_title,
+                'amount': str(price),
+                'description': description,
+            },
         )
+
+        _push_additional_payment_notification(order)
 
     return Response({
         'success': True,
         'order_id': order.id,
-        'razorpay_order_id': order.razorpay_order_id
-    })
+        'razorpay_order_id': order.razorpay_order_id,
+        'amount': float(price),
+    }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def pending_additional_requests(request):
-    """List pending additional payment requests for a client."""
-    profile = get_active_profile(request)
-    if request.user.role != 'CLIENT':
+    """
+    Return pending additional payment requests for the active client profile.
+    """
+    user = get_active_profile(request)
+    if user.role != 'CLIENT':
         return Response({'results': []})
 
-    pending_orders = ServiceOrder.objects.filter(
-        user=request.user,
-        is_additional=True,
-        status='pending'
-    ).select_related('initiated_by', 'from_booking').prefetch_related('items')
+    orders = (
+        ServiceOrder.objects
+        .filter(user=user, is_additional=True, status='pending')
+        .select_related('initiated_by', 'from_booking')
+        .prefetch_related('items__service')
+        .order_by('-created_at')
+    )
 
-    results = []
-    for order in pending_orders:
-        item = order.items.first()
-        results.append({
-            'order_id': order.id,
-            'razorpay_order_id': order.razorpay_order_id,
-            'amount': float(order.total_amount),
-            'service_title': item.service_title if item else 'Additional Service',
-            'consultant_name': order.initiated_by.get_full_name() or order.initiated_by.username,
-            'booking_id': order.from_booking_id,
-            'description': item.variant_name if item else ''
-        })
-
-    return Response({'results': results})
+    return Response({
+        'results': [_serialize_additional_service_order(order) for order in orders]
+    })
 
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def decline_additional_request(request):
-    """Client declines an additional payment request."""
+    """
+    Allow a client to decline a pending additional payment request.
+    """
+    user = get_active_profile(request)
+    if user.role != 'CLIENT':
+        return Response({'error': 'Only clients can decline additional payment requests.'}, status=status.HTTP_403_FORBIDDEN)
+
     order_id = request.data.get('order_id')
-    order = ServiceOrder.objects.filter(id=order_id, user=request.user, is_additional=True).first()
-    
-    if not order:
-        return Response({'error': 'Request not found.'}, status=status.HTTP_404_NOT_FOUND)
-    
+    if not order_id:
+        return Response({'error': 'order_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    order = get_object_or_404(
+        ServiceOrder.objects.select_related('initiated_by', 'from_booking').prefetch_related('items__service'),
+        id=order_id,
+        user=user,
+        is_additional=True,
+    )
+    if order.status != 'pending':
+        return Response({'error': 'This additional payment request is no longer pending.'}, status=status.HTTP_400_BAD_REQUEST)
+
     order.status = 'cancelled'
-    order.save(update_fields=['status'])
-    
-    return Response({'message': 'Request declined.'})
+    order.save(update_fields=['status', 'updated_at'])
+
+    item = order.items.select_related('service').first()
+    service_title = item.service.title if item and item.service else (getattr(item, 'service_title', '') or 'Additional Service')
+
+    if order.initiated_by_id:
+        consultant_name = order.initiated_by.get_full_name() or order.initiated_by.username
+        Notification.objects.create(
+            recipient=order.initiated_by,
+            category='payment',
+            title=f'Additional payment declined for {service_title}',
+            message=f'{user.get_full_name() or user.username} declined the payment request.',
+            link='/dashboard',
+        )
+
+        Activity.objects.create(
+            actor=user,
+            target_user=order.initiated_by,
+            activity_type='additional_payment_requested',
+            title=f"Additional payment declined for {service_title}",
+            description=f"{user.get_full_name() or user.username} declined the request from {consultant_name}.",
+            content_object=order,
+            metadata={
+                'booking_id': order.from_booking_id,
+                'service_title': service_title,
+                'status': 'declined',
+            },
+        )
+
+    return Response({'success': True})

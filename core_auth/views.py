@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from core_auth.serializers import IsConsultantUser, IsClientUser
-from core_auth.models import User, ClientProfile
+from core_auth.models import User, ClientProfile, MagicLinkToken
 from core_auth.services.whatsapp_otp import (
     generate_otp, store_otp, send_whatsapp_otp,
     verify_otp as verify_otp_service, can_resend_otp,
@@ -16,7 +16,10 @@ from core_auth.services.whatsapp_otp import (
 )
 
 from django.conf import settings
+from django.http import HttpResponse
+from django.urls import reverse
 from django.utils.decorators import method_decorator
+from django.utils.html import escape
 from django.views.decorators.csrf import csrf_exempt
 import requests
 MAGIC_LINK_EXPIRY_MINUTES=15
@@ -59,6 +62,219 @@ def set_auth_cookies(response, user):
         max_age=86400 * 7 # 7 days
     )
     return response
+
+
+def _sync_consultant_application(user, lookup_email=None, **updates):
+    """Keep the consultant's onboarding application aligned with verified contact changes."""
+    if user.role != User.CONSULTANT or not updates:
+        return
+
+    from consultant_onboarding.models import ConsultantApplication
+
+    application = ConsultantApplication.objects.filter(
+        email=lookup_email or user.email
+    ).first()
+    if not application:
+        return
+
+    for field_name, value in updates.items():
+        setattr(application, field_name, value)
+    application.save(update_fields=list(updates.keys()))
+
+
+def _consume_email_change_token(raw_token):
+    token = (raw_token or '').strip()
+    if not token:
+        return False, 'Token is required.', status.HTTP_400_BAD_REQUEST
+
+    try:
+        magic_token = MagicLinkToken.objects.select_related('user').get(
+            token=token,
+            purpose=MagicLinkToken.EMAIL_CHANGE,
+        )
+    except MagicLinkToken.DoesNotExist:
+        return False, 'Invalid or expired verification link. Please request a new one.', status.HTTP_400_BAD_REQUEST
+
+    if not magic_token.is_valid or not magic_token.pending_email:
+        return False, 'This verification link has expired or already been used.', status.HTTP_400_BAD_REQUEST
+
+    user = magic_token.user
+    new_email = magic_token.pending_email.strip().lower()
+
+    if User.objects.filter(email__iexact=new_email).exclude(id=user.id).exists():
+        return False, 'This email is already registered with another account.', status.HTTP_409_CONFLICT
+
+    from consultant_onboarding.models import ConsultantApplication
+
+    application = ConsultantApplication.objects.filter(email=user.email).first()
+    application_conflict = ConsultantApplication.objects.filter(email__iexact=new_email)
+    if application:
+        application_conflict = application_conflict.exclude(id=application.id)
+    if application_conflict.exists():
+        return False, 'This email is already used in consultant onboarding.', status.HTTP_409_CONFLICT
+
+    old_email = user.email
+    user.email = new_email
+    user.save(update_fields=['email'])
+
+    if application:
+        application.email = new_email
+        application.save(update_fields=['email'])
+
+    magic_token.used = True
+    magic_token.save(update_fields=['used'])
+
+    logger.info("Consultant email updated for user %s: %s -> %s", user.id, old_email, new_email)
+    return True, 'Your email address has been updated.', status.HTTP_200_OK
+
+
+def _render_email_change_result_page(*, success, message):
+    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:8080').rstrip('/')
+    button_href = frontend_url or '/'
+    button_label = 'Return to TaxPlan Advisor'
+    accent = '#059669' if success else '#dc2626'
+    heading = 'Email verified' if success else 'Verification failed'
+    status_code = 200 if success else 400
+    body_text = (
+        'Your consultant email has been updated successfully. You can return to your already-open TaxPlan Advisor dashboard tab.'
+        if success else escape(message)
+    )
+    helper_text = (
+        'Close this tab now.'
+        if success else 'Please request a fresh verification email and try again.'
+    )
+    action_html = (
+        '<div class="close-note">Close this tab now.</div>'
+        if success else
+        f'<a class="button" href="{escape(button_href)}">{button_label}</a>'
+    )
+    icon_html = (
+        '<div class="icon success">&#10003;</div>'
+        if success else
+        '<div class="icon error">!</div>'
+    )
+
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{heading}</title>
+        <style>
+            :root {{
+                color-scheme: light;
+            }}
+            body {{
+                margin: 0;
+                font-family: "Segoe UI", Arial, sans-serif;
+                background:
+                    radial-gradient(circle at top, rgba(15, 118, 110, 0.12), transparent 32%),
+                    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+                color: #0f172a;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 560px;
+                background: rgba(255, 255, 255, 0.96);
+                border: 1px solid rgba(226, 232, 240, 0.95);
+                border-radius: 28px;
+                padding: 36px;
+                box-shadow: 0 24px 80px rgba(15, 23, 42, 0.12);
+                backdrop-filter: blur(12px);
+            }}
+            .eyebrow {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                background: {accent}14;
+                color: {accent};
+                border-radius: 999px;
+                padding: 7px 14px;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+            }}
+            .icon {{
+                width: 64px;
+                height: 64px;
+                border-radius: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 20px 0 18px;
+                font-size: 30px;
+                font-weight: 700;
+            }}
+            .icon.success {{
+                background: rgba(5, 150, 105, 0.12);
+                color: #059669;
+            }}
+            .icon.error {{
+                background: rgba(220, 38, 38, 0.12);
+                color: #dc2626;
+            }}
+            h1 {{
+                margin: 0 0 12px;
+                font-size: 32px;
+                line-height: 1.2;
+                letter-spacing: -0.03em;
+            }}
+            .lead {{
+                margin: 0 0 12px;
+                color: #334155;
+                font-size: 16px;
+                line-height: 1.6;
+            }}
+            .helper {{
+                margin: 0 0 28px;
+                color: #64748b;
+                font-size: 15px;
+                line-height: 1.6;
+            }}
+            .close-note {{
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 48px;
+                padding: 0 18px;
+                border-radius: 12px;
+                background: #0f172a;
+                color: #ffffff;
+                font-size: 14px;
+                font-weight: 700;
+                letter-spacing: 0.02em;
+            }}
+            a.button {{
+                display: inline-block;
+                background: {accent};
+                color: #ffffff;
+                text-decoration: none;
+                padding: 12px 18px;
+                border-radius: 10px;
+                font-weight: 700;
+            }}
+        </style>
+    </head>
+    <body>
+        <main class="card">
+            <div class="eyebrow">{'Email updated' if success else 'Action needed'}</div>
+            {icon_html}
+            <h1>{heading}</h1>
+            <p class="lead">{body_text}</p>
+            <p class="helper">{helper_text}</p>
+            {action_html}
+        </main>
+    </body>
+    </html>
+    """
+    return HttpResponse(html, status=status_code)
 
 
 class SendOTPView(APIView):
@@ -183,6 +399,11 @@ class VerifyOTPView(APIView):
             user.is_phone_verified = True
             user.is_onboarded = True
             user.save(update_fields=['phone_number', 'is_phone_verified', 'is_onboarded'])
+            _sync_consultant_application(
+                user,
+                phone_number=full_phone,
+                is_phone_verified=True,
+            )
 
             logger.info(f"Phone verified for user {user.id}: {full_phone[-4:]}")
 
@@ -955,7 +1176,7 @@ def _send_base64_html_email(subject, html_body, plain_body, from_email, to_email
 
 
 
-def _generate_magic_token(user, purpose='LOGIN'):
+def _generate_magic_token(user, purpose='LOGIN', pending_email=None):
     """Generate a secure, single-use token for magic links or password resets."""
     # Invalidate any existing unused tokens for same user + purpose
     MagicLinkToken.objects.filter(
@@ -967,9 +1188,150 @@ def _generate_magic_token(user, purpose='LOGIN'):
         user=user,
         token=token,
         purpose=purpose,
+        pending_email=pending_email,
         expires_at=timezone.now() + timedelta(minutes=MAGIC_LINK_EXPIRY_MINUTES),
     )
     return magic_token
+
+
+class RequestEmailChangeView(APIView):
+    """
+    Send a verification link to a consultant's new email address.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        if user.role != User.CONSULTANT:
+            return Response(
+                {'error': 'Only consultants can change email from this endpoint.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        new_email = request.data.get('email', '').strip().lower()
+        if not new_email:
+            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        current_email = (user.email or '').strip().lower()
+        if new_email == current_email:
+            return Response(
+                {'error': 'This is already your current verified email address.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if User.objects.filter(email__iexact=new_email).exclude(id=user.id).exists():
+            return Response(
+                {'error': 'This email is already registered with another account.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        from consultant_onboarding.models import ConsultantApplication
+
+        current_application = ConsultantApplication.objects.filter(email=user.email).first()
+        application_conflict = ConsultantApplication.objects.filter(email__iexact=new_email)
+        if current_application:
+            application_conflict = application_conflict.exclude(id=current_application.id)
+        if application_conflict.exists():
+            return Response(
+                {'error': 'This email is already used in consultant onboarding.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        recent_token = MagicLinkToken.objects.filter(
+            user=user,
+            purpose=MagicLinkToken.EMAIL_CHANGE,
+            created_at__gte=timezone.now() - timedelta(seconds=60),
+        ).first()
+        if recent_token:
+            return Response(
+                {'error': 'A verification link was recently sent. Please wait a minute before trying again.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        magic_token = _generate_magic_token(
+            user,
+            purpose=MagicLinkToken.EMAIL_CHANGE,
+            pending_email=new_email,
+        )
+
+        verify_url = request.build_absolute_uri(
+            reverse('email-change-confirm', args=[magic_token.token])
+        )
+
+        subject = 'Verify your new TaxPlan Advisor email'
+        html_message = f"""
+        <html>
+            <body style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
+                <h2>Confirm your new email address</h2>
+                <p>We received a request to update the email on your consultant account to <strong>{new_email}</strong>.</p>
+                <p>Click the button below to verify this email and finish the change.</p>
+                <p style="margin: 24px 0;">
+                    <a href="{verify_url}" style="background:#059669;color:#ffffff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:600;">
+                        Verify new email
+                    </a>
+                </p>
+                <p>If you did not request this change, you can safely ignore this email.</p>
+                <p style="font-size:12px;color:#64748b;">Verification link: {verify_url}</p>
+            </body>
+        </html>
+        """
+        plain_message = (
+            f"We received a request to update your consultant email to {new_email}.\n"
+            f"Verify the change here: {verify_url}\n\n"
+            "If you did not request this change, you can ignore this email."
+        )
+
+        try:
+            _send_base64_html_email(
+                subject=subject,
+                html_body=html_message,
+                plain_body=plain_message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to_email=new_email,
+            )
+        except Exception as exc:
+            logger.error("Failed to send consultant email change verification to %s: %s", new_email, exc)
+            return Response(
+                {'error': 'Failed to send verification email. Please try again later.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response({
+            'success': True,
+            'message': 'Verification link sent to your new email address.',
+        })
+
+
+class VerifyEmailChangeView(APIView):
+    """
+    Confirm a consultant email change using a single-use verification token.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        success, message, response_status = _consume_email_change_token(
+            request.data.get('token', '')
+        )
+        if not success:
+            return Response({'error': message}, status=response_status)
+        return Response({
+            'success': True,
+            'message': message,
+        })
+
+
+class ConfirmEmailChangeView(APIView):
+    """
+    Production-safe GET endpoint for email verification links.
+    This avoids depending on the frontend SPA route being current in caches.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, token):
+        success, message, _response_status = _consume_email_change_token(token)
+        return _render_email_change_result_page(success=success, message=message)
 
 
 @method_decorator(csrf_exempt, name='dispatch')

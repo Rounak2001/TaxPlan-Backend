@@ -31,21 +31,74 @@ class ConsultantServiceProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     email = serializers.EmailField(source='user.email', read_only=True)
     phone = serializers.CharField(source='user.phone_number', read_only=True)
+    age = serializers.IntegerField(source='application.age', read_only=True, allow_null=True)
+    dob = serializers.DateField(source='application.dob', read_only=True, allow_null=True)
+    address_line1 = serializers.CharField(source='application.address_line1', required=False)
+    address_line2 = serializers.CharField(source='application.address_line2', required=False, allow_blank=True)
+    city = serializers.CharField(source='application.city', required=False)
+    state = serializers.CharField(source='application.state', required=False)
+    pincode = serializers.CharField(source='application.pincode', required=False)
+    practice_type = serializers.CharField(source='application.practice_type', read_only=True, allow_blank=True, allow_null=True)
     
     def get_full_name(self, obj):
         return obj.user.get_full_name() or obj.user.username
+
+    def validate_address_line1(self, value):
+        return value.strip()
+
+    def validate_address_line2(self, value):
+        return value.strip()
+
+    def validate_city(self, value):
+        return value.strip()
+
+    def validate_state(self, value):
+        return value.strip()
+
+    def validate_pincode(self, value):
+        return value.strip()
+
+    def update(self, instance, validated_data):
+        application_data = validated_data.pop('application', {})
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if validated_data:
+            instance.save()
+
+        if application_data:
+            application = instance.application
+            if not application:
+                raise serializers.ValidationError({
+                    'detail': 'Linked onboarding application not found for this consultant.',
+                })
+
+            for attr, value in application_data.items():
+                setattr(application, attr, value)
+            application.save()
+            instance._application_cache = application
+
+        return instance
     
     class Meta:
         model = ConsultantServiceProfile
         fields = [
             'id', 'user', 'full_name', 'email', 'phone',
+            'age', 'dob',
+            'address_line1', 'address_line2', 'city', 'state', 'pincode',
+            'practice_type',
             'qualification', 'experience_years', 'certifications',
-            'consultation_fee',
+            'bio', 'consultation_fee',
             'is_active', 'max_concurrent_clients', 'current_client_count',
             'average_rating', 'total_reviews',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['current_client_count', 'average_rating', 'total_reviews', 'created_at', 'updated_at']
+        read_only_fields = [
+            'user', 'full_name', 'email', 'phone',
+            'age', 'dob', 'practice_type',
+            'current_client_count', 'average_rating', 'total_reviews',
+            'created_at', 'updated_at',
+        ]
 
 
 class ConsultantReviewSerializer(serializers.ModelSerializer):

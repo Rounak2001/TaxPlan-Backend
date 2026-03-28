@@ -20,7 +20,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
             'id', 'email', 'first_name', 'middle_name', 'last_name', 
             'age', 'dob', 'phone_number', 'is_phone_verified',
             'address_line1', 'address_line2', 'city', 'state', 'pincode', 
-            'practice_type', 'qualification', 'experience_years', 'certifications', 'bio',
+            'practice_type', 'qualification', 'experience_years', 'certifications',
             'is_verified', 'has_accepted_declaration', 'is_onboarded', 'status', 'created_at'
         ]
         read_only_fields = ['id', 'email', 'is_verified', 'has_accepted_declaration', 'status', 'created_at', 'is_phone_verified']
@@ -40,7 +40,7 @@ class OnboardingSerializer(serializers.ModelSerializer):
             'first_name', 'middle_name', 'last_name', 
             'age', 'dob', 'phone_number', 
             'address_line1', 'address_line2', 'city', 'state', 'pincode',
-            'practice_type', 'qualification', 'experience_years', 'certifications', 'bio'
+            'practice_type', 'qualification', 'experience_years', 'certifications'
         ]
     
     def validate_first_name(self, value):

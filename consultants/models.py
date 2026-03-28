@@ -44,6 +44,20 @@ class ConsultantServiceProfile(models.Model):
     def phone(self):
         """Delegate to User model."""
         return self.user.phone_number or ''
+
+    @property
+    def application(self):
+        """
+        Return the onboarding application that originated this consultant.
+        Cached per instance so serializer access does not repeat lookups.
+        """
+        if not hasattr(self, '_application_cache'):
+            from consultant_onboarding.models import ConsultantApplication
+
+            self._application_cache = ConsultantApplication.objects.filter(
+                email__iexact=self.user.email
+            ).first()
+        return self._application_cache
     
     def __str__(self):
         return f"{self.full_name} - {self.email}"

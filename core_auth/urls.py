@@ -6,6 +6,7 @@ from core_auth.views import (
     CustomTokenRefreshView, WebSocketTokenView, ContactSubmissionView,
     ClientRegisterView, ClientEmailLoginView,
     SendMagicLinkView, VerifyMagicLinkView,
+    RequestEmailChangeView, VerifyEmailChangeView, ConfirmEmailChangeView,
     ForgotPasswordView, ResetPasswordView,
     ActivateProfileView, DeactivateProfileView,
     VerifySessionView
@@ -40,6 +41,9 @@ urlpatterns = [
     # Magic Link Auth
     path('auth/magic-link/send/', SendMagicLinkView.as_view(), name='magic-link-send'),
     path('auth/magic-link/verify/', VerifyMagicLinkView.as_view(), name='magic-link-verify'),
+    path('auth/email-change/confirm/<str:token>/', ConfirmEmailChangeView.as_view(), name='email-change-confirm'),
+    path('auth/email-change/request/', RequestEmailChangeView.as_view(), name='email-change-request'),
+    path('auth/email-change/verify/', VerifyEmailChangeView.as_view(), name='email-change-verify'),
 
     # Forgot / Reset Password
     path('auth/forgot-password/', ForgotPasswordView.as_view(), name='forgot-password'),
