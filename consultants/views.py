@@ -5,22 +5,9 @@ from rest_framework.permissions import IsAuthenticated
 from django.db import models
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
-from .models import (
-    ConsultantServiceProfile,
-    ServiceCategory,
-    Service,
-    ConsultantServiceExpertise,
-    ClientServiceRequest,
-    ConsultantReview
+from .models import (ConsultantServiceProfile,ServiceCategory,Service,ConsultantServiceExpertise,ClientServiceRequest,ConsultantReview
 )
-from .serializers import (
-    ConsultantServiceProfileSerializer,
-    ServiceCategorySerializer,
-    ServiceSerializer,
-    ConsultantServiceExpertiseSerializer,
-    ClientServiceRequestSerializer,
-    ConsultantDashboardSerializer,
-    ConsultantReviewSerializer
+from .serializers import (ConsultantServiceProfileSerializer,ServiceCategorySerializer,ServiceSerializer,ConsultantServiceExpertiseSerializer,ClientServiceRequestSerializer,ConsultantDashboardSerializer,ConsultantReviewSerializer
 )
 from .services import assign_consultant_to_request, complete_service_request
 from consultant_onboarding.assessment_outcome import get_application_assessment_outcome
@@ -1054,26 +1041,48 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
                     auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
                 )
                 amount_paise = int(order_item.price * 100)
-                refund = rzp.payment.refund(
-                    order_item.order.razorpay_payment_id,
-                    {'amount': amount_paise}
-                )
-                refund_info = {
-                    'refund_id': refund.get('id'),
-                    'amount': float(order_item.price),
-                    'status': refund.get('status'),
-                }
-                # Mark the service order as cancelled
-                order_item.order.status = 'cancelled'
-                order_item.order.save(update_fields=['status'])
+                try:
+                    refund = rzp.payment.refund(
+                        order_item.order.razorpay_payment_id,
+                        {'amount': amount_paise}
+                    )
+                    refund_info = {
+                        'refund_id': refund.get('id'),
+                        'amount': float(order_item.price),
+                        'status': refund.get('status'),
+                    }
+                    # Mark the service order as cancelled
+                    order_item.order.status = 'cancelled'
+                    order_item.order.save(update_fields=['status'])
+                except razorpay.errors.BadRequestError as rzp_err:
+                    err_str = str(rzp_err)
+                    if 'fully refunded' in err_str.lower() or 'already refunded' in err_str.lower():
+                        # Payment was already refunded (e.g. duplicate cancel call) — treat as success
+                        refund_info = {
+                            'refund_id': None,
+                            'amount': float(order_item.price),
+                            'status': 'already_refunded',
+                        }
+                        order_item.order.status = 'cancelled'
+                        order_item.order.save(update_fields=['status'])
+                    else:
+                        # Real Razorpay error (bad key, invalid payment, etc.)
+                        import logging
+                        logging.getLogger('consultants').error(
+                            f"Razorpay refund failed for service_request {service_request.id}: {rzp_err}",
+                            exc_info=True
+                        )
+                        refund_error = err_str
+
         except Exception as exc:
-            # Log but do not block cancellation — admin can retry refund manually
+            # Unexpected errors (network, DB, etc.) — log but don't block cancellation
             import logging
             logging.getLogger('consultants').error(
-                f"Razorpay refund failed for service_request {service_request.id}: {exc}",
+                f"Unexpected error during refund for service_request {service_request.id}: {exc}",
                 exc_info=True
             )
             refund_error = str(exc)
+
 
         # --- Cancel the service request ---
         service_request.status = 'cancelled'
