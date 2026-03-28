@@ -11,6 +11,8 @@ class ConsultantServiceProfile(models.Model):
     qualification = models.CharField(max_length=255, blank=True)
     experience_years = models.IntegerField(default=0)
     certifications = models.TextField(blank=True)  # JSON or comma-separated
+    pan_number = models.CharField(max_length=10, blank=True, null=True)
+    gstin = models.CharField(max_length=15, blank=True, null=True)
     bio = models.TextField(blank=True, help_text="Short professional biography displayed to clients")
     
     # Consultation fee (moved from core_auth.ConsultantProfile)

@@ -13,10 +13,20 @@ from .assessment_outcome import get_application_assessment_outcome
 from .authentication import generate_applicant_token
 from .credential_service import check_and_auto_generate_credentials, get_auto_credential_blocker
 from .expertise_sync import sync_passed_sessions_to_consultant
-from .models import ConsultantApplication, ConsultantCredential, ConsultantDocument, IdentityDocument, UserSession, VideoResponse
+from .models import (
+    ConsultantApplication,
+    ConsultantCredential,
+    ConsultantDocument,
+    IdentityDocument,
+    ProctoringSnapshot,
+    UserSession,
+    VideoResponse,
+    Violation,
+)
 from .views.admin_panel import (
     _ensure_live_consultant_user,
     _generate_and_send_credentials,
+    _restore_flagged_assessment_session,
     delete_consultant,
     dev_bootstrap_consultant,
 )
@@ -315,6 +325,80 @@ class DeleteConsultantEndpointTests(TestCase):
         self.assertEqual(Document.objects.count(), 0)
         self.assertEqual(self.precise_topic.consultants.count(), 0)
         self.assertEqual(self.broad_topic.consultants.count(), 0)
+
+
+class RestoreFlaggedAssessmentSessionTests(TestCase):
+    def setUp(self):
+        self.application = ConsultantApplication.objects.create(
+            email="restore-session@example.com",
+            first_name="Restore",
+            last_name="Candidate",
+        )
+        self.session = UserSession.objects.create(
+            application=self.application,
+            selected_domains=["itr"],
+            question_set=[{"id": "itr_1"}, {"id": "itr_2"}, {"id": "itr_3"}],
+            video_question_set=[{"id": "v_intro"}, {"id": "v_1"}],
+            mcq_answers={"itr_1": "A", "itr_2": "B"},
+            score=12,
+            status="flagged",
+            violation_count=4,
+            violation_counters={"face": 2, "voice": 2},
+            end_time=timezone.now(),
+        )
+
+    def test_restore_reopens_session_and_resets_violation_state(self):
+        Violation.objects.create(session=self.session, violation_type="face")
+        Violation.objects.create(session=self.session, violation_type="voice")
+
+        ProctoringSnapshot.objects.create(
+            session=self.session,
+            snapshot_id="snap-1",
+            image_url="proctoring/fake/snap-1.jpg",
+            is_violation=True,
+            violation_reason="Multiple faces detected",
+            face_count=2,
+            match_score=0.0,
+        )
+
+        before_outcome = get_application_assessment_outcome(self.application)
+        self.assertTrue(before_outcome["disqualified"])
+        self.assertEqual(before_outcome["status"], "flagged")
+
+        restored, payload = _restore_flagged_assessment_session(
+            self.application,
+            session_id=self.session.id,
+        )
+
+        self.assertTrue(restored)
+        self.assertEqual(payload["session_id"], self.session.id)
+        self.assertEqual(payload["answered_mcq_count"], 2)
+        self.assertEqual(payload["total_mcq_count"], 3)
+
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, "ongoing")
+        self.assertIsNone(self.session.end_time)
+        self.assertEqual(self.session.violation_count, 0)
+        self.assertEqual(self.session.violation_counters, {})
+        self.assertEqual(self.session.mcq_answers, {"itr_1": "A", "itr_2": "B"})
+
+        self.assertEqual(Violation.objects.filter(session=self.session).count(), 0)
+        self.assertEqual(ProctoringSnapshot.objects.filter(session=self.session).count(), 0)
+
+        after_outcome = get_application_assessment_outcome(self.application)
+        self.assertFalse(after_outcome["disqualified"])
+
+    def test_restore_fails_when_no_flagged_session_exists(self):
+        self.session.status = "completed"
+        self.session.save(update_fields=["status"])
+
+        restored, message = _restore_flagged_assessment_session(
+            self.application,
+            session_id=self.session.id,
+        )
+
+        self.assertFalse(restored)
+        self.assertIn("No flagged assessment session found", message)
 
 
 class AssessmentDomainSelectionTests(TestCase):

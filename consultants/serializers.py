@@ -43,6 +43,22 @@ class ConsultantServiceProfileSerializer(serializers.ModelSerializer):
     def get_full_name(self, obj):
         return obj.user.get_full_name() or obj.user.username
 
+    def validate_pan_number(self, value):
+        if value in (None, ''):
+            return ''
+        normalized = str(value).strip().upper()
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', normalized):
+            raise serializers.ValidationError('PAN must be in valid format (e.g. ABCDE1234F).')
+        return normalized
+
+    def validate_gstin(self, value):
+        if value in (None, ''):
+            return ''
+        normalized = str(value).strip().upper()
+        if not re.match(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$', normalized):
+            raise serializers.ValidationError('GSTIN must be a valid 15-character GSTIN.')
+        return normalized
+
     def validate_address_line1(self, value):
         return value.strip()
 
@@ -87,7 +103,7 @@ class ConsultantServiceProfileSerializer(serializers.ModelSerializer):
             'age', 'dob',
             'address_line1', 'address_line2', 'city', 'state', 'pincode',
             'practice_type',
-            'qualification', 'experience_years', 'certifications',
+            'qualification', 'experience_years', 'certifications', 'pan_number', 'gstin',
             'bio', 'consultation_fee',
             'is_active', 'max_concurrent_clients', 'current_client_count',
             'average_rating', 'total_reviews',
