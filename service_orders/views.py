@@ -344,26 +344,6 @@ def create_order(request):
         if total_amount <= 0:
             return Response({'error': 'Invalid total amount'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # --- Coupon logic ---
-        original_amount = total_amount
-        discount_amount = Decimal("0.00")
-        coupon = None
-
-        if coupon_code_input:
-            try:
-                coupon = Coupon.objects.get(code__iexact=coupon_code_input)
-            except Coupon.DoesNotExist:
-                return Response({'error': 'Invalid coupon code'}, status=status.HTTP_400_BAD_REQUEST)
-
-            if not coupon.is_valid:
-                return Response({'error': 'This coupon has expired or is no longer available'}, status=status.HTTP_400_BAD_REQUEST)
-
-            discount_amount = coupon.calculate_discount(total_amount)
-            total_amount = max(total_amount - discount_amount, Decimal("0.00"))
-
-            if total_amount <= 0:
-                return Response({'error': 'Discount makes total zero — please remove coupon or add more items'}, status=status.HTTP_400_BAD_REQUEST)
-
         # ── Coupon validation ─────────────────────────────────────────────────
         applied_coupon = None
         discount_amount = Decimal('0.00')
@@ -379,6 +359,8 @@ def create_order(request):
                 return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
             discount_amount = coupon_obj.calculate_discount(total_amount)
             final_amount = total_amount - discount_amount
+            if final_amount <= 0:
+                return Response({'error': 'Discount makes total zero — please remove coupon or add more items'}, status=status.HTTP_400_BAD_REQUEST)
             applied_coupon = coupon_obj
 
         with transaction.atomic():
