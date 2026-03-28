@@ -476,6 +476,13 @@ class AssessmentDomainSelectionTests(TestCase):
         self.assertEqual(response.data["selected_domains"], ["itr", "registrations"])
         self.assertEqual(len(response.data["questions"]), 50)
         self.assertEqual(len(response.data["video_questions"]), 5)
+        intro_video = response.data["video_questions"][0]
+        self.assertEqual(intro_video["type"], "introduction")
+        self.assertEqual(intro_video["category"], "Introduction")
+        for video_question in response.data["video_questions"][1:]:
+            self.assertEqual(video_question["type"], "domain")
+            self.assertIn(video_question["domain"], {"itr", "registrations"})
+            self.assertIn(video_question["category"], {"Income Tax", "Registrations"})
 
         domain_counts = {}
         expected_category_by_domain = {

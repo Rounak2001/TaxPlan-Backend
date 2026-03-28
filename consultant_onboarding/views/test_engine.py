@@ -520,19 +520,31 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             final_video_questions.append({
                 "id": "v_intro",
                 "text": video_data["introduction"][0],
-                "type": "introduction"
+                "type": "introduction",
+                "domain": "introduction",
+                "category": "Introduction",
             })
         
         domain_video_pool = []
         for domain in valid_domains:
-            domain_video_pool.extend(get_scoped_video_pool(domain, selected_test_details))
+            category_label = DOMAIN_CATEGORY_LABELS.get(domain, domain.replace("-", " ").title())
+            for question_text in get_scoped_video_pool(domain, selected_test_details):
+                domain_video_pool.append(
+                    {
+                        "text": question_text,
+                        "domain": domain,
+                        "category": category_label,
+                    }
+                )
         
         selected_vqs = random.sample(domain_video_pool, min(len(domain_video_pool), 4))
-        for i, vq_text in enumerate(selected_vqs):
+        for i, video_question in enumerate(selected_vqs):
             final_video_questions.append({
                 "id": f"v_{i+1}",
-                "text": vq_text,
-                "type": "domain"
+                "text": video_question["text"],
+                "type": "domain",
+                "domain": video_question["domain"],
+                "category": video_question["category"],
             })
 
         test_type_obj = None
