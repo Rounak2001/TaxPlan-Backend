@@ -1069,7 +1069,7 @@ class ConsultantClientsView(APIView):
                 client_requests_map[req.client_id] = []
             client_requests_map[req.client_id].append({
                 'id': req.id,
-                'service_title': req.service.title,
+                'service_title': req.service.title if req.service else 'Unknown Service',
                 'status': req.status,
                 'status_display': req.get_status_display()
             })
@@ -1084,7 +1084,7 @@ class ConsultantClientsView(APIView):
         # Map earnings to clients
         client_earnings_map = {}
         for req in completed_requests:
-            price = req.service.price or 0
+            price = (req.service.price or 0) if req.service else 0
             client_earnings_map[req.client_id] = client_earnings_map.get(req.client_id, 0) + float(price)
 
         clients_data = []
