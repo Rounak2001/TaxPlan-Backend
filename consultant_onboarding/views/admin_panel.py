@@ -777,6 +777,86 @@ def generate_credentials(request, app_id):
         return Response({'error': result}, status=status_code)
 
 
+def _restore_flagged_assessment_session(application, session_id=None):
+    """
+    Re-open a flagged assessment session from its saved state.
+
+    This keeps MCQ/video progress intact and resets proctoring counters so the
+    consultant can continue from where they were disqualified.
+    """
+    flagged_sessions = UserSession.objects.filter(application=application, status='flagged')
+    if session_id is not None:
+        flagged_sessions = flagged_sessions.filter(id=session_id)
+
+    session = flagged_sessions.order_by('-end_time', '-id').first()
+    if not session:
+        return False, "No flagged assessment session found for this consultant."
+
+    if UserSession.objects.filter(application=application, status='ongoing').exclude(id=session.id).exists():
+        return False, "Consultant already has another ongoing assessment session."
+
+    with transaction.atomic():
+        for snap in ProctoringSnapshot.objects.filter(session=session):
+            _safe_delete_storage_file(snap.image_url)
+
+        # Reset old proctoring trail so the resumed attempt starts clean.
+        ProctoringSnapshot.objects.filter(session=session).delete()
+        Violation.objects.filter(session=session).delete()
+
+        session.status = 'ongoing'
+        session.violation_count = 0
+        session.violation_counters = {}
+        session.end_time = None
+        session.save(update_fields=['status', 'violation_count', 'violation_counters', 'end_time'])
+
+    answered_count = (
+        sum(1 for _k, v in (session.mcq_answers or {}).items() if v not in {None, ''})
+        if isinstance(session.mcq_answers, dict) else 0
+    )
+    return True, {
+        'session_id': session.id,
+        'selected_domains': session.selected_domains or [],
+        'answered_mcq_count': answered_count,
+        'total_mcq_count': len(session.question_set or []),
+        'video_uploaded_count': VideoResponse.objects.filter(session=session).count(),
+        'total_video_questions': len(session.video_question_set or []),
+    }
+
+
+@api_view(['POST'])
+@authentication_classes(ADMIN_AUTH_CLASSES)
+@permission_classes([AllowAny])
+def restore_assessment_session(request, app_id):
+    """
+    Admin-only recovery action for flagged/disqualified onboarding assessments.
+    """
+    try:
+        app = ConsultantApplication.objects.get(id=app_id)
+    except ConsultantApplication.DoesNotExist:
+        return Response({'error': 'Consultant not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    raw_session_id = request.data.get('session_id')
+    session_id = None
+    if raw_session_id not in {None, ''}:
+        try:
+            session_id = int(raw_session_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'session_id must be a valid integer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    restored, payload = _restore_flagged_assessment_session(app, session_id=session_id)
+    if not restored:
+        return Response({'error': payload}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(
+        {
+            'message': 'Assessment session restored successfully. Violation count reset to 0.',
+            'application_id': app.id,
+            **payload,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(['DELETE'])
 @authentication_classes(ADMIN_AUTH_CLASSES)
 @permission_classes([AllowAny])

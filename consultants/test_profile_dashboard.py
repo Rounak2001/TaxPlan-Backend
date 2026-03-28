@@ -28,6 +28,8 @@ class ConsultantProfileDashboardTests(TestCase):
             qualification='CA',
             experience_years=7,
             certifications='DISA',
+            pan_number='ABCDE1234F',
+            gstin='27ABCDE1234F1Z5',
             bio='Existing profile bio',
             consultation_fee=Decimal('2500.00'),
             average_rating=Decimal('4.75'),
@@ -70,6 +72,8 @@ class ConsultantProfileDashboardTests(TestCase):
         self.assertEqual(profile_data['state'], 'Maharashtra')
         self.assertEqual(profile_data['pincode'], '400001')
         self.assertEqual(profile_data['practice_type'], 'Individual')
+        self.assertEqual(profile_data['pan_number'], 'ABCDE1234F')
+        self.assertEqual(profile_data['gstin'], '27ABCDE1234F1Z5')
         self.assertEqual(profile_data['average_rating'], '4.75')
         self.assertEqual(profile_data['total_reviews'], 12)
 
@@ -88,6 +92,8 @@ class ConsultantProfileDashboardTests(TestCase):
                 'practice_type': 'Changed',
                 'email': 'blocked-change@example.com',
                 'phone': '+911111111111',
+                'pan_number': 'PQRSX6789T',
+                'gstin': '29PQRSX6789T1Z2',
             },
             format='json',
         )
@@ -99,6 +105,8 @@ class ConsultantProfileDashboardTests(TestCase):
         self.user.refresh_from_db()
 
         self.assertEqual(self.profile.bio, 'Updated from dashboard')
+        self.assertEqual(self.profile.pan_number, 'PQRSX6789T')
+        self.assertEqual(self.profile.gstin, '29PQRSX6789T1Z2')
         self.assertEqual(self.application.address_line1, '42 Marine Drive')
         self.assertEqual(self.application.address_line2, 'Suite 8')
         self.assertEqual(self.application.city, 'Pune')
@@ -109,3 +117,17 @@ class ConsultantProfileDashboardTests(TestCase):
         self.assertEqual(self.application.practice_type, 'Individual')
         self.assertEqual(self.user.email, 'consultant-profile@example.com')
         self.assertEqual(self.user.phone_number, '+919876543210')
+
+    def test_profile_patch_rejects_invalid_pan_and_gstin(self):
+        response = self.client.patch(
+            reverse('consultant-profile-detail', args=[self.profile.id]),
+            {
+                'pan_number': 'INVALIDPAN',
+                'gstin': 'INVALIDGSTIN',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('pan_number', response.data)
+        self.assertIn('gstin', response.data)

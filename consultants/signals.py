@@ -1,3 +1,5 @@
+import logging
+
 from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
 from django.db.models import Avg
@@ -8,6 +10,8 @@ from .models import (
     ConsultantServiceProfile,
 )
 from core_auth.models import ClientProfile
+
+logger = logging.getLogger(__name__)
 
 
 @receiver(post_save, sender=ConsultantServiceExpertise)
@@ -26,13 +30,13 @@ def auto_add_consultant_to_topic(sender, instance, created, **kwargs):
         broad_topics = Topic.objects.filter(category=category, service__isnull=True)
         for topic in broad_topics:
             topic.consultants.add(instance.consultant.user)
-            print(f"✅ [Auto-Sync] Added {instance.consultant.full_name} to broad topic '{topic.name}'")
+            logger.info("[Auto-Sync] Added %s to broad topic '%s'", instance.consultant.full_name, topic.name)
             
         # 2. Precise Service Sync
         precise_topic = Topic.objects.filter(service=service).first()
         if precise_topic:
             precise_topic.consultants.add(instance.consultant.user)
-            print(f"✅ [Auto-Sync] Added {instance.consultant.full_name} to precise topic '{precise_topic.name}'")
+            logger.info("[Auto-Sync] Added %s to precise topic '%s'", instance.consultant.full_name, precise_topic.name)
 
 
 @receiver(post_delete, sender=ConsultantServiceExpertise)
@@ -57,7 +61,7 @@ def auto_remove_consultant_from_topic(sender, instance, **kwargs):
     precise_topic = Topic.objects.filter(service=service).first()
     if precise_topic:
         precise_topic.consultants.remove(consultant_user)
-        print(f"🔄 [Auto-Sync] Removed {consultant_name} from precise topic '{precise_topic.name}'")
+        logger.info("[Auto-Sync] Removed %s from precise topic '%s'", consultant_name, precise_topic.name)
 
     # 2. Broad Sync Removal (only if no other category expertise remains)
     still_has_category_services = ConsultantServiceExpertise.objects.filter(
@@ -69,7 +73,7 @@ def auto_remove_consultant_from_topic(sender, instance, **kwargs):
         broad_topics = Topic.objects.filter(category=category, service__isnull=True)
         for topic in broad_topics:
             topic.consultants.remove(consultant_user)
-            print(f"🔄 [Auto-Sync] Removed {consultant_name} from broad topic '{topic.name}' (no more services in category)")
+            logger.info("[Auto-Sync] Removed %s from broad topic '%s' (no more services in category)", consultant_name, topic.name)
 
 
 
@@ -408,4 +412,5 @@ def calculate_rating_on_review_save(sender, instance, created, **kwargs):
 def calculate_rating_on_review_delete(sender, instance, **kwargs):
     """Update consultant rating when a review is deleted"""
     update_consultant_rating(instance.consultant)
+
 
