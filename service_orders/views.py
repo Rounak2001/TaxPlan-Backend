@@ -7,7 +7,7 @@ from channels.layers import get_channel_layer
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from .models import ServiceOrder, OrderItem
+from .models import ServiceOrder, OrderItem, Coupon
 from consultations.models import ConsultationBooking
 from consultants.models import (
     Service,
@@ -47,6 +47,44 @@ def _is_itr_returns_item(service_obj, item_title='', item_category=''):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+def validate_coupon(request):
+    """
+    Validate a coupon code against a given cart total.
+    Returns discount_amount and new_total if valid.
+    """
+    code = str(request.data.get('code') or '').strip().upper()
+    raw_total = request.data.get('cart_total', 0)
+
+    if not code:
+        return Response({'valid': False, 'error': 'Coupon code is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        cart_total = Decimal(str(raw_total))
+    except (InvalidOperation, TypeError, ValueError):
+        return Response({'valid': False, 'error': 'Invalid cart total.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    coupon = Coupon.objects.filter(code=code).first()
+    if coupon is None:
+        return Response({'valid': False, 'error': 'Invalid coupon code.'}, status=status.HTTP_200_OK)
+
+    is_valid, error_msg = coupon.is_valid(cart_total)
+    if not is_valid:
+        return Response({'valid': False, 'error': error_msg}, status=status.HTTP_200_OK)
+
+    discount_amount = coupon.calculate_discount(cart_total)
+    new_total = cart_total - discount_amount
+
+    return Response({
+        'valid': True,
+        'code': coupon.code,
+        'discount_amount': float(discount_amount),
+        'new_total': float(new_total),
+        'description': coupon.description,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
 def create_order(request):
     """
     1. Receive cart items.
@@ -56,10 +94,11 @@ def create_order(request):
     """
     user = get_active_profile(request)
     items_data = request.data.get('items', [])
-    
+    coupon_code_input = str(request.data.get('coupon_code') or '').strip().upper()
+
     logger.debug(f"create_order called by {user.email}")
     logger.debug(f"Razorpay Key ID: {settings.RAZORPAY_KEY_ID}")
-    
+
     if not items_data:
         logger.warning("No items in cart")
         return Response({'error': 'No items in cart'}, status=status.HTTP_400_BAD_REQUEST)
@@ -155,14 +194,34 @@ def create_order(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        # ── Coupon validation ─────────────────────────────────────────────────
+        applied_coupon = None
+        discount_amount = Decimal('0.00')
+        original_amount = total_amount
+        final_amount = total_amount
+
+        if coupon_code_input:
+            coupon_obj = Coupon.objects.filter(code=coupon_code_input).first()
+            if coupon_obj is None:
+                return Response({'error': 'Invalid coupon code.'}, status=status.HTTP_400_BAD_REQUEST)
+            is_valid, error_msg = coupon_obj.is_valid(total_amount)
+            if not is_valid:
+                return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
+            discount_amount = coupon_obj.calculate_discount(total_amount)
+            final_amount = total_amount - discount_amount
+            applied_coupon = coupon_obj
+
         with transaction.atomic():
             # 2. Create Order
             order = ServiceOrder.objects.create(
                 user=user,
-                total_amount=total_amount,
+                total_amount=final_amount,
+                original_amount=original_amount if applied_coupon else None,
+                discount_amount=discount_amount,
+                coupon=applied_coupon,
                 status='pending'
             )
-            
+
             # 3. Create Items
             for valid_item in valid_items:
                 OrderItem.objects.create(
@@ -177,21 +236,29 @@ def create_order(request):
                     selection_mode=valid_item['selection_mode'],
                 )
 
-            # 4. Razorpay Order
+            # 4. Razorpay Order (use discounted amount)
             razorpay_order = razorpay_client.order.create({
-                "amount": int((total_amount * Decimal("100")).quantize(Decimal("1"))), # paise
+                "amount": int((final_amount * Decimal("100")).quantize(Decimal("1"))),  # paise
                 "currency": "INR",
                 "receipt": f"receipt_order_{order.id}",
-                "payment_capture": 1 
+                "payment_capture": 1
             })
-            
+
             order.razorpay_order_id = razorpay_order['id']
             order.save(update_fields=['razorpay_order_id'])
-            
+
+            # 5. Increment coupon usage count
+            if applied_coupon:
+                Coupon.objects.filter(pk=applied_coupon.pk).update(
+                    used_count=applied_coupon.used_count + 1
+                )
+
             return Response({
                 'order_id': order.id,
                 'razorpay_order_id': razorpay_order['id'],
-                'amount': float(total_amount),
+                'amount': float(final_amount),
+                'original_amount': float(original_amount),
+                'discount_amount': float(discount_amount),
                 'amount_paise': razorpay_order['amount'],
                 'key_id': settings.RAZORPAY_KEY_ID
             })
@@ -496,6 +563,7 @@ def request_additional_service(request):
             order = ServiceOrder.objects.create(
                 user=booking.client,
                 total_amount=total_amount,
+                discount_amount=Decimal('0.00'),
                 status='pending',
                 is_additional=True,
                 from_booking=booking,
