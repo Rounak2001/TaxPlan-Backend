@@ -349,9 +349,9 @@ def create_order(request):
         discount_amount = Decimal("0.00")
         coupon = None
 
-        if coupon_code:
+        if coupon_code_input:
             try:
-                coupon = Coupon.objects.get(code__iexact=coupon_code)
+                coupon = Coupon.objects.get(code__iexact=coupon_code_input)
             except Coupon.DoesNotExist:
                 return Response({'error': 'Invalid coupon code'}, status=status.HTTP_400_BAD_REQUEST)
 
