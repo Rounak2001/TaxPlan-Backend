@@ -96,7 +96,6 @@ def generate_otp(request):
             logger = logging.getLogger('gst_reports')
             logger.info(f"Consultant {request.user.email} generating OTP for unassigned GSTIN {gstin}")
 
-    
     access_token, error = get_sandbox_access_token()
     if error:
         return Response({"error": error}, status=500)
