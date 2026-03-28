@@ -59,6 +59,18 @@ def cache_old_service_request_status(sender, instance, **kwargs):
 logger = logging.getLogger(__name__)
 
 
+def _debug_console(message, *, flush=False):
+    """
+    Console logging helper that survives Windows cp1252 terminals.
+    """
+    safe_message = _safe_text(message)
+    print(safe_message, flush=flush)
+
+
+def _safe_text(message):
+    return str(message).encode('ascii', 'backslashreplace').decode('ascii')
+
+
 def _resolve_phone(user):
     """
     Return the best phone number for WhatsApp notifications.
@@ -85,10 +97,10 @@ def create_and_push_notification(recipient, category, title, message, link=''):
             message=message,
             created_at__gte=recent_limit
         ).exists():
-            print(f"[NOTIFICATION] Skipping duplicate for {recipient.username}: {title}")
+            _debug_console(f"[NOTIFICATION] Skipping duplicate for {recipient.username}: {title}")
             return
 
-        print(f"[NOTIFICATION] Creating for user={recipient.username} (id={recipient.id}), title={title}")
+        _debug_console(f"[NOTIFICATION] Creating for user={recipient.username} (id={recipient.id}), title={title}")
         notification = Notification.objects.create(
             recipient=recipient,
             category=category,
@@ -96,7 +108,7 @@ def create_and_push_notification(recipient, category, title, message, link=''):
             message=message,
             link=link,
         )
-        print(f"[NOTIFICATION] Created in DB: id={notification.id}")
+        _debug_console(f"[NOTIFICATION] Created in DB: id={notification.id}")
 
         channel_layer = get_channel_layer()
         group_name = f"user_{recipient.id}"
@@ -108,10 +120,10 @@ def create_and_push_notification(recipient, category, title, message, link=''):
                 "data": NotificationSerializer(notification).data,
             },
         )
-        print(f"[NOTIFICATION] Pushed to WebSocket group: {group_name}")
-        logger.info(f"Notification sent to {recipient.username}: {title}")
+        _debug_console(f"[NOTIFICATION] Pushed to WebSocket group: {group_name}")
+        logger.info("Notification sent to %s: %s", recipient.username, _safe_text(title))
     except Exception as exc:
-        print(f"[NOTIFICATION] ERROR: {exc}")
+        _debug_console(f"[NOTIFICATION] ERROR: {exc}")
         logger.exception(f"Failed to create/push notification for {recipient}: {exc}")
 
 
@@ -147,8 +159,8 @@ def notify_document_activity(sender, instance, created, **kwargs):
     • Document verified/rejected → notify client
     """
     try:
-        print(f"[SIGNAL] Document signal fired: created={created}, status={instance.status}, "
-              f"file={bool(instance.file)}, client={getattr(instance.client, 'username', None)}")
+        _debug_console(f"[SIGNAL] Document signal fired: created={created}, status={instance.status}, "
+                       f"file={bool(instance.file)}, client={getattr(instance.client, 'username', None)}")
 
         # --- Client uploaded a document → notify consultant ---
         if instance.status == 'UPLOADED' and instance.file and instance.client:
@@ -164,7 +176,7 @@ def notify_document_activity(sender, instance, created, **kwargs):
                     link="/vault?tab=documents",
                 )
             else:
-                print(f"[SIGNAL] No consultant found for client {instance.client.username}")
+                _debug_console(f"[SIGNAL] No consultant found for client {instance.client.username}")
 
         # --- Document verified → notify client ---
         elif instance.status == 'VERIFIED' and instance.client:
@@ -205,7 +217,7 @@ def notify_document_activity(sender, instance, created, **kwargs):
                     )
 
     except Exception as exc:
-        print(f"[SIGNAL] Document ERROR: {exc}")
+        _debug_console(f"[SIGNAL] Document ERROR: {exc}")
         logger.exception(f"Error in notify_document_activity: {exc}")
 
 
@@ -237,7 +249,7 @@ def notify_shared_report_activity(sender, instance, created, **kwargs):
                     ]
                 )
     except Exception as exc:
-        print(f"[SIGNAL] SharedReport ERROR: {exc}")
+        _debug_console(f"[SIGNAL] SharedReport ERROR: {exc}")
         logger.exception(f"Error in notify_shared_report_activity: {exc}")
 
 
@@ -269,7 +281,7 @@ def notify_legal_notice_activity(sender, instance, created, **kwargs):
                     ]
                 )
     except Exception as exc:
-        print(f"[SIGNAL] LegalNotice ERROR: {exc}")
+        _debug_console(f"[SIGNAL] LegalNotice ERROR: {exc}")
         logger.exception(f"Error in notify_legal_notice_activity: {exc}")
 
 
@@ -284,8 +296,8 @@ def notify_service_activity(sender, instance, created, **kwargs):
     • Status change → notify client
     """
     try:
-        print(f"[SIGNAL] ServiceRequest signal fired: created={created}, status={instance.status}, "
-              f"consultant={getattr(instance.assigned_consultant, 'user', None)}")
+        _debug_console(f"[SIGNAL] ServiceRequest signal fired: created={created}, status={instance.status}, "
+                       f"consultant={getattr(instance.assigned_consultant, 'user', None)}")
 
         if created:
             if instance.assigned_consultant:
@@ -322,7 +334,7 @@ def notify_service_activity(sender, instance, created, **kwargs):
                         ]
                     )
     except Exception as exc:
-        print(f"[SIGNAL] ServiceRequest ERROR: {exc}")
+        _debug_console(f"[SIGNAL] ServiceRequest ERROR: {exc}")
         logger.exception(f"Error in notify_service_activity: {exc}")
 
 
@@ -349,8 +361,8 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
     • Status updated    → notify client (confirmed / cancelled)
     """
     try:
-        print(f"[SIGNAL] ConsultationBooking signal fired: created={created}, status={instance.status}, "
-              f"consultant={instance.consultant.username}, client={instance.client.username}")
+        _debug_console(f"[SIGNAL] ConsultationBooking signal fired: created={created}, status={instance.status}, "
+                       f"consultant={instance.consultant.username}, client={instance.client.username}")
 
         if created:
             # New booking → Consultant should know
@@ -431,7 +443,7 @@ def notify_consultation_activity(sender, instance, created, **kwargs):
                     link="/consultations",
                 )
     except Exception as exc:
-        print(f"[SIGNAL] ConsultationBooking ERROR: {exc}")
+        _debug_console(f"[SIGNAL] ConsultationBooking ERROR: {exc}")
         logger.exception(f"Error in notify_consultation_activity: {exc}")
 
 
@@ -445,7 +457,7 @@ def notify_payment_activity(sender, instance, created, **kwargs):
     • Order paid → notify client (confirmation)
     """
     try:
-        print(f"[SIGNAL] ServiceOrder signal fired: created={created}, status={instance.status}")
+        _debug_console(f"[SIGNAL] ServiceOrder signal fired: created={created}, status={instance.status}")
         if not created and instance.status == 'paid':
             old_status = getattr(instance, '_old_status', None)
             # Only notify if it just became PAID
@@ -477,7 +489,7 @@ def notify_payment_activity(sender, instance, created, **kwargs):
                         ]
                     )
     except Exception as exc:
-        print(f"[SIGNAL] ServiceOrder ERROR: {exc}")
+        _debug_console(f"[SIGNAL] ServiceOrder ERROR: {exc}")
         logger.exception(f"Error in notify_payment_activity: {exc}")
 
 
@@ -491,7 +503,7 @@ def notify_chat_message(sender, instance, created, **kwargs):
     New chat message → notify the OTHER participant (not the sender).
     """
     try:
-        print(f"[SIGNAL] Chat Message signal fired: created={created}, sender={instance.sender.username}")
+        _debug_console(f"[SIGNAL] Chat Message signal fired: created={created}, sender={instance.sender.username}")
         if not created:
             return
 
@@ -519,6 +531,6 @@ def notify_chat_message(sender, instance, created, **kwargs):
     except Exception as exc:
         import traceback
         import sys
-        print(f"[SIGNAL] Chat Message CRITICAL ERROR: {exc}", flush=True)
-        print(traceback.format_exc(), flush=True)
+        _debug_console(f"[SIGNAL] Chat Message CRITICAL ERROR: {exc}", flush=True)
+        _debug_console(traceback.format_exc(), flush=True)
         logger.exception(f"Error in notify_chat_message: {exc}")

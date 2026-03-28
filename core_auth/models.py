@@ -86,14 +86,17 @@ class MagicLinkToken(models.Model):
     """
     LOGIN = 'LOGIN'
     PASSWORD_RESET = 'PASSWORD_RESET'
+    EMAIL_CHANGE = 'EMAIL_CHANGE'
     PURPOSE_CHOICES = [
         (LOGIN, 'Magic Link Login'),
         (PASSWORD_RESET, 'Password Reset'),
+        (EMAIL_CHANGE, 'Email Change Verification'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='magic_link_tokens')
     token = models.CharField(max_length=64, unique=True, db_index=True)  # 32-char hex UUID
     purpose = models.CharField(max_length=20, choices=PURPOSE_CHOICES, default=LOGIN)
+    pending_email = models.EmailField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     used = models.BooleanField(default=False)
     expires_at = models.DateTimeField()
