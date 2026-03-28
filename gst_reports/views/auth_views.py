@@ -28,70 +28,9 @@ def generate_otp(request):
     if not username:
         return Response({"error": "GST Portal username is required"}, status=400)
 
-    # Security: If user is a consultant, ensure this GSTIN belongs to an assigned client
-    client_id_param = request.data.get("client_id")
-    if request.user.role == 'CONSULTANT':
-        from core_auth.models import ClientProfile
-        from consultants.models import ClientServiceRequest
-        # Check if any active service client has this GSTIN
-        service_client_ids = ClientServiceRequest.objects.filter(
-            assigned_consultant__user=request.user,
-        ).exclude(status__in=['completed', 'cancelled']).values_list('client_id', flat=True)
-        
-        if client_id_param:
-            try:
-                client_id_val = int(client_id_param)
-                if client_id_val not in service_client_ids:
-                    from rest_framework.exceptions import PermissionDenied
-                    raise PermissionDenied("You are not assigned to this client.")
-                
-                # Fetch profile and verify/update GSTIN
-                client_profile = ClientProfile.objects.get(user_id=client_id_val)
-                if not client_profile.gstin:
-                    client_profile.gstin = gstin.strip().upper()
-                    if username:
-                        client_profile.gst_username = username
-                    client_profile.save(update_fields=['gstin', 'gst_username'])
-                    is_assigned = True
-                elif client_profile.gstin.strip().upper() != gstin.strip().upper():
-                    from rest_framework.exceptions import PermissionDenied
-                    raise PermissionDenied(f"GSTIN {gstin} does not match client's saved GSTIN ({client_profile.gstin}).")
-                else:
-                    is_assigned = True
-            except (ValueError, ClientProfile.DoesNotExist):
-                from rest_framework.exceptions import PermissionDenied
-                raise PermissionDenied("Invalid client specified.")
-        else:
-            is_assigned = ClientProfile.objects.filter(
-                user_id__in=service_client_ids,
-                gstin__iexact=gstin.strip()
-            ).exists()
-            
-            if not is_assigned:
-                # Fallback: if they have any assigned clients with a blank GSTIN, allow it.
-                blank_profiles = ClientProfile.objects.filter(
-                    user_id__in=service_client_ids
-                ).filter(gstin__isnull=True) | ClientProfile.objects.filter(
-                    user_id__in=service_client_ids, gstin=""
-                )
-                
-                if blank_profiles.exists():
-                    is_assigned = True
-                    # Auto assign if there's exactly one such client
-                    if blank_profiles.count() == 1:
-                        p = blank_profiles.first()
-                        p.gstin = gstin.strip().upper()
-                        if username:
-                            p.gst_username = username
-                        p.save(update_fields=['gstin', 'gst_username'])
-        
-        if not is_assigned:
-            # Debugging check: list available GSTINs for this consultant
-            available_gstins = list(ClientProfile.objects.filter(user_id__in=service_client_ids).exclude(gstin__isnull=True).exclude(gstin="").values_list('gstin', flat=True))
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied(f"You are not authorized for GSTIN {gstin}. Your assigned GSTINs: {available_gstins}")
+    # Consultants can generate OTP for any GSTIN - no assignment check required.
+    # (Clients are still restricted to their own sessions via the session ownership check.)
 
-    
     access_token, error = get_sandbox_access_token()
     if error:
         return Response({"error": error}, status=500)
