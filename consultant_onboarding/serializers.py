@@ -174,6 +174,31 @@ class PANVerificationResponseSerializer(serializers.ModelSerializer):
 # ----------------------------------------------------
 from .models import TestType, UserSession, Violation, VideoResponse, ProctoringSnapshot
 
+QUESTION_CATEGORY_LABELS = {
+    "itr": "Income Tax",
+    "tds": "TDS",
+    "gstr": "GST",
+    "gst": "GST",
+    "scrutiny": "Scrutiny",
+    "registrations": "Registrations",
+}
+
+
+def _get_question_category_label(question_dict):
+    if not isinstance(question_dict, dict):
+        return None
+
+    existing_label = str(question_dict.get("category") or "").strip()
+    if existing_label:
+        return existing_label
+
+    domain_slug = str(question_dict.get("domain") or "").strip().lower().replace("_", "-")
+    if not domain_slug:
+        return None
+
+    return QUESTION_CATEGORY_LABELS.get(domain_slug, domain_slug.replace("-", " ").title())
+
+
 class TestTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestType
@@ -210,6 +235,7 @@ class UserSessionSerializer(serializers.ModelSerializer):
                q_safe = dict(q)
                if 'answer' in q_safe:
                    del q_safe['answer']
+               q_safe['category'] = _get_question_category_label(q_safe)
                sanitized_questions.append(q_safe)
            representation['questions'] = sanitized_questions
         # Add video questions

@@ -191,6 +191,23 @@ class AutoCredentialGenerationTests(TestCase):
             result["username"],
         )
 
+    @patch("consultant_onboarding.views.admin_panel.send_mail")
+    def test_generate_credentials_transfers_experience_years_to_live_profile(self, mocked_send_mail):
+        application = self.make_eligible_application(
+            email="experience-transfer@example.com",
+            qualification="CA",
+            experience_years=14,
+        )
+        mocked_send_mail.return_value = 1
+
+        success, _result = _generate_and_send_credentials(application)
+
+        self.assertTrue(success)
+        consultant_user = User.objects.get(email=application.email, role=User.CONSULTANT)
+        consultant_profile = ConsultantServiceProfile.objects.get(user=consultant_user)
+        self.assertEqual(consultant_profile.experience_years, 14)
+        self.assertEqual(consultant_profile.qualification, "CA")
+
     def test_ensure_live_user_keeps_existing_application_username_without_suffix(self):
         application = self.make_eligible_application(email="same-app-username@example.com")
         ConsultantCredential.objects.create(
@@ -461,8 +478,13 @@ class AssessmentDomainSelectionTests(TestCase):
         self.assertEqual(len(response.data["video_questions"]), 5)
 
         domain_counts = {}
+        expected_category_by_domain = {
+            "itr": "Income Tax",
+            "registrations": "Registrations",
+        }
         for question in response.data["questions"]:
             domain_counts[question["domain"]] = domain_counts.get(question["domain"], 0) + 1
+            self.assertEqual(question["category"], expected_category_by_domain[question["domain"]])
 
         self.assertEqual(domain_counts, {"itr": 25, "registrations": 25})
         session = UserSession.objects.get(id=response.data["id"])

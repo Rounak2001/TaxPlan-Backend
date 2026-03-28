@@ -131,12 +131,36 @@ SLUG_MAPPING = {
     "registrations": "registrations",
 }
 
+DOMAIN_CATEGORY_LABELS = {
+    "itr": "Income Tax",
+    "tds": "TDS",
+    "gstr": "GST",
+    "gst": "GST",
+    "scrutiny": "Scrutiny",
+    "registrations": "Registrations",
+}
+
 
 def normalize_selected_domain_slug(value):
     normalized = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
     if not normalized:
         return None
     return SLUG_MAPPING.get(normalized, normalized)
+
+
+def get_question_category_label(question_dict):
+    if not isinstance(question_dict, dict):
+        return None
+
+    existing_label = str(question_dict.get("category") or "").strip()
+    if existing_label:
+        return existing_label
+
+    domain_slug = normalize_selected_domain_slug(question_dict.get("domain"))
+    if not domain_slug:
+        return None
+
+    return DOMAIN_CATEGORY_LABELS.get(domain_slug, domain_slug.replace("-", " ").title())
 
 
 def normalize_selected_test_details(raw_details):
@@ -234,6 +258,7 @@ def build_domain_question_banks():
                 question_copy["source_id"] = question_copy.get("id")
                 question_copy["id"] = next_question_id
                 question_copy["domain"] = slug
+                question_copy["category"] = get_question_category_label(question_copy)
                 bank.append(question_copy)
                 next_question_id += 1
         question_banks[slug] = bank
@@ -482,6 +507,7 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             for q in selected:
                 q_copy = dict(q)
                 q_copy['domain'] = slug
+                q_copy['category'] = get_question_category_label(q_copy)
                 q_copy['original_id'] = q_copy.get('id')
                 q_copy['id'] = f"{slug}_{q_copy.get('id')}"
                 final_question_set.append(q_copy)
@@ -531,6 +557,7 @@ class UserSessionViewSet(viewsets.ModelViewSet):
             q_safe = dict(q)
             if 'answer' in q_safe:
                 del q_safe['answer']
+            q_safe['category'] = get_question_category_label(q_safe)
             sanitized_questions.append(q_safe)
 
         serializer = UserSessionSerializer(session)
