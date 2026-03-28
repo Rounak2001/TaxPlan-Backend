@@ -442,6 +442,8 @@ def _require_consultant(request):
     if request.user.role != 'CONSULTANT':
         return Response(
             {'error': 'Only consultants can request additional payments.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
     return None
 
 
@@ -947,6 +949,7 @@ def verify_payment(request):
     """
     Verify payment signature and fulfill order atomically.
     Safety Net: If processing fails after valid signature, status is saved as 'processing_error'.
+    """
     razorpay_order_id = request.data.get('razorpay_order_id')
     razorpay_payment_id = request.data.get('razorpay_payment_id')
     razorpay_signature = request.data.get('razorpay_signature')

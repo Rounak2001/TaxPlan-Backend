@@ -87,12 +87,18 @@ class ServiceOrder(models.Model):
     razorpay_signature = models.CharField(max_length=255, blank=True, null=True)
 
     # Additional in-call service payment metadata
+    is_additional = models.BooleanField(
+        default=False,
+        help_text='True if this order was initiated by a consultant during a live consultation',
+    )
     from_booking = models.ForeignKey(
         'consultations.ConsultationBooking',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
+        help_text='Set when this order was initiated during a live consultation call',
         related_name='additional_service_orders',
+    )
     initiated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -103,6 +109,7 @@ class ServiceOrder(models.Model):
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Order {self.id} - {self.user.username} ({self.status})"
