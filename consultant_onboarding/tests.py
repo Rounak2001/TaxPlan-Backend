@@ -241,6 +241,33 @@ class AutoCredentialGenerationTests(TestCase):
         self.assertFalse(ConsultantCredential.objects.filter(application=application).exists())
         self.assertFalse(User.objects.filter(email=application.email, role=User.CONSULTANT).exists())
 
+    @patch("consultant_onboarding.views.admin_panel.send_mail")
+    def test_generate_credentials_allows_forced_client_phone_reassign(self, mocked_send_mail):
+        application = self.make_eligible_application(
+            email="force-reassign@example.com",
+            phone_number="+919888888888",
+        )
+        conflicting_client = User.objects.create_user(
+            username="existing_client_force_phone",
+            email="existing-client-force@example.com",
+            password="password",
+            role=User.CLIENT,
+            phone_number="+919888888888",
+            is_phone_verified=True,
+        )
+        mocked_send_mail.return_value = 1
+
+        success, result = _generate_and_send_credentials(application, force_phone_reassign=True)
+
+        self.assertTrue(success)
+        conflicting_client.refresh_from_db()
+        self.assertIsNone(conflicting_client.phone_number)
+        self.assertFalse(conflicting_client.is_phone_verified)
+        consultant_user = User.objects.get(email=application.email, role=User.CONSULTANT)
+        self.assertEqual(consultant_user.phone_number, "+919888888888")
+        self.assertTrue(ConsultantCredential.objects.filter(application=application).exists())
+        self.assertEqual(result.get("username"), consultant_user.username)
+
     @override_settings(DEBUG=True)
     def test_dev_bootstrap_consultant_creates_predictable_debug_account(self):
         request = APIRequestFactory().post(

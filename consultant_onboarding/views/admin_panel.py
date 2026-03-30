@@ -135,7 +135,7 @@ def _ensure_unique_consultant_username(base_username, *, existing_user=None, app
         suffix += 1
 
 
-def _ensure_live_consultant_user(app, username, password=None):
+def _ensure_live_consultant_user(app, username, password=None, force_phone_reassign=False):
     """
     Create or refresh the live consultant account/profile from an onboarding application.
     """
@@ -147,6 +147,24 @@ def _ensure_live_consultant_user(app, username, password=None):
             f"Cannot generate credentials: {app.email} is already registered as a Client. "
             "Ask the applicant to use a different email address for their consultant account."
         )
+
+    phone_conflict = _find_phone_conflict(app, existing_user=existing_user)
+    if phone_conflict:
+        if force_phone_reassign and phone_conflict.role == User.CLIENT:
+            logger.warning(
+                "Force reassigning phone %s from client %s to consultant application %s.",
+                app.phone_number,
+                phone_conflict.email,
+                app.email,
+            )
+            phone_conflict.phone_number = None
+            phone_conflict.is_phone_verified = False
+            phone_conflict.save(update_fields=["phone_number", "is_phone_verified"])
+        else:
+            raise ValueError(
+                f"Cannot generate credentials: phone number {app.phone_number} is already used by "
+                f"{phone_conflict.email} ({phone_conflict.role})."
+            )
 
     phone_conflict = _find_phone_conflict(app, existing_user=existing_user)
     if phone_conflict:
@@ -548,7 +566,7 @@ def consultant_detail(request, app_id):
 # Credential generation & approval
 # ------------------------------------------------------------------
 
-def _generate_and_send_credentials(app):
+def _generate_and_send_credentials(app, force_phone_reassign=False):
     """
     Generate unique credentials for a consultant application,
     create the live User + ConsultantServiceProfile, and email the creds.
@@ -561,6 +579,7 @@ def _generate_and_send_credentials(app):
                 app,
                 existing_credential.username,
                 password=existing_credential.password,
+                force_phone_reassign=force_phone_reassign,
             )
             app.status = 'APPROVED'
             app.save(update_fields=['status', 'updated_at'])
@@ -615,6 +634,7 @@ def _generate_and_send_credentials(app):
                 app,
                 username,
                 password=password,
+                force_phone_reassign=force_phone_reassign,
             )
             final_username = user.username
             if credential.username != final_username:
@@ -763,7 +783,11 @@ def generate_credentials(request, app_id):
     except ConsultantApplication.DoesNotExist:
         return Response({'error': 'Consultant not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    success, result = _generate_and_send_credentials(app)
+    force_phone_reassign = str(
+        request.data.get("force_phone_reassign", request.query_params.get("force_phone_reassign", ""))
+    ).strip().lower() in {"1", "true", "yes", "y"}
+
+    success, result = _generate_and_send_credentials(app, force_phone_reassign=force_phone_reassign)
 
     if success:
         response_status = (
