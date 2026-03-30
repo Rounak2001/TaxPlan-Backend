@@ -2,6 +2,7 @@ import boto3
 import time
 import json
 import os
+import re
 import requests
 import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted
@@ -23,6 +24,49 @@ TARGET_BACHELOR_FIELD_KEYWORDS = [
     "audit",
     "auditing",
 ]
+
+def _safe_parse_gemini_json(raw_text):
+    """
+    Robustly parse Gemini's response into a dict.
+
+    Handles:
+    - Markdown code fences (```json ... ```)
+    - Trailing/leading whitespace or extra text
+    - Unescaped characters that make strict JSON parsing fail
+
+    Returns a dict on success, or a safe fallback dict with score=0 on failure.
+    """
+    if not raw_text:
+        return None
+
+    text = raw_text.strip()
+
+    # 1. Strip markdown code fences if present
+    fenced = re.match(r'^```(?:json)?\s*([\s\S]*?)\s*```$', text, re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    # 2. Try direct parse first
+    try:
+        result = json.loads(text)
+        if isinstance(result, dict):
+            return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 3. Extract the first JSON object using regex (handles extra text around the JSON)
+    match = re.search(r'\{[\s\S]*\}', text)
+    if match:
+        try:
+            result = json.loads(match.group(0))
+            if isinstance(result, dict):
+                return result
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # 4. All parsing failed — return None to signal caller
+    return None
+
 
 def _parse_retry_delay_seconds(message):
     text = str(message or '')
@@ -207,9 +251,17 @@ class VideoEvaluator:
                 generation_config={"response_mime_type": "application/json"}
             )
             
-            result = json.loads(response.text)
-            if not isinstance(result, dict):
-                raise ValueError("Gemini did not return a JSON object.")
+            result = _safe_parse_gemini_json(response.text)
+            if result is None:
+                # Gemini returned genuinely unparseable output — score as 0
+                # rather than crashing the whole evaluation.
+                print(f"WARNING: Could not parse Gemini JSON response. Raw text (first 500 chars): {str(response.text)[:500]}")
+                result = {
+                    'transcript': '',
+                    'score': 0,
+                    'feedback': 'Evaluation could not be parsed from AI response.',
+                    'reasoning': f'Raw response was not valid JSON. First 200 chars: {str(response.text)[:200]}',
+                }
             return result
             
         except Exception as e:
