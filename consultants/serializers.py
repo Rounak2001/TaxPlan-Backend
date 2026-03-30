@@ -179,16 +179,21 @@ class ClientServiceRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClientServiceRequest
         fields = [
-            'id', 'client', 'client_email', 'client_name', 
+            'id', 'client', 'client_email', 'client_name',
             'service',  # Full service object
-            'status', 
+            'status',
             'assigned_consultant',  # Full consultant object
             'order_variant_name',
             'assigned_at', 'notes', 'revision_notes', 'priority',
             'has_review',
+            # Drop / reassignment fields
+            'drop_reason', 'dropped_at', 'drop_count', 'reassignment_deadline',
             'created_at', 'updated_at', 'completed_at'
         ]
-        read_only_fields = ['assigned_consultant', 'assigned_at', 'created_at', 'updated_at', 'completed_at']
+        read_only_fields = [
+            'assigned_consultant', 'assigned_at', 'created_at', 'updated_at', 'completed_at',
+            'drop_reason', 'dropped_at', 'drop_count', 'reassignment_deadline',
+        ]
 
     has_review = serializers.SerializerMethodField()
     

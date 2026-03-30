@@ -183,48 +183,248 @@ def find_familiar_consultant(client, service_id):
     return best_match, affinity_map.get(best_match.id) if best_match else None
 
 
-def assign_consultant_to_request(request_id):
+def assign_consultant_to_request(request_id, exclude_consultant_id=None):
     """
     Automatically assign the best consultant to a service request.
-    
+
     Assignment Priority:
       1. Familiar consultant (worked with this client before) who offers the service
       2. Round-robin (least busy, longest waiting) from all available consultants
-    
+
     Args:
         request_id: ID of the ClientServiceRequest
-        
+        exclude_consultant_id: optional ConsultantServiceProfile.id to skip
+            (used after a drop to avoid re-assigning the same consultant)
+
     Returns:
         ConsultantServiceProfile object if assigned, None if no consultants available
     """
-    
+
     request = ClientServiceRequest.objects.get(id=request_id)
-    
+
     # ─── Try Affinity First ───
-    consultant = find_familiar_consultant(request.client, request.service.id)
-    
+    familiar_result = find_familiar_consultant(request.client, request.service.id)
+    # find_familiar_consultant returns a tuple (profile, meta) or (None, None)
+    if isinstance(familiar_result, tuple):
+        consultant = familiar_result[0]
+    else:
+        consultant = familiar_result
+
+    # Skip dropped consultant if they showed up as familiar
+    if consultant and exclude_consultant_id and consultant.id == exclude_consultant_id:
+        consultant = None
+
     # ─── Fallback to Round-Robin ───
     if not consultant:
         available_consultants = find_matching_consultants(request.service.id)
+        # Filter out the consultant who just dropped
+        if exclude_consultant_id:
+            available_consultants = [
+                c for c in available_consultants if c.id != exclude_consultant_id
+            ]
         if not available_consultants:
             return None
         consultant = available_consultants[0]
-    
+
     # ─── Assign ───
     request.assigned_consultant = consultant
     request.status = 'assigned'
     request.assigned_at = timezone.now()
     request.save()
-    
+
     # Increment consultant's current client count atomically and update timestamp
     consultant.current_client_count = F('current_client_count') + 1
     consultant.last_assigned_at = timezone.now()
     consultant.save()
-    
+
     # Reload from DB to get the new integer value for current_client_count
     consultant.refresh_from_db()
-    
+
     return consultant
+
+
+def drop_consultant_from_service(service_request_id, consultant_profile, reason_code, notes=''):
+    """
+    Handle the full drop flow when a consultant exits a service request.
+
+    Steps:
+      1. Validate the request is in a droppable state.
+      2. Record the drop metadata (who dropped, reason, timestamp).
+      3. Decrement consultant workload.
+      4. Set status → 'consultant_dropped' and clear assigned_consultant.
+      5. Set reassignment_deadline = now + 24h.
+      6. Schedule Celery auto-reassign task.
+      7. Send notifications (admin + client).
+      8. Log to Activity Timeline.
+
+    Args:
+        service_request_id: int
+        consultant_profile: ConsultantServiceProfile of the dropping consultant
+        reason_code:  str (predefined key, e.g. 'client_inactive')
+        notes:        str (optional free text)
+
+    Returns:
+        dict with keys: success, reassignment_deadline, message
+    Raises:
+        ValueError if the request is in a non-droppable state or belongs to a
+        different consultant.
+    """
+    from django.utils import timezone
+    from datetime import timedelta
+    from .models import ClientServiceRequest
+    from notifications.models import Notification
+    from activity_timeline.models import Activity
+
+    sr = ClientServiceRequest.objects.select_related('client', 'service', 'assigned_consultant').get(
+        id=service_request_id
+    )
+
+    # — Guard: must be currently assigned to this consultant —
+    if sr.assigned_consultant_id != consultant_profile.id:
+        raise ValueError('You are not the assigned consultant for this service request.')
+
+    # — Guard: already dropped / cancelled / completed —
+    if sr.status in ('consultant_dropped', 'cancelled', 'completed'):
+        raise ValueError(f'Cannot drop a service request in "{sr.status}" status.')
+
+    REASON_LABELS = {
+        'client_inactive':    'Client is inactive / not responding',
+        'docs_not_uploaded':  'Documents not uploaded on time',
+        'scope_mismatch':     'Service complexity beyond my expertise',
+        'scheduling_conflict': 'Personal scheduling conflict',
+        'client_behaviour':   'Client communication issues',
+        'other':              'Other reason',
+    }
+    reason_label = REASON_LABELS.get(reason_code, reason_code)
+    full_reason = f'{reason_label}: {notes}'.strip(': ') if notes else reason_label
+
+    deadline = timezone.now() + timedelta(hours=24)
+
+    # ── 1. Save drop metadata on the service request ──
+    sr.dropped_consultant = consultant_profile
+    sr.drop_reason = full_reason
+    sr.dropped_at = timezone.now()
+    sr.drop_count = (sr.drop_count or 0) + 1
+    sr.assigned_consultant = None
+    sr.assigned_at = None
+    sr.status = 'consultant_dropped'
+    sr.reassignment_deadline = deadline
+    sr.save(update_fields=[
+        'dropped_consultant', 'drop_reason', 'dropped_at', 'drop_count',
+        'assigned_consultant', 'assigned_at', 'status', 'reassignment_deadline',
+        'updated_at',
+    ])
+
+    # ── 2. Decrement consultant workload ──
+    consultant_profile.current_client_count = models.Case(
+        models.When(current_client_count__gt=0, then=F('current_client_count') - 1),
+        default=0,
+    )
+    consultant_profile.save(update_fields=['current_client_count'])
+    consultant_profile.refresh_from_db()
+
+    # ── 3. Schedule auto-reassign Celery task ──
+    try:
+        from .tasks import auto_reassign_dropped_service
+        auto_reassign_dropped_service.apply_async(
+            args=[service_request_id],
+            countdown=int(timedelta(hours=24).total_seconds()),
+        )
+    except Exception as task_exc:
+        import logging
+        logging.getLogger('consultants').warning(
+            'Could not schedule auto_reassign task for request %s: %s',
+            service_request_id, task_exc
+        )
+
+    # ── 4. Notify admin(s) ──
+    consultant_name = consultant_profile.full_name
+    client_name = sr.client.get_full_name() or sr.client.username
+    service_name = sr.service.title if sr.service else 'Service'
+
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    admins = User.objects.filter(is_staff=True, is_active=True)
+
+    def _push_ws(user_id, payload):
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f'user_{user_id}',
+                    {'type': 'notification_message', 'data': payload},
+                )
+        except Exception:
+            pass
+
+    for admin in admins:
+        n = Notification.objects.create(
+            recipient=admin,
+            category='service',
+            title=f'⚠️ Consultant Dropped: {service_name}',
+            message=(
+                f'{consultant_name} has dropped the service "{service_name}" for {client_name}. '
+                f'Reason: {full_reason}. '
+                f'Client has 24 hours to choose a new consultant before auto-assignment.'
+            ),
+            link='/admin/consultants/clientservicerequest/',
+        )
+        _push_ws(admin.id, {
+            'id': n.id, 'type': 'NEW_NOTIFICATION', 'category': n.category,
+            'title': n.title, 'message': n.message, 'link': n.link,
+            'created_at': n.created_at.isoformat(), 'is_read': False,
+        })
+
+    # ── 5. Notify client ──
+    client_notif = Notification.objects.create(
+        recipient=sr.client,
+        category='service',
+        title=f'Your service is being reassigned: {service_name}',
+        message=(
+            f'Your consultant for {service_name} had to step back. '
+            f'Please choose a new consultant within 24 hours. '
+            f'If you don\'t, we\'ll assign the best available expert automatically. '
+            f'All your documents and progress are fully preserved.'
+        ),
+        link='/client',
+    )
+    _push_ws(sr.client_id, {
+        'id': client_notif.id, 'type': 'SERVICE_REASSIGNMENT',
+        'category': client_notif.category, 'title': client_notif.title,
+        'message': client_notif.message, 'link': client_notif.link,
+        'service_request_id': sr.id,
+        'created_at': client_notif.created_at.isoformat(), 'is_read': False,
+    })
+
+    # ── 6. Activity Timeline ──
+    try:
+        Activity.objects.create(
+            actor=consultant_profile.user,
+            target_user=sr.client,
+            activity_type='service_status',
+            title=f'Consultant stepped back from {service_name}',
+            description=(
+                f'{consultant_name} has dropped this service. Reason: {full_reason}. '
+                f'A new consultant will be assigned within 24 hours.'
+            ),
+            content_object=sr,
+            metadata={
+                'dropped_by': consultant_name,
+                'reason': full_reason,
+                'drop_count': sr.drop_count,
+                'reassignment_deadline': deadline.isoformat(),
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        'success': True,
+        'reassignment_deadline': deadline.isoformat(),
+        'message': 'Service dropped. Client will be notified to choose a new consultant within 24 hours.',
+    }
 
 
 def unassign_consultant_from_request(request_id):

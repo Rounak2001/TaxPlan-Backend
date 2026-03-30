@@ -9,7 +9,7 @@ from .models import (ConsultantServiceProfile,ServiceCategory,Service,Consultant
 )
 from .serializers import (ConsultantServiceProfileSerializer,ServiceCategorySerializer,ServiceSerializer,ConsultantServiceExpertiseSerializer,ClientServiceRequestSerializer,ConsultantDashboardSerializer,ConsultantReviewSerializer
 )
-from .services import assign_consultant_to_request, complete_service_request
+from .services import assign_consultant_to_request, complete_service_request, drop_consultant_from_service
 from consultant_onboarding.assessment_outcome import get_application_assessment_outcome
 from consultant_onboarding.category_access import (
     ASSESSMENT_CATEGORY_ORDER,
@@ -1148,6 +1148,351 @@ class ClientServiceRequestViewSet(viewsets.ModelViewSet):
             )
 
         return Response(response_data)
+
+    @action(detail=True, methods=['post'], url_path='drop')
+    def drop(self, request, pk=None):
+        """
+        Consultant drops a service request they are currently assigned to.
+        Triggers the hybrid reassignment flow: client gets 24h to pick, then auto-assign.
+
+        Body:
+          {
+            "reason": "client_inactive",   // required
+            "notes":  "Three follow-ups with no response."  // optional
+          }
+
+        Allowed reason codes:
+          client_inactive | docs_not_uploaded | scope_mismatch |
+          scheduling_conflict | client_behaviour | other
+        """
+        from core_auth.utils import get_active_profile
+
+        user = get_active_profile(request)
+
+        # Only consultants can drop
+        if user.role != 'CONSULTANT':
+            return Response(
+                {'error': 'Only consultants can drop a service request.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            profile = ConsultantServiceProfile.objects.get(user=user)
+        except ConsultantServiceProfile.DoesNotExist:
+            return Response(
+                {'error': 'Consultant profile not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        service_request = self.get_object()
+
+        reason_code = (request.data.get('reason') or '').strip()
+        notes = (request.data.get('notes') or '').strip()
+
+        VALID_REASONS = [
+            'client_inactive', 'docs_not_uploaded', 'scope_mismatch',
+            'scheduling_conflict', 'client_behaviour', 'other',
+        ]
+        if not reason_code:
+            return Response(
+                {'error': 'A reason code is required. Valid codes: ' + ', '.join(VALID_REASONS)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if reason_code not in VALID_REASONS:
+            return Response(
+                {'error': f'Invalid reason code "{reason_code}". Valid: ' + ', '.join(VALID_REASONS)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if reason_code == 'other' and not notes:
+            return Response(
+                {'error': 'Please provide notes when using reason "other".'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            result = drop_consultant_from_service(
+                service_request_id=service_request.id,
+                consultant_profile=profile,
+                reason_code=reason_code,
+                notes=notes,
+            )
+        except ValueError as ve:
+            return Response({'error': str(ve)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            import logging
+            logging.getLogger('consultants').exception(
+                'Unexpected error in drop action for request %s: %s', service_request.id, exc
+            )
+            return Response(
+                {'error': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='available-for-reassignment')
+    def available_for_reassignment(self, request, pk=None):
+        """
+        Return the list of consultants the client can choose from after a drop.
+        Only accessible when status is 'consultant_dropped'.
+        Reuses the existing consultant matching + familiarity logic.
+        """
+        from core_auth.utils import get_active_profile
+        from django.db.models import Count, Q, Prefetch
+
+        user = get_active_profile(request)
+        service_request = self.get_object()
+
+        # Permission: only the client who owns this request
+        if service_request.client != user and service_request.client != request.user:
+            return Response(
+                {'error': 'Only the client can view reassignment options.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if service_request.status != 'consultant_dropped':
+            return Response(
+                {'error': 'This service request is not currently in reassignment state.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not service_request.service:
+            return Response({'consultants': [], 'total': 0})
+
+        from .services import find_matching_consultants, get_consultant_affinity
+        from .models import ConsultantReview
+
+        # Exclude the consultant who dropped
+        dropped_id = service_request.dropped_consultant_id
+
+        available_raw = find_matching_consultants(service_request.service.id)
+        available_ids = [c.id for c in available_raw if c.id != dropped_id]
+
+        consultants = ConsultantServiceProfile.objects.filter(
+            id__in=available_ids
+        ).annotate(
+            live_client_count=Count(
+                'assigned_requests',
+                filter=~Q(assigned_requests__status__in=['completed', 'cancelled', 'consultant_dropped']),
+                distinct=True,
+            )
+        ).prefetch_related(
+            Prefetch(
+                'reviews',
+                queryset=ConsultantReview.objects.select_related(
+                    'client', 'service_request__service'
+                ).order_by('-created_at'),
+                to_attr='recent_reviews_prefetched',
+            )
+        ).order_by('current_client_count', 'last_assigned_at')
+
+        # Build affinity map for this client
+        try:
+            affinity_map = get_consultant_affinity(user)
+        except Exception:
+            affinity_map = {}
+
+        result = []
+        familiar_consultant = None
+
+        for c in consultants:
+            reviews_data = [
+                {
+                    'id': r.id,
+                    'rating': r.rating,
+                    'review_text': r.review_text,
+                    'client_name': r.client.get_full_name() or 'Anonymous',
+                    'service_title': r.service_request.service.title if r.service_request and r.service_request.service else '',
+                    'created_at': r.created_at.isoformat(),
+                }
+                for r in c.recent_reviews_prefetched[:3]
+            ]
+
+            live = c.live_client_count
+            available_slots = c.max_concurrent_clients - live
+
+            entry = {
+                'id': c.id,
+                'full_name': c.full_name,
+                'qualification': c.qualification,
+                'experience_years': c.experience_years,
+                'bio': c.bio or '',
+                'average_rating': float(c.average_rating),
+                'total_reviews': c.total_reviews,
+                'recent_reviews': reviews_data,
+                'workload': {
+                    'current_tasks': live,
+                    'max_capacity': c.max_concurrent_clients,
+                    'available_slots': available_slots,
+                    'utilization': round(live / c.max_concurrent_clients * 100, 1) if c.max_concurrent_clients else 0,
+                },
+            }
+            result.append(entry)
+
+            if c.id in affinity_map and familiar_consultant is None:
+                meta = affinity_map[c.id]
+                if meta.get('relation') == 'parent':
+                    msg = f"{c.full_name} has worked with your main account. Continuing ensures consistent service."
+                else:
+                    msg = f"{c.full_name} has worked with you before and knows your requirements."
+                familiar_consultant = {**entry, 'message': msg}
+
+        return Response({
+            'consultants': result,
+            'familiar_consultant': familiar_consultant,
+            'auto_recommended': result[0] if result else None,
+            'total': len(result),
+            'reassignment_deadline': service_request.reassignment_deadline.isoformat()
+                if service_request.reassignment_deadline else None,
+        })
+
+    @action(detail=True, methods=['post'], url_path='choose-reassignment-consultant')
+    def choose_reassignment_consultant(self, request, pk=None):
+        """
+        Client selects a new consultant after a drop.
+        Validates consultant expertise + capacity, then assigns.
+
+        Body: { "consultant_id": <ConsultantServiceProfile.id> }
+        """
+        from core_auth.utils import get_active_profile
+        from django.utils import timezone
+
+        user = get_active_profile(request)
+        service_request = self.get_object()
+
+        # Permission: only the owning client
+        if service_request.client != user and service_request.client != request.user:
+            return Response(
+                {'error': 'Only the client can choose a new consultant.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if service_request.status != 'consultant_dropped':
+            return Response(
+                {'error': 'This service request is not awaiting a consultant choice.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        consultant_id = request.data.get('consultant_id')
+        if not consultant_id:
+            return Response(
+                {'error': 'consultant_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            chosen = ConsultantServiceProfile.objects.get(id=consultant_id, is_active=True)
+        except ConsultantServiceProfile.DoesNotExist:
+            return Response(
+                {'error': 'Consultant not found or not available.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Ensure they have expertise for this service
+        if service_request.service:
+            has_expertise = ConsultantServiceExpertise.objects.filter(
+                consultant=chosen,
+                service=service_request.service,
+            ).exists()
+            if not has_expertise:
+                return Response(
+                    {'error': 'This consultant does not offer the required service.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Ensure capacity
+        if chosen.current_client_count >= chosen.max_concurrent_clients:
+            return Response(
+                {'error': 'This consultant is currently at full capacity. Please choose another.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Assign
+        service_request.assigned_consultant = chosen
+        service_request.status = 'assigned'
+        service_request.assigned_at = timezone.now()
+        service_request.reassignment_deadline = None
+        service_request.save(update_fields=[
+            'assigned_consultant', 'status', 'assigned_at',
+            'reassignment_deadline', 'updated_at',
+        ])
+
+        # Increment new consultant workload
+        from django.db.models import F as DbF
+        chosen.current_client_count = DbF('current_client_count') + 1
+        chosen.last_assigned_at = timezone.now()
+        chosen.save(update_fields=['current_client_count', 'last_assigned_at'])
+        chosen.refresh_from_db()
+
+        # Notify new consultant
+        from notifications.models import Notification
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+
+        client_name = service_request.client.get_full_name() or service_request.client.username
+        service_name = service_request.service.title if service_request.service else 'Service'
+
+        notif = Notification.objects.create(
+            recipient=chosen.user,
+            category='service',
+            title=f'New Service Assigned: {service_name}',
+            message=(
+                f'{client_name} has chosen you as their new consultant for "{service_name}". '
+                'All documents and previous progress are fully preserved. '
+                'Please review the details and reach out to the client.'
+            ),
+            link='/dashboard',
+        )
+
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f'user_{chosen.user_id}',
+                    {
+                        'type': 'notification_message',
+                        'data': {
+                            'id': notif.id, 'type': 'NEW_NOTIFICATION',
+                            'category': notif.category, 'title': notif.title,
+                            'message': notif.message, 'link': notif.link,
+                            'created_at': notif.created_at.isoformat(), 'is_read': False,
+                        },
+                    },
+                )
+        except Exception:
+            pass
+
+        # Activity log
+        try:
+            from activity_timeline.models import Activity
+            Activity.objects.create(
+                actor=service_request.client,
+                target_user=service_request.client,
+                activity_type='service_status',
+                title=f'New consultant selected: {chosen.full_name}',
+                description=(
+                    f'Client chose {chosen.full_name} as new consultant for {service_name}. '
+                    'Service is now re-assigned and active.'
+                ),
+                content_object=service_request,
+                metadata={
+                    'new_consultant': chosen.full_name,
+                    'service_title': service_name,
+                },
+            )
+        except Exception:
+            pass
+
+        return Response({
+            'success': True,
+            'message': f'{chosen.full_name} has been assigned to your service.',
+            'consultant': {
+                'id': chosen.id,
+                'full_name': chosen.full_name,
+                'qualification': chosen.qualification,
+                'average_rating': float(chosen.average_rating),
+            },
+        })
 
 class ConsultantReviewViewSet(viewsets.ModelViewSet):
     """API endpoint for client reviews (Feedback & Review)"""

@@ -128,6 +128,7 @@ class ClientServiceRequest(models.Model):
         ('revision_pending', 'Revision Requested'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
+        ('consultant_dropped', 'Consultant Dropped – Reassigning'),
     ]
     # Statuses where the client can still cancel (work has NOT started yet)
     CANCELLABLE_STATUSES = [
@@ -136,17 +137,23 @@ class ClientServiceRequest(models.Model):
         'doc_pending',
         'under_review',
     ]
+    # Consultant can drop from ANY status (emergency reasons allowed)
+    CONSULTANT_DROPPABLE_STATUSES = [
+        'assigned', 'doc_pending', 'under_review',
+        'wip', 'under_query', 'final_review', 'filed', 'revision_pending',
+    ]
     # Centralized list of statuses considered "active" or "in-progress"
     # Services in these states should have active document synchronization and vault management.
     ACTIVE_STATUSES = [
-        'assigned', 
-        'doc_pending', 
-        'under_review', 
-        'wip', 
-        'under_query', 
-        'final_review', 
-        'filed', 
-        'revision_pending'
+        'assigned',
+        'doc_pending',
+        'under_review',
+        'wip',
+        'under_query',
+        'final_review',
+        'filed',
+        'revision_pending',
+        'consultant_dropped',  # still active — awaiting new consultant
     ]
 
     client = models.ForeignKey(
@@ -170,9 +177,28 @@ User, on_delete=models.CASCADE, related_name='service_requests')
     revision_notes = models.TextField(blank=True, null=True)
     priority = models.IntegerField(default=0)  # Higher = more urgent
     
-    # Cancellation
+    # Cancellation (client-initiated)
     cancellation_reason = models.CharField(max_length=255, blank=True, null=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    # Consultant Drop fields — set when a consultant exits a service
+    dropped_consultant = models.ForeignKey(
+        ConsultantServiceProfile,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='dropped_requests',
+        help_text='Consultant who last dropped this request'
+    )
+    drop_reason = models.CharField(max_length=500, blank=True, null=True)
+    dropped_at = models.DateTimeField(null=True, blank=True)
+    drop_count = models.IntegerField(
+        default=0,
+        help_text='Total number of times this request has been dropped by consultants'
+    )
+    reassignment_deadline = models.DateTimeField(
+        null=True, blank=True,
+        help_text='Client must pick a new consultant by this time; then auto-assign fires'
+    )
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
