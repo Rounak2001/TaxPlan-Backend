@@ -18,6 +18,11 @@ from .models import (
 from core_auth.models import User
 from consultants.models import ConsultantServiceProfile
 from .expertise_sync import sync_passed_sessions_to_consultant
+from .unlock_ops import (
+    derive_domains_from_completed_sessions,
+    ensure_unlock_from_completed_sessions,
+    force_unlock_all_main_categories,
+)
 
 @admin.action(description='Approve applications and create live Consultant users')
 def approve_applications(modeladmin, request, queryset):
@@ -76,12 +81,75 @@ def approve_applications(modeladmin, request, queryset):
     if error_count:
         messages.warning(request, f"Failed to approve {error_count} applications.")
 
+
+@admin.action(description='Backfill unlocks from completed test domains (selected consultants)')
+def backfill_unlocks_from_history(modeladmin, request, queryset):
+    created_count = 0
+    skipped_count = 0
+    no_domain_count = 0
+
+    for app in queryset:
+        if not ConsultantCredential.objects.filter(application=app).exists():
+            skipped_count += 1
+            continue
+
+        if ensure_unlock_from_completed_sessions(app):
+            created_count += 1
+            consultant_user = User.objects.filter(email=app.email, role=User.CONSULTANT).first()
+            if consultant_user:
+                consultant_profile, _ = ConsultantServiceProfile.objects.get_or_create(user=consultant_user)
+                sync_passed_sessions_to_consultant(app, consultant_profile=consultant_profile)
+        else:
+            if not derive_domains_from_completed_sessions(app):
+                no_domain_count += 1
+            else:
+                skipped_count += 1
+
+    if created_count:
+        messages.success(request, f"Created unlock backfill sessions for {created_count} consultant(s).")
+    if skipped_count:
+        messages.info(request, f"Skipped {skipped_count} consultant(s) (already unlocked or no credential).")
+    if no_domain_count:
+        messages.warning(
+            request,
+            f"{no_domain_count} consultant(s) had no completed domain history. Use force unlock if needed.",
+        )
+
+
+@admin.action(description='Force unlock all main categories (ITR, GSTR, Scrutiny) for selected')
+def force_unlock_all_categories(modeladmin, request, queryset):
+    unlocked_count = 0
+    already_count = 0
+
+    for app in queryset:
+        if force_unlock_all_main_categories(app):
+            unlocked_count += 1
+            consultant_user = User.objects.filter(email=app.email, role=User.CONSULTANT).first()
+            if consultant_user:
+                consultant_profile, _ = ConsultantServiceProfile.objects.get_or_create(user=consultant_user)
+                sync_passed_sessions_to_consultant(app, consultant_profile=consultant_profile)
+        else:
+            already_count += 1
+
+    if unlocked_count:
+        messages.success(request, f"Force-unlocked all main categories for {unlocked_count} consultant(s).")
+    if already_count:
+        messages.info(request, f"{already_count} consultant(s) were already fully unlocked.")
+
 class ConsultantApplicationAdmin(admin.ModelAdmin):
-    list_display = ('email', 'first_name', 'last_name', 'status', 'test_score', 'created_at')
+    list_display = ('email', 'first_name', 'last_name', 'status', 'test_score', 'unlock_summary', 'created_at')
     list_filter = ('status', 'practice_type')
     search_fields = ('email', 'first_name', 'last_name')
-    actions = [approve_applications]
+    actions = [approve_applications, backfill_unlocks_from_history, force_unlock_all_categories]
     show_facets = admin.ShowFacets.NEVER
+
+    def unlock_summary(self, obj):
+        from .assessment_outcome import get_application_assessment_outcome
+
+        unlocked = get_application_assessment_outcome(obj).get("unlocked_categories", [])
+        return ", ".join(unlocked) if unlocked else "none"
+
+    unlock_summary.short_description = "Unlocked Categories"
 
     def _delete_related_records(self, queryset):
         app_ids = list(queryset.values_list("id", flat=True))

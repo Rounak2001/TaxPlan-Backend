@@ -27,13 +27,14 @@ class DocumentSerializer(serializers.ModelSerializer):
     consultant_name = serializers.ReadOnlyField(source='consultant.get_full_name')
     folder_name = serializers.ReadOnlyField(source='folder.name')
     granted_consultant_ids = serializers.SerializerMethodField()
+    has_access = serializers.SerializerMethodField()
     
     class Meta:
         model = Document
         fields = [
             'id', 'client', 'client_name', 'consultant', 'consultant_name',
             'folder', 'folder_name', 'title', 'description', 'file', 'file_password', 'status', 
-            'created_at', 'uploaded_at', 'granted_consultant_ids'
+            'created_at', 'uploaded_at', 'granted_consultant_ids', 'has_access'
         ]
         read_only_fields = ['client', 'consultant', 'status', 'created_at', 'uploaded_at']
 
@@ -43,6 +44,32 @@ class DocumentSerializer(serializers.ModelSerializer):
         except (ProgrammingError, OperationalError):
             # Graceful fallback if migration for vault_document_access is not applied yet.
             return []
+
+    def get_has_access(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return False
+        if user.role != 'CONSULTANT':
+            return True
+        try:
+            return obj.access_grants.filter(consultant_id=user.id).exists()
+        except (ProgrammingError, OperationalError):
+            return False
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+
+        # For consultants without access grant, expose only high-level metadata.
+        if user and user.is_authenticated and user.role == 'CONSULTANT' and not data.get('has_access', False):
+            data['file'] = None
+            data['file_password'] = None
+            data['description'] = None
+            data['granted_consultant_ids'] = []
+
+        return data
 
 class DocumentUploadSerializer(serializers.ModelSerializer):
     class Meta:

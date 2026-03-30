@@ -1,9 +1,16 @@
+from io import BytesIO
+import logging
+import mimetypes
+import os
+
+from django.db import models, connection
+from django.http import FileResponse, HttpResponse
+from django.utils import timezone
 from rest_framework import viewsets, permissions, status, decorators
 from rest_framework.response import Response
-from django.utils import timezone
-from django.db import models, connection
-import logging
-from .models import Document, SharedReport, LegalNotice, Folder, DocumentAccess
+
+from notifications.models import Notification
+from .models import Document, SharedReport, LegalNotice, Folder, DocumentAccess, DocumentDownloadLog
 from .serializers import DocumentSerializer, DocumentUploadSerializer, SharedReportSerializer, LegalNoticeSerializer, FolderSerializer
 from core_auth.serializers import IsConsultantUser, IsClientUser
 from consultants.models import ClientServiceRequest
@@ -31,6 +38,159 @@ def _has_document_access_table():
         return 'vault_document_access' in connection.introspection.table_names()
     except Exception:
         return False
+
+
+def _safe_display_name(user):
+    return (user.get_full_name() or user.username or "Consultant").strip()
+
+
+def _resolve_notification_phone(user):
+    """
+    Resolve a notification phone number and gracefully support sub-accounts.
+    """
+    phone = getattr(user, 'phone_number', None)
+    if not phone and getattr(user, 'parent_account_id', None):
+        phone = getattr(user.parent_account, 'phone_number', None)
+    return phone
+
+
+def _build_download_alert_message(document, consultant, purpose):
+    consultant_name = _safe_display_name(consultant)
+    return (
+        f"Consultant {consultant_name} downloaded your document {document.title}. "
+        f"Purpose: {purpose}"
+    )
+
+
+def _consultant_has_document_access(document, consultant):
+    if not _has_document_access_table():
+        return False
+    return DocumentAccess.objects.filter(document=document, consultant=consultant).exists()
+
+
+def _build_preview_watermark_text(consultant):
+    consultant_name = _safe_display_name(consultant)
+    return f"CONFIDENTIAL - PREVIEW ONLY - {consultant_name}"
+
+
+def _read_document_bytes(document):
+    document.file.open('rb')
+    try:
+        return document.file.read()
+    finally:
+        document.file.close()
+
+
+def _generate_image_preview_bytes(source_bytes, watermark_text):
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+    image = Image.open(BytesIO(source_bytes))
+    image = ImageOps.exif_transpose(image)
+    target_size = (max(1, image.width // 2), max(1, image.height // 2))
+    image = image.resize(target_size, Image.LANCZOS).convert('RGBA')
+
+    overlay = Image.new('RGBA', image.size, (255, 255, 255, 0))
+    font_size = max(20, min(image.size) // 22)
+
+    font = None
+    for font_name in ("DejaVuSans-Bold.ttf", "Arial.ttf", "arial.ttf"):
+        try:
+            font = ImageFont.truetype(font_name, font_size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+
+    probe_draw = ImageDraw.Draw(Image.new('RGBA', (8, 8), (255, 255, 255, 0)))
+    text_bbox = probe_draw.textbbox((0, 0), watermark_text, font=font)
+    text_width = max(1, text_bbox[2] - text_bbox[0])
+    text_height = max(1, text_bbox[3] - text_bbox[1])
+
+    pattern_size = (image.width * 2, image.height * 2)
+    pattern = Image.new('RGBA', pattern_size, (255, 255, 255, 0))
+    pattern_draw = ImageDraw.Draw(pattern)
+    step_x = max(text_width + 120, image.width // 3)
+    step_y = max(text_height + 90, image.height // 4)
+
+    # Subtle two-pass text (light underlay + darker foreground) improves legibility
+    # while keeping a clean, professional watermark appearance.
+    underlay_fill = (255, 255, 255, 45)
+    main_fill = (28, 44, 64, 52)
+    for y in range(-image.height // 2, pattern_size[1], step_y):
+        x_offset = 0 if ((y // step_y) % 2 == 0) else step_x // 2
+        for x in range(-image.width // 2, pattern_size[0], step_x):
+            pattern_draw.text((x + x_offset + 2, y + 2), watermark_text, font=font, fill=underlay_fill)
+            pattern_draw.text((x + x_offset, y), watermark_text, font=font, fill=main_fill)
+
+    rotated_pattern = pattern.rotate(30, expand=True)
+    crop_left = max(0, (rotated_pattern.width - image.width) // 2)
+    crop_top = max(0, (rotated_pattern.height - image.height) // 2)
+    tiled_overlay = rotated_pattern.crop((
+        crop_left,
+        crop_top,
+        crop_left + image.width,
+        crop_top + image.height,
+    ))
+    overlay.alpha_composite(tiled_overlay, (0, 0))
+
+    merged = Image.alpha_composite(image, overlay).convert('RGB')
+    out = BytesIO()
+    merged.save(out, format='JPEG', quality=60, optimize=True)
+    return out.getvalue(), 'image/jpeg'
+
+
+def _build_watermark_pdf_page(width, height, watermark_text):
+    from pypdf import PdfReader
+    from reportlab.lib.colors import Color
+    from reportlab.pdfgen import canvas
+
+    packet = BytesIO()
+    c = canvas.Canvas(packet, pagesize=(width, height))
+
+    c.saveState()
+    c.translate(width / 2, height / 2)
+    c.rotate(30)
+    c.setFont("Helvetica-Bold", max(16, int(min(width, height) * 0.03)))
+    c.setFillColor(Color(0.18, 0.26, 0.36, alpha=0.12))
+
+    step_x = max(260, int(width * 0.32))
+    step_y = max(140, int(height * 0.18))
+
+    start_x = -int(width * 1.1)
+    end_x = int(width * 1.1)
+    start_y = -int(height * 1.1)
+    end_y = int(height * 1.1)
+
+    row = 0
+    for y in range(start_y, end_y, step_y):
+        row += 1
+        offset = 0 if row % 2 == 0 else step_x // 2
+        for x in range(start_x, end_x, step_x):
+            c.drawString(x + offset, y, watermark_text)
+
+    c.restoreState()
+    c.save()
+    packet.seek(0)
+    return PdfReader(packet).pages[0]
+
+
+def _generate_pdf_preview_bytes(source_bytes, watermark_text):
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(BytesIO(source_bytes))
+    writer = PdfWriter()
+
+    for page in reader.pages:
+        width = float(page.mediabox.width)
+        height = float(page.mediabox.height)
+        watermark_page = _build_watermark_pdf_page(width, height, watermark_text)
+        page.merge_page(watermark_page)
+        writer.add_page(page)
+
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue(), 'application/pdf'
 
 class FolderViewSet(viewsets.ModelViewSet):
     serializer_class = FolderSerializer
@@ -124,12 +284,6 @@ class DocumentViewSet(viewsets.ModelViewSet):
             qs = Document.objects.select_related('client', 'consultant', 'folder').filter(
                 client_id__in=service_client_ids
             ).distinct()
-
-            if _has_document_access_table():
-                qs = qs.filter(access_grants__consultant=user).distinct()
-            else:
-                # Safe default: no explicit grants table means no consultant access.
-                qs = qs.none()
         else:
             # Clients see their own docs, but filter out PENDING requests from unassigned consultants
             # Get consultants assigned via active services
@@ -320,6 +474,54 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @decorators.action(detail=True, methods=['post'], url_path='request-access', permission_classes=[IsConsultantUser])
+    def request_access(self, request, pk=None):
+        """
+        Consultant asks client to grant access for a locked document.
+        """
+        try:
+            document = self.get_object()
+            consultant = get_active_profile(request)
+            if consultant.role != 'CONSULTANT':
+                return Response({'error': 'Only consultants can request access.'}, status=status.HTTP_403_FORBIDDEN)
+
+            if _consultant_has_document_access(document, consultant):
+                return Response({'message': 'Access already granted for this document.'}, status=status.HTTP_200_OK)
+
+            note = str(request.data.get('note', '')).strip()
+            consultant_name = _safe_display_name(consultant)
+            title = "Access Request for Document"
+            message = (
+                f"Consultant {consultant_name} requested access to your document '{document.title}'. "
+                "To grant access: Client Vault > Records > Manage Access and unlock this document."
+            )
+            if note:
+                message = f"{message} Note: {note}"
+
+            try:
+                from notifications.signals import create_and_push_notification
+                create_and_push_notification(
+                    recipient=document.client,
+                    category='document',
+                    title=title,
+                    message=message,
+                    link='/client/vault?tab=records',
+                )
+            except Exception:
+                logger.exception("Failed to push access request notification for document %s", document.id)
+                Notification.objects.create(
+                    recipient=document.client,
+                    category='document',
+                    title=title,
+                    message=message,
+                    link='/client/vault?tab=records',
+                )
+
+            return Response({'message': 'Access request sent to client.'}, status=status.HTTP_200_OK)
+        except Exception:
+            logger.exception("Failed to request document access for document %s", pk)
+            return Response({'error': 'Failed to send access request.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     def perform_update(self, serializer):
         user = get_active_profile(self.request)
         # For updates, client and consultant are read-only in serializer, 
@@ -381,6 +583,144 @@ class DocumentViewSet(viewsets.ModelViewSet):
         
         document.save()
         return Response(DocumentSerializer(document, context={'request': request}).data)
+
+    @decorators.action(detail=True, methods=['post'], url_path='download', permission_classes=[IsConsultantUser])
+    def download_document(self, request, pk=None):
+        """
+        Logs mandatory download purpose and returns a secure download URL or file stream.
+        """
+        document = self.get_object()
+        consultant = get_active_profile(request)
+
+        if consultant.role != 'CONSULTANT':
+            return Response({'error': 'Only consultants can download through this endpoint.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if not document.file:
+            return Response({'error': 'No file available for download.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not _consultant_has_document_access(document, consultant):
+            return Response({'error': 'Access denied. Client has not granted access to this document.'}, status=status.HTTP_403_FORBIDDEN)
+
+        purpose = str(request.data.get('purpose', '')).strip()
+        if len(purpose) < 10:
+            return Response({'error': 'Purpose must be at least 10 characters.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        DocumentDownloadLog.objects.create(
+            document=document,
+            consultant=consultant,
+            purpose=purpose,
+        )
+
+        notification_message = _build_download_alert_message(document, consultant, purpose)
+        try:
+            # Realtime push + DB persist for client-side toast/sound via notification websocket.
+            from notifications.signals import create_and_push_notification
+            create_and_push_notification(
+                recipient=document.client,
+                category='document',
+                title='Document Download Alert',
+                message=notification_message,
+                link='/client/vault?tab=records',
+            )
+        except Exception:
+            logger.exception("Failed to create/push in-app download notification for document %s", document.id)
+            # Fallback: keep DB notification even if websocket push fails.
+            try:
+                Notification.objects.create(
+                    recipient=document.client,
+                    category='document',
+                    title='Document Download Alert',
+                    message=notification_message,
+                    link='/client/vault?tab=records',
+                )
+            except Exception:
+                logger.exception("Fallback Notification row creation failed for document %s", document.id)
+
+        try:
+            from notifications.tasks import send_whatsapp_text_task
+
+            phone = _resolve_notification_phone(document.client)
+            if phone:
+                send_whatsapp_text_task.delay(
+                    phone_number=phone,
+                    text=notification_message,
+                )
+        except Exception:
+            logger.exception("Failed to queue WhatsApp download alert for document %s", document.id)
+
+        filename = os.path.basename(document.file.name or f"document_{document.id}")
+        content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        force_stream = str(request.query_params.get('stream', '')).strip().lower() in {'1', 'true', 'yes', 'y'}
+
+        if not force_stream:
+            try:
+                download_url = document.file.storage.url(document.file.name)
+                if isinstance(download_url, str) and download_url.startswith(('http://', 'https://')):
+                    return Response({
+                        'download_url': download_url,
+                        'filename': filename,
+                        'content_type': content_type,
+                    })
+            except Exception:
+                logger.warning("Failed to build storage URL for document %s; using stream fallback.", document.id, exc_info=True)
+
+        try:
+            file_handle = document.file.storage.open(document.file.name, 'rb')
+            return FileResponse(
+                file_handle,
+                as_attachment=True,
+                filename=filename,
+                content_type=content_type,
+            )
+        except Exception:
+            logger.exception("Failed to stream document %s download", document.id)
+            return Response({'error': 'Failed to prepare download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @decorators.action(detail=True, methods=['get'], url_path='preview', permission_classes=[IsConsultantUser])
+    def preview_document(self, request, pk=None):
+        """
+        Returns a dynamically watermarked preview stream for consultant viewing.
+        """
+        document = self.get_object()
+        consultant = get_active_profile(request)
+
+        if consultant.role != 'CONSULTANT':
+            return Response({'error': 'Only consultants can view secure previews through this endpoint.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if not document.file:
+            return Response({'error': 'No file available for preview.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not _consultant_has_document_access(document, consultant):
+            return Response({'error': 'Access denied. Client has not granted access to this document.'}, status=status.HTTP_403_FORBIDDEN)
+
+        filename = os.path.basename(document.file.name or f"document_{document.id}")
+        ext = os.path.splitext(filename)[1].lower()
+        watermark_text = _build_preview_watermark_text(consultant)
+
+        try:
+            source_bytes = _read_document_bytes(document)
+        except Exception:
+            logger.exception("Failed to read document bytes for preview: %s", document.id)
+            return Response({'error': 'Failed to load document for preview.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            if ext == '.pdf':
+                output_bytes, content_type = _generate_pdf_preview_bytes(source_bytes, watermark_text)
+            elif ext in {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tif', '.tiff'}:
+                output_bytes, content_type = _generate_image_preview_bytes(source_bytes, watermark_text)
+            else:
+                output_bytes = source_bytes
+                content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        except Exception:
+            logger.exception("Failed to generate secure preview for document %s", document.id)
+            return Response({'error': 'Failed to generate secure preview.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        preview_name = f"preview_{filename}"
+        response = HttpResponse(output_bytes, content_type=content_type)
+        response['Content-Disposition'] = f'inline; filename="{preview_name}"'
+        response['Cache-Control'] = 'no-store, no-cache, must-revalidate, private'
+        response['Pragma'] = 'no-cache'
+        return response
 
     @decorators.action(detail=False, methods=['get'], url_path='pending-count', permission_classes=[IsClientUser])
     def pending_count(self, request):

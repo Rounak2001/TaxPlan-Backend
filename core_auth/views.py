@@ -25,7 +25,32 @@ import requests
 MAGIC_LINK_EXPIRY_MINUTES=15
 logger = logging.getLogger(__name__)
 
-def set_auth_cookies(response, user):
+def _get_cookie_settings(request=None):
+    """
+    Resolve cookie flags for auth cookies.
+    In DEBUG over plain HTTP (localhost), force Secure=False and SameSite='Lax'
+    so browsers accept the cookies.
+    """
+    jwt_conf = getattr(settings, 'SIMPLE_JWT', {})
+    secure = jwt_conf.get('AUTH_COOKIE_SECURE', True)
+    samesite = jwt_conf.get('AUTH_COOKIE_SAMESITE', 'Lax')
+    domain = jwt_conf.get('AUTH_COOKIE_DOMAIN', None)
+
+    is_https = False
+    if request is not None:
+        try:
+            is_https = bool(request.is_secure())
+        except Exception:
+            is_https = False
+
+    if settings.DEBUG and not is_https:
+        secure = False
+        samesite = 'Lax'
+
+    return secure, samesite, domain
+
+
+def set_auth_cookies(response, user, request=None):
     """Helper to set HttpOnly JWT cookies for a user using settings-based configuration."""
     refresh = RefreshToken.for_user(user)
     
@@ -37,11 +62,7 @@ def set_auth_cookies(response, user):
     access_token = str(refresh.access_token)
     refresh_token = str(refresh)
     
-    # Get config from SIMPLE_JWT or use defaults
-    jwt_conf = getattr(settings, 'SIMPLE_JWT', {})
-    samesite = jwt_conf.get('AUTH_COOKIE_SAMESITE', 'Lax')
-    secure = jwt_conf.get('AUTH_COOKIE_SECURE', True)
-    domain = jwt_conf.get('AUTH_COOKIE_DOMAIN', None)
+    secure, samesite, domain = _get_cookie_settings(request=request)
     
     response.set_cookie(
         key='access_token',
@@ -426,22 +447,25 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         if response.status_code == 200:
             access_token = response.data['access']
             refresh_token = response.data['refresh']
+            secure, samesite, domain = _get_cookie_settings(request=request)
             
             response.set_cookie(
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure=True,
-                samesite='None',
+                secure=secure,
+                samesite=samesite,
+                domain=domain,
                 max_age=3600
             )
             response.set_cookie(
                 key='refresh_token',
                 value=refresh_token,
                 httponly=True,
-                secure=True,
-                samesite='None',
-                max_age=86400
+                secure=secure,
+                samesite=samesite,
+                domain=domain,
+                max_age=86400 * 7
             )
         return response
 

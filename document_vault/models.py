@@ -222,3 +222,32 @@ class DocumentAccess(models.Model):
     def __str__(self):
         return f"{self.consultant.get_full_name()} -> {self.document.title}"
 
+
+class DocumentDownloadLog(models.Model):
+    """
+    Audit log for consultant document downloads with mandatory purpose statement.
+    """
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.CASCADE,
+        related_name='download_logs'
+    )
+    consultant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='document_download_logs'
+    )
+    purpose = models.TextField()
+    downloaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'vault_document_download_log'
+        ordering = ['-downloaded_at']
+        indexes = [
+            models.Index(fields=['document', 'downloaded_at']),
+            models.Index(fields=['consultant', 'downloaded_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.consultant.username} downloaded {self.document.title} @ {self.downloaded_at.isoformat()}"
+

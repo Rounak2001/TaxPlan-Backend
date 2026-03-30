@@ -36,6 +36,7 @@ from consultant_onboarding.models import (
     Violation,
     ProctoringSnapshot,
 )
+from consultant_onboarding.unlock_ops import ensure_unlock_from_completed_sessions
 from core_auth.models import User
 
 logger = logging.getLogger(__name__)
@@ -230,6 +231,62 @@ def _ensure_dev_bootstrap_assessment(application):
             }
         },
         question_set=[{'id': 1, 'domain': 'itr'}],
+        video_question_set=[],
+        score=35,
+        status='completed',
+        end_time=dj_timezone.now(),
+    )
+
+
+def _derive_unlock_domains_from_completed_sessions(application):
+    """
+    Build an ordered set of known assessment domains from completed/flagged sessions.
+    Used as a compatibility fallback when credentials exist but unlock state is missing.
+    """
+    domain_order = ("itr", "gstr", "scrutiny")
+    discovered = set()
+    sessions = (
+        UserSession.objects
+        .filter(application=application)
+        .exclude(status='ongoing')
+        .order_by('-end_time', '-id')
+    )
+    for session in sessions:
+        for domain in (session.selected_domains or []):
+            normalized = str(domain or "").strip().lower()
+            if normalized in domain_order:
+                discovered.add(normalized)
+
+    return [slug for slug in domain_order if slug in discovered]
+
+
+def _ensure_unlock_state_after_credentials(application):
+    """
+    Keep unlock state consistent after credentials generation/restoration.
+    If there is no passed assessment outcome but the consultant has completed
+    assessment sessions with known domains, create a minimal completed session
+    that preserves those domains so downstream service-lock checks stay aligned.
+    """
+    from ..assessment_outcome import get_application_assessment_outcome
+
+    outcome = get_application_assessment_outcome(application)
+    if outcome.get('has_passed_assessment'):
+        return
+
+    fallback_domains = _derive_unlock_domains_from_completed_sessions(application)
+    if not fallback_domains:
+        return
+
+    UserSession.objects.create(
+        application=application,
+        selected_domains=fallback_domains,
+        selected_test_details={
+            'compat_unlock_sync': {
+                'source': 'credentials_generation',
+                'domains': fallback_domains,
+            }
+        },
+        question_set=[{'id': 1, 'domain': fallback_domains[0]}],
         video_question_set=[],
         score=35,
         status='completed',
@@ -581,6 +638,7 @@ def _generate_and_send_credentials(app, force_phone_reassign=False):
                 password=existing_credential.password,
                 force_phone_reassign=force_phone_reassign,
             )
+            ensure_unlock_from_completed_sessions(app)
             app.status = 'APPROVED'
             app.save(update_fields=['status', 'updated_at'])
             return True, {
@@ -643,6 +701,8 @@ def _generate_and_send_credentials(app, force_phone_reassign=False):
 
             app.status = 'APPROVED'
             app.save()
+
+        ensure_unlock_from_completed_sessions(app)
 
         subject = "Your TaxPlan Advisor Consultant Credentials"
         message = (

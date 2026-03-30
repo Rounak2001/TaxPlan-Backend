@@ -60,9 +60,11 @@ numpy==2.4.1
 openpyxl==3.1.5
 packaging==26.0
 pandas==3.0.0
+Pillow==11.1.0
 prompt_toolkit==3.0.52
 proto-plus==1.27.0
 protobuf==5.29.6
+pypdf==5.3.1
 psycopg2-binary==2.9.11
 py-ubjson==0.16.1
 pyasn1==0.6.2
@@ -79,6 +81,7 @@ pytz==2025.2
 razorpay==2.0.0
 redis==7.1.0
 requests==2.32.5
+reportlab==4.2.5
 rsa==4.9.1
 s3transfer==0.16.0
 sentry-sdk==2.53.0
