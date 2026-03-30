@@ -226,6 +226,8 @@ def cleanup_orphaned_pending_documents(sender, instance, created, **kwargs):
         return
     
     # Check if service is no longer active (or unassigned back to pending)
+    # NOTE: 'consultant_dropped' is intentionally excluded here — documents
+    # must be preserved for the incoming new consultant.
     if instance.status in ['completed', 'cancelled', 'pending']:
         # Delete PENDING documents that were created for this service
         # Match by description containing the service title
@@ -250,7 +252,11 @@ def log_status_change(sender, instance, **kwargs):
                 from activity_timeline.models import Activity
                 
                 # Actor is the assigned consultant, or the client if not assigned
-                actor = instance.assigned_consultant.user if instance.assigned_consultant else instance.client
+                # For consultant_dropped, use dropped_consultant as actor
+                if instance.status == 'consultant_dropped' and instance.dropped_consultant:
+                    actor = instance.dropped_consultant.user
+                else:
+                    actor = instance.assigned_consultant.user if instance.assigned_consultant else instance.client
                 
                 Activity.objects.create(
                     actor=actor,
