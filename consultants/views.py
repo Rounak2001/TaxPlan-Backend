@@ -17,6 +17,7 @@ from consultant_onboarding.category_access import (
     is_service_unlocked,
 )
 from consultant_onboarding.expertise_sync import sync_passed_sessions_to_consultant
+from core_auth.utils import resolve_authenticated_user, resolve_authenticated_user_id
 
 MANUAL_CONSULTATION_CATEGORY_NAME = "consultation"
 
@@ -385,8 +386,9 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         # Consultants can only see their own profile
-        if hasattr(self.request.user, 'consultant_service_profile'):
-            return ConsultantServiceProfile.objects.filter(user=self.request.user)
+        user_id = resolve_authenticated_user_id(self.request)
+        if user_id:
+            return ConsultantServiceProfile.objects.filter(user_id=user_id)
         return ConsultantServiceProfile.objects.none()
     
     @action(detail=False, methods=['get'])
@@ -394,8 +396,15 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
         """
         Get consultant dashboard data
         """
+        user = resolve_authenticated_user(request)
+        if not user:
+            return Response(
+                {'error': 'Authenticated user not found'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         try:
-            profile = ConsultantServiceProfile.objects.get(user=request.user)
+            profile = ConsultantServiceProfile.objects.get(user=user)
         except ConsultantServiceProfile.DoesNotExist:
             return Response(
                 {'error': 'Consultant profile not found'},
@@ -445,8 +454,15 @@ class ConsultantServiceProfileViewSet(viewsets.ModelViewSet):
         Get comprehensive dashboard statistics for consultant
         Returns: service requests by status, documents needing review, client metrics
         """
+        user = resolve_authenticated_user(request)
+        if not user:
+            return Response(
+                {'error': 'Authenticated user not found'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         try:
-            profile = ConsultantServiceProfile.objects.get(user=request.user)
+            profile = ConsultantServiceProfile.objects.get(user=user)
         except ConsultantServiceProfile.DoesNotExist:
             return Response(
                 {'error': 'Consultant profile not found'},

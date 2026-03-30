@@ -31,6 +31,24 @@ class ApplicantAuthentication(authentication.BaseAuthentication):
     Returns None if no applicant_token is found, letting other auth classes run.
     """
     def authenticate(self, request):
+        path = getattr(request, 'path', '') or ''
+        onboarding_prefixes = (
+            '/api/onboarding/',
+            '/api/auth/onboarding/',
+            '/api/auth/profile/',
+            '/api/auth/accept-declaration/',
+            '/api/auth/logout/',
+            '/api/auth/documents/',
+            '/api/auth/identity/',
+            '/api/documents/',
+            '/api/face-verification/',
+            '/api/assessment/',
+            '/api/admin-panel/',
+            '/api/health/',
+        )
+        if not any(path.startswith(prefix) for prefix in onboarding_prefixes):
+            return None
+
         auth_header = request.headers.get('Authorization')
         
         # Check cookie first, then auth header

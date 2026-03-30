@@ -22,7 +22,7 @@ import threading
 import logging
 from notifications.signals import create_and_push_notification
 from notifications.whatsapp_service import send_whatsapp_template
-from core_auth.utils import get_active_profile
+from core_auth.utils import get_active_profile, resolve_authenticated_user
 
 User = get_user_model()
 
@@ -92,12 +92,20 @@ class ConsultationBookingViewSet(viewsets.GenericViewSet,
 
     def get_queryset(self):
         user = get_active_profile(self.request)
-        if user.role == 'CONSULTANT':
+        role = getattr(user, 'role', None)
+        if role == 'CONSULTANT':
             return ConsultationBooking.objects.filter(consultant=user)
-        return ConsultationBooking.objects.filter(client=user)
+        if role == 'CLIENT':
+            return ConsultationBooking.objects.filter(client=user)
+        real_user = resolve_authenticated_user(self.request)
+        if real_user is None:
+            return ConsultationBooking.objects.none()
+        if real_user.role == 'CONSULTANT':
+            return ConsultationBooking.objects.filter(consultant=real_user)
+        return ConsultationBooking.objects.filter(client=real_user)
 
     def create(self, request, *args, **kwargs):
-        logger.debug(f"ConsultationBookingViewSet.create called by {request.user.email}")
+        logger.debug(f"ConsultationBookingViewSet.create called by {getattr(request.user, 'email', 'unknown')}")
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             logger.error(f"Booking validation failed: {serializer.errors}")

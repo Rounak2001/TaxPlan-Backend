@@ -24,16 +24,27 @@ class ActivityViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ActivitySerializer
     permission_classes = [IsAuthenticated]
     pagination_class = ActivityPagination
+
+    @staticmethod
+    def _resolve_user_id(user):
+        """Support both Django User instances and dev SimpleNamespace auth objects."""
+        raw_id = getattr(user, 'id', None)
+        try:
+            return int(raw_id) if raw_id is not None else None
+        except (TypeError, ValueError):
+            return None
     
     def get_queryset(self):
         """
         Return activities for clients assigned to the authenticated consultant
         """
-        user = self.request.user
+        user_id = self._resolve_user_id(self.request.user)
+        if user_id is None:
+            return Activity.objects.none()
         
         # Get all clients assigned to this consultant through service requests
         consultant_clients = ClientServiceRequest.objects.filter(
-            assigned_consultant__user=user
+            assigned_consultant__user_id=user_id
         ).values_list('client_id', flat=True).distinct()
         
         # Base queryset: activities for consultant's clients
@@ -70,11 +81,19 @@ class ActivityViewSet(viewsets.ReadOnlyModelViewSet):
         Get activity statistics for the consultant
         Returns counts by activity type
         """
-        user = request.user
+        user_id = self._resolve_user_id(request.user)
+        if user_id is None:
+            return Response({
+                'total': 0,
+                'document_activities': 0,
+                'service_activities': 0,
+                'call_activities': 0,
+                'today': 0,
+            })
         
         # Get consultant's clients
         consultant_clients = ClientServiceRequest.objects.filter(
-            assigned_consultant__user=user
+            assigned_consultant__user_id=user_id
         ).values_list('client_id', flat=True).distinct()
         
         # Get activities from last 7 days

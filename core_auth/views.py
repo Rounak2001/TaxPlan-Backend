@@ -773,9 +773,13 @@ class UserDashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from .utils import get_active_profile
-        auth_user = request.user
+        from .utils import get_active_profile, resolve_authenticated_user
+        auth_user = resolve_authenticated_user(request)
+        if auth_user is None:
+            return Response({'error': 'Authenticated user not found.'}, status=status.HTTP_401_UNAUTHORIZED)
         active_user = get_active_profile(request)
+        if not isinstance(active_user, User):
+            active_user = auth_user
         
         # Always use the main account (parent) to list sub-accounts
         main_user = auth_user.parent_account if auth_user.parent_account else auth_user

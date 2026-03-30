@@ -152,6 +152,19 @@ class OrderItem(models.Model):
     service_title = models.CharField(max_length=255)
     variant_name = models.CharField(max_length=255, blank=True, null=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    base_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Catalog/base price before any consultant override',
+    )
+    price_update_reason = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Mandatory reason when consultant edits the catalog price',
+    )
     quantity = models.PositiveIntegerField(default=1)
 
     def __str__(self):

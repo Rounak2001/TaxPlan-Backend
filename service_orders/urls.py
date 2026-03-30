@@ -7,8 +7,8 @@ from .views import (
     request_additional_service,
     additional_service_options,
     pending_additional_requests,
+    update_additional_request_selection,
     decline_additional_request,
-    validate_coupon,
 )
 
 urlpatterns = [
@@ -23,7 +23,7 @@ urlpatterns = [
         name='additional-service-options',
     ),
     path('pending-additional/', pending_additional_requests, name='pending-additional'),
+    path('update-additional-selection/', update_additional_request_selection, name='update-additional-selection'),
     path('decline-additional/', decline_additional_request, name='decline-additional'),
-    path('validate-coupon/', validate_coupon, name='validate-coupon'),
 ]
 
