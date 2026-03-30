@@ -174,6 +174,50 @@ class PANVerificationResponseSerializer(serializers.ModelSerializer):
 # ----------------------------------------------------
 from .models import TestType, UserSession, Violation, VideoResponse, ProctoringSnapshot
 
+QUESTION_CATEGORY_LABELS = {
+    "itr": "Income Tax",
+    "tds": "TDS",
+    "gstr": "GST",
+    "gst": "GST",
+    "scrutiny": "Scrutiny",
+    "registrations": "Registrations",
+}
+
+
+def _get_question_category_label(question_dict):
+    if not isinstance(question_dict, dict):
+        return None
+
+    existing_label = str(question_dict.get("category") or "").strip()
+    if existing_label:
+        return existing_label
+
+    domain_slug = str(question_dict.get("domain") or "").strip().lower().replace("_", "-")
+    if not domain_slug:
+        return None
+
+    return QUESTION_CATEGORY_LABELS.get(domain_slug, domain_slug.replace("-", " ").title())
+
+
+def _get_video_question_category_label(question_dict):
+    if not isinstance(question_dict, dict):
+        return None
+
+    existing_label = str(question_dict.get("category") or "").strip()
+    if existing_label:
+        return existing_label
+
+    question_type = str(question_dict.get("type") or "").strip().lower()
+    if question_type == "introduction":
+        return "Introduction"
+
+    domain_slug = str(question_dict.get("domain") or "").strip().lower().replace("_", "-")
+    if not domain_slug:
+        return None
+
+    return QUESTION_CATEGORY_LABELS.get(domain_slug, domain_slug.replace("-", " ").title())
+
+
 class TestTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestType
@@ -210,11 +254,23 @@ class UserSessionSerializer(serializers.ModelSerializer):
                q_safe = dict(q)
                if 'answer' in q_safe:
                    del q_safe['answer']
+               q_safe['category'] = _get_question_category_label(q_safe)
                sanitized_questions.append(q_safe)
            representation['questions'] = sanitized_questions
         # Add video questions
         if instance.video_question_set:
-            representation['video_questions'] = instance.video_question_set
+            sanitized_video_questions = []
+            for q in instance.video_question_set:
+                if isinstance(q, dict):
+                    q_safe = dict(q)
+                else:
+                    q_safe = {
+                        "text": str(q or ""),
+                        "type": "domain",
+                    }
+                q_safe['category'] = _get_video_question_category_label(q_safe)
+                sanitized_video_questions.append(q_safe)
+            representation['video_questions'] = sanitized_video_questions
 
         return representation
 

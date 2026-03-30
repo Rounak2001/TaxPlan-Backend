@@ -191,6 +191,23 @@ class AutoCredentialGenerationTests(TestCase):
             result["username"],
         )
 
+    @patch("consultant_onboarding.views.admin_panel.send_mail")
+    def test_generate_credentials_transfers_experience_years_to_live_profile(self, mocked_send_mail):
+        application = self.make_eligible_application(
+            email="experience-transfer@example.com",
+            qualification="CA",
+            experience_years=14,
+        )
+        mocked_send_mail.return_value = 1
+
+        success, _result = _generate_and_send_credentials(application)
+
+        self.assertTrue(success)
+        consultant_user = User.objects.get(email=application.email, role=User.CONSULTANT)
+        consultant_profile = ConsultantServiceProfile.objects.get(user=consultant_user)
+        self.assertEqual(consultant_profile.experience_years, 14)
+        self.assertEqual(consultant_profile.qualification, "CA")
+
     def test_ensure_live_user_keeps_existing_application_username_without_suffix(self):
         application = self.make_eligible_application(email="same-app-username@example.com")
         ConsultantCredential.objects.create(
@@ -223,6 +240,33 @@ class AutoCredentialGenerationTests(TestCase):
         self.assertIn("phone number", str(result))
         self.assertFalse(ConsultantCredential.objects.filter(application=application).exists())
         self.assertFalse(User.objects.filter(email=application.email, role=User.CONSULTANT).exists())
+
+    @patch("consultant_onboarding.views.admin_panel.send_mail")
+    def test_generate_credentials_allows_forced_client_phone_reassign(self, mocked_send_mail):
+        application = self.make_eligible_application(
+            email="force-reassign@example.com",
+            phone_number="+919888888888",
+        )
+        conflicting_client = User.objects.create_user(
+            username="existing_client_force_phone",
+            email="existing-client-force@example.com",
+            password="password",
+            role=User.CLIENT,
+            phone_number="+919888888888",
+            is_phone_verified=True,
+        )
+        mocked_send_mail.return_value = 1
+
+        success, result = _generate_and_send_credentials(application, force_phone_reassign=True)
+
+        self.assertTrue(success)
+        conflicting_client.refresh_from_db()
+        self.assertIsNone(conflicting_client.phone_number)
+        self.assertFalse(conflicting_client.is_phone_verified)
+        consultant_user = User.objects.get(email=application.email, role=User.CONSULTANT)
+        self.assertEqual(consultant_user.phone_number, "+919888888888")
+        self.assertTrue(ConsultantCredential.objects.filter(application=application).exists())
+        self.assertEqual(result.get("username"), consultant_user.username)
 
     @override_settings(DEBUG=True)
     def test_dev_bootstrap_consultant_creates_predictable_debug_account(self):
@@ -459,10 +503,22 @@ class AssessmentDomainSelectionTests(TestCase):
         self.assertEqual(response.data["selected_domains"], ["itr", "registrations"])
         self.assertEqual(len(response.data["questions"]), 50)
         self.assertEqual(len(response.data["video_questions"]), 5)
+        intro_video = response.data["video_questions"][0]
+        self.assertEqual(intro_video["type"], "introduction")
+        self.assertEqual(intro_video["category"], "Introduction")
+        for video_question in response.data["video_questions"][1:]:
+            self.assertEqual(video_question["type"], "domain")
+            self.assertIn(video_question["domain"], {"itr", "registrations"})
+            self.assertIn(video_question["category"], {"Income Tax", "Registrations"})
 
         domain_counts = {}
+        expected_category_by_domain = {
+            "itr": "Income Tax",
+            "registrations": "Registrations",
+        }
         for question in response.data["questions"]:
             domain_counts[question["domain"]] = domain_counts.get(question["domain"], 0) + 1
+            self.assertEqual(question["category"], expected_category_by_domain[question["domain"]])
 
         self.assertEqual(domain_counts, {"itr": 25, "registrations": 25})
         session = UserSession.objects.get(id=response.data["id"])
